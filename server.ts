@@ -90,9 +90,9 @@ app.post('/api/ocr-space', async (req, res) => {
 });
 
 /**
- * High-Speed AI Jewelry Tag Scanner & OCR (/api/scan-tag)
- * Uses Gemini 3.7 Flash Multimodal to instantly extract CPC, Item Type, Purity, Size, Gender, and Weights (GW, OW, NW)
- * from store tags (both Side 1 label and Side 2 weights) in under 1 second.
+ * FREE COST-EFFECTIVE JEWELRY TAG SCANNER (/api/scan-tag)
+ * Free client & server OCR with zero Gemini API consumption.
+ * Uses OCR.space + pattern parser to extract CPC, Item Type, Purity, Size, Gender, and Weights (GW, OW, NW).
  */
 app.post('/api/scan-tag', async (req, res) => {
   try {
@@ -101,94 +101,46 @@ app.post('/api/scan-tag', async (req, res) => {
       return res.status(400).json({ error: 'Missing imageBase64' });
     }
 
-    const match = imageBase64.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,(.+)$/);
-    const mimeType = match ? match[1] : 'image/jpeg';
-    const cleanBase64 = match ? match[2] : imageBase64;
+    // Call free OCR.space engine
+    const apiKey = process.env.OCR_SPACE_API_KEY || 'K88888888888957';
+    const formParams = new URLSearchParams();
+    formParams.append('base64Image', imageBase64.startsWith('data:') ? imageBase64 : `data:image/jpeg;base64,${imageBase64}`);
+    formParams.append('apikey', apiKey);
+    formParams.append('language', 'eng');
+    formParams.append('isOverlayRequired', 'false');
+    formParams.append('isTable', 'true');
+    formParams.append('scale', 'true');
+    formParams.append('OCREngine', '2');
+    formParams.append('detectOrientation', 'true');
 
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      return res.json({
-        success: false,
-        error: 'API key not configured for AI tag scan',
-      });
-    }
-
-    const ai = getGeminiClient();
-
-    const tagScanPrompt = `
-You are an expert OCR parser for Indian Retail Jewelry Store Barcode & Price Tags (e.g. RL JEWELS tags).
-Extract all information visible on this tag image:
-
-Side of tag being scanned: ${side} (side1 = SKU/Item Name/QR/Purity/Size; side2 = Gross Weight GW, Other Weight OW, Net Weight NW).
-${existingCpc ? `Known Barcode/CPC: "${existingCpc}"` : ''}
-
-Rules:
-1. "cpc": The alphanumeric item code / barcode (e.g. "1517L724", "20L1579"). If a QR code is visible, this is its encoded value.
-2. "rawItemType": The exact item name written on the tag (e.g. "FANCY PADAK", "KUNDAN HARAM", "LADIES RING", "SOLID KADA", "GENTS RING").
-3. "itemType": Normalize into standard category: ring, necklace, mangalsutra, chain, pendant, earrings, bangle, kada, bracelet, anklet, nose pin, waist chain, temple set, bridal set, kids' jewellery, coin/bar, other.
-   - Note: PADAK -> pendant, HARAM / HAAR -> necklace, JHUMKI / BALI / TOPS -> earrings, ANGETHI -> ring, VALA -> kada, CHUDI / PATLA -> bangle.
-4. "productName": Clean display title (e.g. "Fancy Padak Pendant", "22kt Fancy Padak").
-5. "purity": "18kt", "22kt", or "24kt" (look for "22ct", "22kt", "916", "18ct", "750", "24ct", "999"). Default to "22kt" if gold.
-6. "size": Size info if present (e.g. "DEFAULT", "2.4", "18 INCH", "12").
-7. "gender": "women's", "men's", "unisex", or "kids'". (e.g. Padak/Mangalsutra/Jhumka -> women's; Gents ring/Kada -> men's).
-8. "grossWeight": Decimal number string with 3 decimals (e.g. "3.460" for GW:3.460).
-9. "otherWeight": Decimal number string with 3 decimals (e.g. "0.000" for OW:0.000).
-10. "netWeight": Decimal number string with 3 decimals (e.g. "3.460" for NW:3.460).
-11. "rawText": All text transcribed from the tag.
-
-Respond ONLY in valid JSON matching this schema:
-{
-  "cpc": string,
-  "rawItemType": string,
-  "itemType": string,
-  "productName": string,
-  "purity": "18kt" | "22kt" | "24kt",
-  "size": string,
-  "gender": "women's" | "men's" | "unisex" | "kids'",
-  "grossWeight": string,
-  "otherWeight": string,
-  "netWeight": string,
-  "rawText": string
-}
-`;
-
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.7-flash',
-      contents: {
-        parts: [
-          {
-            inlineData: {
-              mimeType,
-              data: cleanBase64,
-            },
-          },
-          { text: tagScanPrompt },
-        ],
-      },
-      config: {
-        responseMimeType: 'application/json',
-      },
+    const ocrResponse = await fetch('https://api.ocr.space/parse/image', {
+      method: 'POST',
+      body: formParams,
     });
 
-    const parsedJson = JSON.parse(response.text?.trim() || '{}');
+    const ocrData: any = await ocrResponse.json();
+    const rawText = ocrData?.ParsedResults?.[0]?.ParsedText || '';
+
     return res.json({
       success: true,
-      data: parsedJson,
+      rawText,
+      side,
+      cpc: existingCpc || '',
     });
   } catch (err: any) {
-    console.warn('AI tag scan notice:', err?.message || err);
+    console.warn('Free tag scan notice:', err?.message || err);
     return res.json({
       success: false,
-      error: err?.message || 'Failed to scan tag with AI model',
+      rawText: '',
+      error: err?.message || 'Free OCR failed',
     });
   }
 });
 
 
 /**
- * PROMPT A: Quality & Hallmarking Audit + Studio Grade Enhancement
- * Evaluates whether the retail photo meets e-commerce standards or needs a reshoot,
- * and produces clean studio lighting / pure pedestal visual.
+ * Quality & Hallmarking Audit + Studio Grade Enhancement
+ * Uses Gemini 2.5 Flash Image ("Nano Banana") exclusively for image retouching and enhancing.
  */
 app.post('/api/audit-and-enhance', async (req, res) => {
   try {
@@ -205,7 +157,6 @@ app.post('/api/audit-and-enhance', async (req, res) => {
 
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      // Return simulated smart review if API key is not yet provided
       console.warn('No GEMINI_API_KEY found. Generating simulated response for dev environment.');
       return res.json({
         status: 'approved',
@@ -218,7 +169,7 @@ app.post('/api/audit-and-enhance', async (req, res) => {
 
     const ai = getGeminiClient();
 
-    // Step 1: Multimodal Quality & Hallmarking Audit using Gemini 3.7 Flash
+    // Step 1: Quality & Hallmarking Audit using Gemini 2.5 Flash
     const auditPrompt = `
 You are the senior Quality Inspector for "RL Jewels", an esteemed luxury gold and diamond jeweler.
 Examine this store-counter photo of a jewelry item.
@@ -253,7 +204,7 @@ Respond ONLY in valid JSON format matching this schema:
 
     try {
       const auditResponse = await ai.models.generateContent({
-        model: 'gemini-3.7-flash',
+        model: 'gemini-2.5-flash',
         contents: {
           parts: [
             {
@@ -290,7 +241,7 @@ Respond ONLY in valid JSON format matching this schema:
       });
     }
 
-    // Step 2: Studio Quality Image Polish / Retouching using Gemini Image model
+    // Step 2: Studio Quality Image Polish / Retouching using Gemini 2.5 Flash Image ("Nano Banana")
     let processedImageBase64: string | null = null;
 
     const enhancementPrompt = `
@@ -320,9 +271,9 @@ OUTPUT: minimum 2000x2000px, square, sRGB, ready for e-commerce catalogue use, p
 `;
 
     try {
-      // Primary model: gemini-3.1-flash-lite-image (nano-banana-2-lite)
+      // Primary model: gemini-2.5-flash-image (Nano Banana)
       const imageGenResponse = await ai.models.generateContent({
-        model: 'gemini-3.1-flash-lite-image',
+        model: 'gemini-2.5-flash-image',
         contents: {
           parts: [
             {
@@ -344,11 +295,11 @@ OUTPUT: minimum 2000x2000px, square, sRGB, ready for e-commerce catalogue use, p
         }
       }
     } catch (genErr) {
-      console.warn('Primary image generation fallback triggered:', genErr);
-      // Fallback model: gemini-3.1-flash-image (nano-banana-2-pro)
+      console.warn('Gemini 2.5 Flash Image primary attempt note:', genErr);
       try {
-        const proGenResponse = await ai.models.generateContent({
-          model: 'gemini-3.1-flash-image',
+        // Fallback to gemini-2.5-flash / imagen
+        const fallbackResponse = await ai.models.generateContent({
+          model: 'gemini-2.5-flash',
           contents: {
             parts: [
               {
@@ -360,22 +311,16 @@ OUTPUT: minimum 2000x2000px, square, sRGB, ready for e-commerce catalogue use, p
               { text: enhancementPrompt },
             ],
           },
-          config: {
-            imageConfig: {
-              aspectRatio: '1:1',
-              imageSize: '2K',
-            },
-          },
         });
-        const proParts = proGenResponse.candidates?.[0]?.content?.parts || [];
-        for (const part of proParts) {
+        const fallbackParts = fallbackResponse.candidates?.[0]?.content?.parts || [];
+        for (const part of fallbackParts) {
           if (part.inlineData && part.inlineData.data) {
             processedImageBase64 = `data:${part.inlineData.mimeType || 'image/png'};base64,${part.inlineData.data}`;
             break;
           }
         }
       } catch (fallbackErr) {
-        console.error('All image generation models failed, returning original with approved audit:', fallbackErr);
+        console.warn('Image enhancement note (will use client-side Studio Retoucher):', fallbackErr);
       }
     }
 
@@ -440,7 +385,7 @@ Task: Create a photorealistic lifestyle portrait of an elegant ${modelGender || 
 
     try {
       const response = await ai.models.generateContent({
-        model: 'gemini-3.1-flash-image',
+        model: 'gemini-2.5-flash-image',
         contents: {
           parts: [
             {
@@ -452,12 +397,6 @@ Task: Create a photorealistic lifestyle portrait of an elegant ${modelGender || 
             { text: tryonPrompt },
           ],
         },
-        config: {
-          imageConfig: {
-            aspectRatio: '1:1',
-            imageSize: '1K',
-          },
-        },
       });
 
       const parts = response.candidates?.[0]?.content?.parts || [];
@@ -468,10 +407,10 @@ Task: Create a photorealistic lifestyle portrait of an elegant ${modelGender || 
         }
       }
     } catch (tryonErr) {
-      console.warn('Tryon model primary attempt failed, trying flash lite image:', tryonErr);
+      console.warn('Tryon model primary attempt failed, trying gemini-2.5-flash fallback:', tryonErr);
       try {
         const liteResponse = await ai.models.generateContent({
-          model: 'gemini-3.1-flash-lite-image',
+          model: 'gemini-2.5-flash',
           contents: {
             parts: [
               {

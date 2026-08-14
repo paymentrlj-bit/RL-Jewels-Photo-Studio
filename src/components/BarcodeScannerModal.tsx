@@ -136,14 +136,14 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
   };
 
   /**
-   * Fast Multimodal AI Tag Scanner (/api/scan-tag)
-   * Completes in < 1 second. Accurately extracts CPC, Item Type, Purity, Size, Gender & Weights.
+   * Free High-Speed Tag Scanner & OCR (Zero Gemini API Cost)
+   * Uses fast on-device Barcode/QR detection + free OCR + intelligent rule-based parsing.
    */
   const processImageContent = async (imageBase64: string, targetSide: 'side1' | 'side2') => {
     setIsProcessing(true);
     setAutoScanActive(false); // Stop live loop upon capture
     setCameraError(null);
-    setStatusMessage(`⚡ Instant AI Scanning on ${targetSide === 'side1' ? 'Side 1 (QR/Specs)' : 'Side 2 (Weights)'}...`);
+    setStatusMessage(`⚡ Free OCR Scanning on ${targetSide === 'side1' ? 'Side 1 (QR/Specs)' : 'Side 2 (Weights)'}...`);
 
     let detectedBarcode: string | null = null;
     if (videoRef.current) {
@@ -151,44 +151,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
     }
 
     try {
-      // 1. Fast Server AI Scan with Gemini 3.7 Flash
-      const scanRes = await fetch('/api/scan-tag', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          imageBase64,
-          side: targetSide,
-          existingCpc: detectedBarcode || (targetSide === 'side2' ? side1Data?.cpc : undefined),
-        }),
-      });
-
-      const scanResult = await scanRes.json();
-
-      if (scanResult.success && scanResult.data) {
-        const aiData = scanResult.data;
-        const parsed: ScannedProductData = {
-          cpc: aiData.cpc || detectedBarcode || (targetSide === 'side2' ? side1Data?.cpc || 'RLJ-TAG' : 'RLJ-TAG'),
-          name: aiData.productName || aiData.rawItemType || 'Jewelry Piece',
-          itemType: aiData.itemType || 'other',
-          purity: (aiData.purity as GoldPurity) || '22kt',
-          gender: (aiData.gender as ProductGender) || "women's",
-          grossWeight: aiData.grossWeight || '0.000',
-          otherWeight: aiData.otherWeight || '0.000',
-          netWeight: aiData.netWeight || '0.000',
-          size: aiData.size || 'DEFAULT',
-          label: aiData.rawItemType || '',
-        };
-
-        const rawText = aiData.rawText || JSON.stringify(aiData, null, 2);
-        handleParsedSuccess(parsed, imageBase64, targetSide, rawText);
-        return;
-      }
-    } catch (err) {
-      console.warn('Fast AI scan note, trying OCR fallback:', err);
-    }
-
-    // 2. High-reliability fallback (OCR.space + tagParser)
-    try {
+      // 1. Free OCR via server endpoint
       const ocrRes = await fetch('/api/ocr-space', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -199,14 +162,17 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
 
       const existingRef = targetSide === 'side2' ? side1Data || undefined : undefined;
       const parsed = parseJewelryTagText(txt, existingRef);
-      if (detectedBarcode && !parsed.cpc) {
+      if (detectedBarcode && (!parsed.cpc || parsed.cpc === 'RLJ-TAG')) {
         parsed.cpc = detectedBarcode;
       }
-      handleParsedSuccess(parsed, imageBase64, targetSide, txt);
+      handleParsedSuccess(parsed, imageBase64, targetSide, txt || (detectedBarcode ? `Barcode: ${detectedBarcode}` : 'Tag Captured'));
     } catch (fallbackErr: any) {
-      console.warn('OCR fallback notice:', fallbackErr);
+      console.warn('OCR notice:', fallbackErr);
       const existingRef = targetSide === 'side2' ? side1Data || undefined : undefined;
       const parsed = parseJewelryTagText(detectedBarcode || '', existingRef);
+      if (detectedBarcode) {
+        parsed.cpc = detectedBarcode;
+      }
       handleParsedSuccess(parsed, imageBase64, targetSide, detectedBarcode || 'Scanned');
     } finally {
       setIsProcessing(false);
@@ -663,7 +629,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
                 {isProcessing ? (
                   <div className="w-full text-center py-2 bg-stone-950/90 rounded-lg text-white text-xs font-mono font-bold flex items-center justify-center gap-2 shadow-md border border-amber-500/40">
                     <Loader2 className="w-4 h-4 animate-spin text-amber-400" />
-                    <span>⚡ AI Extracting Specs...</span>
+                    <span>⚡ Extracting Tag Specs...</span>
                   </div>
                 ) : autoScanActive ? (
                   <div className="w-full h-0.5 bg-amber-400 shadow-[0_0_8px_#f59e0b] animate-laser" />
