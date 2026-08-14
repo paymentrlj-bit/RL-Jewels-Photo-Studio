@@ -1,0 +1,31 @@
+<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="rljRed3D" cx="35%" cy="30%" r="75%">
+      <stop offset="0%" stop-color="#FF2A4D" />
+      <stop offset="25%" stop-color="#E50926" />
+      <stop offset="65%" stop-color="#C0071E" />
+      <stop offset="90%" stop-color="#8A0010" />
+      <stop offset="100%" stop-color="#5E000B" />
+    </radialGradient>
+    <linearGradient id="rljSheen" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.6" />
+      <stop offset="35%" stop-color="#FFFFFF" stop-opacity="0.15" />
+      <stop offset="70%" stop-color="#FFFFFF" stop-opacity="0" />
+    </linearGradient>
+    <linearGradient id="rljBevel" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FF6B81" stop-opacity="0.8" />
+      <stop offset="100%" stop-color="#3B0006" stop-opacity="0.9" />
+    </linearGradient>
+    <filter id="badgeShadow" x="-10%" y="-10%" width="125%" height="125%">
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#70000B" flood-opacity="0.35" />
+    </filter>
+  </defs>
+
+  <rect x="6" y="6" width="188" height="188" rx="44" ry="44" fill="url(#rljRed3D)" stroke="url(#rljBevel)" stroke-width="2.5" filter="url(#badgeShadow)" />
+  <path d="M 12,50 C 12,28 28,12 50,12 L 150,12 C 172,12 188,28 188,50 C 188,95 140,115 100,115 C 50,115 12,95 12,50 Z" fill="url(#rljSheen)" />
+
+  <g fill="#FFFFFF" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif">
+    <text x="100" y="118" font-weight="900" font-size="88" letter-spacing="-2">RL</text>
+    <text x="100" y="158" font-weight="900" font-size="26" letter-spacing="5">JEWELS</text>
+  </g>
+</svg>

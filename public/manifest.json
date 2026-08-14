@@ -1,0 +1,38 @@
+{
+  "name": "RL Jewels Photo Studio",
+  "short_name": "RLJ Studio",
+  "description": "Store Counter AI Photo Studio for RL Jewels retail staff",
+  "start_url": "/",
+  "id": "/",
+  "display": "standalone",
+  "background_color": "#FDFCFB",
+  "theme_color": "#DC2626",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/favicon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "categories": ["business", "productivity", "utilities"],
+  "shortcuts": [
+    {
+      "name": "New Product Entry",
+      "url": "/?action=new",
+      "description": "Start capturing photos for a new jewelry item"
+    },
+    {
+      "name": "Audit History",
+      "url": "/?tab=history",
+      "description": "View stored audit history and export logs"
+    }
+  ]
+}

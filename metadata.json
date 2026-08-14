@@ -1,0 +1,10 @@
+{
+  "name": "RL Jewels Photo Studio",
+  "description": "Mobile-first counter photo studio and AI product visualizer for RL Jewels retail staff with automated QA audit, studio lighting enhancement, virtual model try-on, and ERP export.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
