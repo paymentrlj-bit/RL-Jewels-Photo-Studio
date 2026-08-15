@@ -1,39 +1,18 @@
 import React, { useState } from 'react';
-import {
-  Download,
-  FileSpreadsheet,
-  Archive,
-  Copy,
-  Check,
-  PlusCircle,
-  History,
-  Sparkles,
-  CheckCircle2,
-  Share2,
-  ExternalLink
-} from 'lucide-react';
+import { Download, FileSpreadsheet, Archive, Copy, Check, PlusCircle, CheckCircle2 } from 'lucide-react';
 import { ProductRecord } from '../types';
 import { downloadProductZip, downloadCsvFile, generateErpCsv } from '../utils/exportUtils';
 
 interface ExportStepProps {
   product: ProductRecord;
   onStartNewProduct: () => void;
-  onViewHistory: () => void;
 }
 
-export const ExportStep: React.FC<ExportStepProps> = ({
-  product,
-  onStartNewProduct,
-  onViewHistory,
-}) => {
+export const ExportStep: React.FC<ExportStepProps> = ({ product, onStartNewProduct }) => {
   const [isZipping, setIsZipping] = useState(false);
   const [copiedCsv, setCopiedCsv] = useState(false);
 
   const displayCpc = product.cpc || product.sku;
-
-  const approvedPhotos = product.photos.filter(
-    (p) => p.reviewDecision === 'approved' || (p.status === 'approved' && p.reviewDecision !== 'discarded')
-  );
 
   const csvString = generateErpCsv(product);
   const csvLines = csvString.split('\n');
@@ -59,8 +38,6 @@ export const ExportStep: React.FC<ExportStepProps> = ({
 
   return (
     <div className="space-y-5 max-w-4xl mx-auto">
-      
-      {/* Success Celebration Card */}
       <div className="bg-white border border-stone-200 rounded-3xl p-6 sm:p-8 text-stone-900 shadow-xs text-center space-y-3">
         <div className="w-16 h-16 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-center mx-auto text-emerald-600 shadow-xs">
           <CheckCircle2 className="w-9 h-9 stroke-[2.5]" />
@@ -73,15 +50,12 @@ export const ExportStep: React.FC<ExportStepProps> = ({
             {displayCpc} Ready for Catalog
           </h2>
           <p className="text-xs sm:text-sm text-stone-500 mt-1 font-medium">
-            {product.purity} Gold {product.itemType} • {approvedPhotos.length} Studio-Grade Photos + ERP Import Metadata
+            {product.purity} Gold {product.itemType} • Studio-Grade Photo + ERP Import Metadata
           </p>
         </div>
       </div>
 
-      {/* Two Core Export Options */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        
-        {/* Option A: Download All Images as ZIP */}
         <div className="bg-white border border-stone-200 rounded-3xl p-6 flex flex-col justify-between space-y-4 shadow-xs hover:border-red-300 transition-colors">
           <div className="space-y-3">
             <div className="w-12 h-12 rounded-2xl bg-red-50 border border-red-200 flex items-center justify-center text-red-600">
@@ -92,20 +66,13 @@ export const ExportStep: React.FC<ExportStepProps> = ({
                 Option A: Download Studio ZIP
               </h3>
               <p className="text-xs text-stone-500 mt-1">
-                Packages all approved photos strictly formatted with your CPC naming convention:
+                Photo and CSV, named by your CPC:
               </p>
             </div>
 
             <div className="bg-stone-50 rounded-xl p-3 text-xs font-mono text-stone-700 space-y-1 border border-stone-200">
               <div className="text-red-700 font-bold">📦 {displayCpc}_studio_pack.zip</div>
-              <div className="pl-3 text-stone-500">├── {displayCpc}_hero.jpg</div>
-              <div className="pl-3 text-stone-500">├── {displayCpc}_angle1.jpg</div>
-              {product.photos.some((p) => p.type === 'angle_2' && p.originalImage) && (
-                <div className="pl-3 text-stone-500">├── {displayCpc}_angle2.jpg</div>
-              )}
-              {product.photos.some((p) => Boolean(p.tryonImage)) && (
-                <div className="pl-3 text-amber-700 font-semibold">├── {displayCpc}_tryon.jpg (Styled)</div>
-              )}
+              <div className="pl-3 text-stone-500">├── {displayCpc}_photo.jpg</div>
               <div className="pl-3 text-stone-500">└── {displayCpc}_erp_import.csv</div>
             </div>
           </div>
@@ -117,11 +84,10 @@ export const ExportStep: React.FC<ExportStepProps> = ({
             className="w-full py-3.5 px-5 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-xs sm:text-sm uppercase tracking-wider shadow-xs flex items-center justify-center gap-2 transition-all active:scale-[0.99]"
           >
             <Download className="w-4 h-4 text-white" />
-            <span>{isZipping ? 'Generating ZIP...' : `Download ZIP (${approvedPhotos.length} Photos)`}</span>
+            <span>{isZipping ? 'Generating ZIP...' : 'Download ZIP'}</span>
           </button>
         </div>
 
-        {/* Option B: Download Structured ERP CSV */}
         <div className="bg-white border border-stone-200 rounded-3xl p-6 flex flex-col justify-between space-y-4 shadow-xs hover:border-emerald-500/40 transition-colors">
           <div className="space-y-3">
             <div className="w-12 h-12 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-600">
@@ -136,7 +102,6 @@ export const ExportStep: React.FC<ExportStepProps> = ({
               </p>
             </div>
 
-            {/* Quick CSV Summary Fields */}
             <div className="bg-stone-50 rounded-xl p-3 text-xs space-y-1.5 border border-stone-200">
               <div className="grid grid-cols-2 gap-1 text-[11px]">
                 <span className="text-stone-500 font-medium">CPC:</span>
@@ -173,15 +138,13 @@ export const ExportStep: React.FC<ExportStepProps> = ({
             </button>
           </div>
         </div>
-
       </div>
 
-      {/* CSV Raw Data Table Preview */}
       <div className="bg-white border border-stone-200 rounded-3xl p-5 sm:p-6 text-stone-900 space-y-3 shadow-xs">
         <div className="flex items-center justify-between">
           <span className="text-xs font-bold uppercase tracking-wider text-stone-900 flex items-center gap-1.5">
             <FileSpreadsheet className="w-4 h-4 text-red-600" />
-            <span>ERP Bulk Import CSV Preview (1 Row Generated)</span>
+            <span>ERP Bulk Import CSV Preview</span>
           </span>
           <span className="text-[10px] text-stone-500 font-medium">Ready for API or file import</span>
         </div>
@@ -210,27 +173,16 @@ export const ExportStep: React.FC<ExportStepProps> = ({
         </div>
       </div>
 
-      {/* Action Footer: Start Next Product or Review Audit Log */}
-      <div className="bg-white border border-stone-200 rounded-3xl p-5 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-xs">
-        <button
-          type="button"
-          onClick={onViewHistory}
-          className="w-full sm:w-auto py-3.5 px-6 rounded-xl bg-stone-100 hover:bg-stone-200 text-stone-700 text-xs sm:text-sm font-bold uppercase tracking-wider flex items-center justify-center gap-2 border border-stone-200 transition-colors order-2 sm:order-1"
-        >
-          <History className="w-4 h-4 text-red-600" />
-          <span>View Session Audit Log</span>
-        </button>
-
+      <div className="bg-white border border-stone-200 rounded-3xl p-5 flex items-center justify-end gap-3 shadow-xs">
         <button
           type="button"
           onClick={onStartNewProduct}
-          className="w-full sm:w-auto py-3.5 sm:py-4 px-8 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-xs sm:text-sm uppercase tracking-wider shadow-md shadow-red-900/15 flex items-center justify-center gap-2 transition-all active:scale-[0.99] order-1 sm:order-2"
+          className="w-full sm:w-auto py-3.5 sm:py-4 px-8 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-xs sm:text-sm uppercase tracking-wider shadow-md shadow-red-900/15 flex items-center justify-center gap-2 transition-all active:scale-[0.99]"
         >
           <PlusCircle className="w-5 h-5 text-white stroke-[2.5]" />
           <span>Process Next Product (New CPC)</span>
         </button>
       </div>
-
     </div>
   );
 };

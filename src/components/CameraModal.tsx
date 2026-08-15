@@ -6,7 +6,6 @@ interface CameraModalProps {
   onClose: () => void;
   onCapture: (dataUrl: string) => void;
   title: string;
-  isMacro?: boolean;
 }
 
 export const CameraModal: React.FC<CameraModalProps> = ({
@@ -14,7 +13,6 @@ export const CameraModal: React.FC<CameraModalProps> = ({
   onClose,
   onCapture,
   title,
-  isMacro = false,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
@@ -123,13 +121,9 @@ export const CameraModal: React.FC<CameraModalProps> = ({
 
             {/* Viewfinder Framing Overlay */}
             <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-center p-6">
-              <div
-                className={`w-full h-full rounded-2xl border-2 border-dashed ${
-                  isMacro ? 'border-amber-400 max-w-[200px] max-h-[200px]' : 'border-amber-400/80 max-w-[280px] max-h-[280px]'
-                } flex flex-col items-center justify-between p-2`}
-              >
+              <div className="w-full h-full rounded-2xl border-2 border-dashed border-amber-400/80 max-w-[280px] max-h-[280px] flex flex-col items-center justify-between p-2">
                 <div className="text-[10px] bg-stone-900/80 text-amber-200 px-2 py-0.5 rounded font-mono">
-                  {isMacro ? 'MACRO: BIS 916 / 750 STAMP' : 'FILL 70% OF FRAME'}
+                  FILL 70% OF FRAME
                 </div>
                 <div className="w-6 h-6 border-t-2 border-l-2 border-amber-400 self-start" />
                 <div className="text-[10px] text-amber-200/80 font-mono bg-black/60 px-2 rounded">

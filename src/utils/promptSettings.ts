@@ -4,90 +4,33 @@
 
 export interface PromptConfig {
   enhancePrompt: string;
-  auditPrompt?: string;
-  tryonPrompt?: string;
   updatedAt?: string;
 }
 
-export const DEFAULT_ENHANCE_PROMPT = `Create a premium e-commerce product photograph of the jewellery item shown in the reference image.
+// This prompt is deliberately framed as a strict pixel-preservation task, not a
+// creative-generation task. Testing showed that a softer "make this look nice"
+// framing leads the model to invent details (engravings, different band profiles)
+// that aren't on the real piece - a real compliance risk for a jewelry catalogue.
+export const DEFAULT_ENHANCE_PROMPT = `Edit ONLY the background and lighting of this exact photograph of a piece of fine jewelry. This is a strict pixel-preservation and cleanup task, not a creative generation task. Treat the jewelry itself as fixed content to be lifted onto a new background, not repainted or reimagined.
 
-CRITICAL PRIORITY — PRESERVE THE PRODUCT:
+ABSOLUTE RULES (violating any of these is a failure, even if the final image looks appealing):
+* Do NOT redraw, re-render, redesign, or reinterpret the jewelry item.
+* Do NOT add any engraving, motif, pattern, gemstone, or decorative element anywhere that is not clearly visible in the original photo.
+* Do NOT remove or simplify any engraving, motif, pattern, or stone that IS visible in the original photo.
+* Do NOT change the item's proportions, band/chain thickness, cross-section, or profile, even if they look informal or imperfect as photographed.
+* Do NOT change the stone cut, facet pattern, count, or setting style beyond what is visible in the original.
+* Do NOT change the viewing angle or orientation of the piece.
+* The output must remain recognizably the exact same physical item a customer could hold in their hand next to this photo.
 
-* Reproduce the jewellery piece exactly as shown in the reference image.
-* Do NOT redesign, simplify, embellish, remove, add, or reinterpret any part of the jewellery.
-* Preserve the exact shape, proportions, dimensions, motifs, engraving, textures, stones, setting, edges, patterns, construction and overall design.
-* Preserve the correct orientation and viewing angle of the original product.
-* The final image must clearly depict the same physical jewellery item, not an AI-invented variation.
-* Do not add gemstones, diamonds, pearls, chains, clasps, decorative elements or patterns that are not present in the reference.
-* Do not change the jewellery into a different type of ornament.
+ALLOWED CHANGES ONLY:
+1. Replace the background with pure seamless white (#FFFFFF), studio e-commerce style, extending to all edges.
+2. If a SKU/price tag is visible and does not overlap the jewelry, remove it along with the background.
+3. Correct white balance and exposure so the metal reads as its true, neutral color under even studio lighting (gold as warm yellow - not orange, not pale; silver/white metal as neutral - not blue-tinted), regardless of the original light source.
+4. Remove dust, fingerprints, and handling smudges from the metal surface. Do not soften or blur any hallmark stamp, engraving, or manufacturing texture that is present - it must stay sharp and legible.
+5. Balance exposure so metal highlights are not blown out to pure white and shadow areas keep visible detail.
+6. Straighten and center the composition and add a soft, subtle, realistic contact shadow directly beneath the piece for grounding. Do not add a reflection or any other prop.
 
-PRODUCT PHOTOGRAPHY:
-
-* Professional high-end jewellery e-commerce photography.
-* Product isolated on a pure seamless white background (#FFFFFF).
-* Product positioned centrally with generous clean whitespace around it.
-* Camera positioned at the most natural straight-on product/catalogue angle appropriate for the jewellery.
-* Product should occupy approximately 65–80% of the image frame, depending on its shape.
-* Extremely sharp focus across the entire jewellery piece.
-* High-resolution commercial photography.
-* Realistic macro-level detail and physically accurate geometry.
-* Clean edges with precise background separation.
-* No hands, fingers, people, mannequin, jewellery box, props, fabric, table, flowers or decorative background elements.
-
-LIGHTING:
-
-* Use a professional multi-light jewellery studio setup.
-* Large soft diffused key light with carefully controlled fill lighting.
-* Add subtle directional highlights to reveal the jewellery’s contours and craftsmanship.
-* Preserve realistic metallic reflections without creating distracting hotspots.
-* Ensure intricate engraving, filigree, textures and recessed areas remain clearly visible.
-* Balanced exposure with excellent highlight and shadow detail.
-* No blown-out reflections.
-* No harsh artificial glow.
-
-MATERIAL & COLOUR ACCURACY:
-
-* Accurately reproduce the jewellery’s actual metal colour and finish from the reference.
-* For gold: rich, realistic 22K/24K-style warm yellow-gold appearance without excessive orange saturation.
-* For silver/platinum/white gold: realistic neutral metallic appearance.
-* Preserve the exact finish visible in the reference: polished, matte, brushed, textured, oxidised, etc.
-* Metal must look physically realistic, dense and premium — not plastic, CGI or overly glossy.
-* Preserve the natural micro-reflections expected from real precious metal.
-
-SHADOW & REFLECTION:
-
-* Add a very subtle, soft natural contact shadow directly beneath the product where physically appropriate.
-* Optional extremely subtle studio reflection beneath the product.
-* The shadow/reflection must remain understated and must never distract from the jewellery.
-* Avoid floating-product appearance.
-
-IMAGE QUALITY:
-
-* Luxury jewellery catalogue aesthetic.
-* Photorealistic.
-* Clean, minimal, premium and sophisticated.
-* Accurate fine details.
-* No artificial sharpening halos.
-* No blur.
-* No noise.
-* No watermark.
-* No text.
-* No logo.
-* No price tag.
-* No packaging.
-
-COMPOSITION:
-
-* Square 1:1 composition suitable for an e-commerce product catalogue.
-* Product perfectly centered.
-* Consistent scale and framing.
-* White background extending seamlessly to all edges.
-* Leave enough margin so no part of the jewellery is cropped.
-
-FINAL RESULT:
-The result should look like a photograph produced by a top-tier professional jewellery e-commerce studio, suitable for the main product image on a premium jewellery website such as a luxury Indian jewellery retailer.
-
-MOST IMPORTANT: The reference jewellery itself is the source of truth. The photography style, lighting and background may be improved, but the jewellery’s actual design must remain unchanged.`;
+OUTPUT: square (1:1) composition, the jewelry centered and occupying roughly 65-80% of the frame with clean margin so nothing is cropped, pure white background, ready for an e-commerce product catalogue.`;
 
 export const STORAGE_KEY_PROMPTS = 'rl_jewels_prompt_config_v1';
 

@@ -100,7 +100,7 @@ export const AdminPromptModal: React.FC<AdminPromptModalProps> = ({
                 </span>
               </div>
               <p className="text-xs text-stone-500 font-medium">
-                Customize the studio retouching instructions sent to Gemini 2.5 Flash.
+                Customize the studio retouching instructions sent to the AI enhancement model.
               </p>
             </div>
           </div>
