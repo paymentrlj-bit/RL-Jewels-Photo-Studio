@@ -139,12 +139,169 @@ app.post('/api/scan-tag', async (req, res) => {
 
 
 /**
+ * Helper to call Gemini Image editing models in sequence
+ * Prioritizes Gemini 2.5 Flash / Flash Image with cost-efficiency
+ */
+async function generateOrEditImageWithGemini(
+  ai: GoogleGenAI,
+  cleanBase64: string,
+  mimeType: string,
+  prompt: string
+): Promise<string | null> {
+  const candidateModels = [
+    'gemini-2.5-flash-image',
+    'gemini-2.5-flash',
+    'gemini-3.1-flash-lite-image',
+    'gemini-3.1-flash-image',
+    'imagen-3.0-generate-002',
+  ];
+
+  for (const model of candidateModels) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents: {
+          parts: [
+            {
+              inlineData: {
+                mimeType,
+                data: cleanBase64,
+              },
+            },
+            { text: prompt },
+          ],
+        },
+        config: {
+          imageConfig: {
+            aspectRatio: '1:1',
+          },
+        },
+      });
+
+      const parts = response.candidates?.[0]?.content?.parts || [];
+      for (const part of parts) {
+        if (part.inlineData && part.inlineData.data) {
+          return `data:${part.inlineData.mimeType || 'image/png'};base64,${part.inlineData.data}`;
+        }
+      }
+    } catch (err: any) {
+      console.warn(`Model ${model} attempt note:`, err?.message || err);
+    }
+  }
+
+  return null;
+}
+
+const DEFAULT_STUDIO_ENHANCE_PROMPT = `Create a premium e-commerce product photograph of the jewellery item shown in the reference image.
+
+CRITICAL PRIORITY — PRESERVE THE PRODUCT:
+
+* Reproduce the jewellery piece exactly as shown in the reference image.
+* Do NOT redesign, simplify, embellish, remove, add, or reinterpret any part of the jewellery.
+* Preserve the exact shape, proportions, dimensions, motifs, engraving, textures, stones, setting, edges, patterns, construction and overall design.
+* Preserve the correct orientation and viewing angle of the original product.
+* The final image must clearly depict the same physical jewellery item, not an AI-invented variation.
+* Do not add gemstones, diamonds, pearls, chains, clasps, decorative elements or patterns that are not present in the reference.
+* Do not change the jewellery into a different type of ornament.
+
+PRODUCT PHOTOGRAPHY:
+
+* Professional high-end jewellery e-commerce photography.
+* Product isolated on a pure seamless white background (#FFFFFF).
+* Product positioned centrally with generous clean whitespace around it.
+* Camera positioned at the most natural straight-on product/catalogue angle appropriate for the jewellery.
+* Product should occupy approximately 65–80% of the image frame, depending on its shape.
+* Extremely sharp focus across the entire jewellery piece.
+* High-resolution commercial photography.
+* Realistic macro-level detail and physically accurate geometry.
+* Clean edges with precise background separation.
+* No hands, fingers, people, mannequin, jewellery box, props, fabric, table, flowers or decorative background elements.
+
+LIGHTING:
+
+* Use a professional multi-light jewellery studio setup.
+* Large soft diffused key light with carefully controlled fill lighting.
+* Add subtle directional highlights to reveal the jewellery’s contours and craftsmanship.
+* Preserve realistic metallic reflections without creating distracting hotspots.
+* Ensure intricate engraving, filigree, textures and recessed areas remain clearly visible.
+* Balanced exposure with excellent highlight and shadow detail.
+* No blown-out reflections.
+* No harsh artificial glow.
+
+MATERIAL & COLOUR ACCURACY:
+
+* Accurately reproduce the jewellery’s actual metal colour and finish from the reference.
+* For gold: rich, realistic 22K/24K-style warm yellow-gold appearance without excessive orange saturation.
+* For silver/platinum/white gold: realistic neutral metallic appearance.
+* Preserve the exact finish visible in the reference: polished, matte, brushed, textured, oxidised, etc.
+* Metal must look physically realistic, dense and premium — not plastic, CGI or overly glossy.
+* Preserve the natural micro-reflections expected from real precious metal.
+
+SHADOW & REFLECTION:
+
+* Add a very subtle, soft natural contact shadow directly beneath the product where physically appropriate.
+* Optional extremely subtle studio reflection beneath the product.
+* The shadow/reflection must remain understated and must never distract from the jewellery.
+* Avoid floating-product appearance.
+
+IMAGE QUALITY:
+
+* Luxury jewellery catalogue aesthetic.
+* Photorealistic.
+* Clean, minimal, premium and sophisticated.
+* Accurate fine details.
+* No artificial sharpening halos.
+* No blur.
+* No noise.
+* No watermark.
+* No text.
+* No logo.
+* No price tag.
+* No packaging.
+
+COMPOSITION:
+
+* Square 1:1 composition suitable for an e-commerce product catalogue.
+* Product perfectly centered.
+* Consistent scale and framing.
+* White background extending seamlessly to all edges.
+* Leave enough margin so no part of the jewellery is cropped.
+
+FINAL RESULT:
+The result should look like a photograph produced by a top-tier professional jewellery e-commerce studio, suitable for the main product image on a premium jewellery website such as a luxury Indian jewellery retailer.
+
+MOST IMPORTANT: The reference jewellery itself is the source of truth. The photography style, lighting and background may be improved, but the jewellery’s actual design must remain unchanged.`;
+
+let serverCustomPrompt: string = DEFAULT_STUDIO_ENHANCE_PROMPT;
+
+/**
+ * Endpoints for Admin to read and update AI prompts directly from the web app
+ */
+app.get('/api/prompt-config', (req, res) => {
+  res.json({
+    enhancePrompt: serverCustomPrompt || DEFAULT_STUDIO_ENHANCE_PROMPT,
+    defaultPrompt: DEFAULT_STUDIO_ENHANCE_PROMPT,
+  });
+});
+
+app.post('/api/prompt-config', (req, res) => {
+  const { enhancePrompt } = req.body;
+  if (enhancePrompt && typeof enhancePrompt === 'string') {
+    serverCustomPrompt = enhancePrompt.trim();
+  }
+  res.json({
+    success: true,
+    enhancePrompt: serverCustomPrompt,
+  });
+});
+
+/**
  * Quality & Hallmarking Audit + Studio Grade Enhancement
- * Uses Gemini 2.5 Flash Image ("Nano Banana") exclusively for image retouching and enhancing.
+ * Uses Gemini Flash Image ("Nano Banana") exclusively for image retouching and enhancing.
  */
 app.post('/api/audit-and-enhance', async (req, res) => {
   try {
-    const { imageBase64, itemType, purity, gender, photoType, sku, weight } = req.body;
+    const { imageBase64, itemType, purity, gender, photoType, sku, weight, customEnhancePrompt } = req.body;
 
     if (!imageBase64) {
       return res.status(400).json({ error: 'Missing imageBase64 data' });
@@ -169,7 +326,7 @@ app.post('/api/audit-and-enhance', async (req, res) => {
 
     const ai = getGeminiClient();
 
-    // Step 1: Quality & Hallmarking Audit using Gemini 2.5 Flash
+    // Step 1: Quality & Hallmarking Audit using Gemini 3.7 Flash
     const auditPrompt = `
 You are the senior Quality Inspector for "RL Jewels", an esteemed luxury gold and diamond jeweler.
 Examine this store-counter photo of a jewelry item.
@@ -181,7 +338,7 @@ Product Metadata:
 - Weight: ${weight || 'N/A'}g
 
 Carefully check for any of these critical retail photography defects:
-1. Physical obstruction: Is a barcode tag, price tag, security string, or finger covering/overlapping any part of the jewelry metal or gemstones?
+1. Physical obstruction: Is a barcode tag, price tag, security string, or finger covering/overlapping any part of the jewelry metal or gemstones? If a tag is overlapping or looped through the jewelry itself, mark "status": "needs_reshoot" and reason "tag overlaps piece".
 2. Focus/Blur: Is the jewelry piece blurry, out of focus, or shaking?
 3. Macro Hallmark (if slot is macro_hallmark): Is the BIS hallmark, purity stamp (e.g., 916, 750, 22K), or HUID stamp clear and legible? If it's illegible or blurred, it MUST be marked "needs_reshoot".
 4. Severe Glare/Darkness: Is there intense blinding counter spotlight glare obscuring details, or is the lighting too dark to discern intricate craftsmanship?
@@ -204,7 +361,7 @@ Respond ONLY in valid JSON format matching this schema:
 
     try {
       const auditResponse = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: 'gemini-3.7-flash',
         contents: {
           parts: [
             {
@@ -241,88 +398,29 @@ Respond ONLY in valid JSON format matching this schema:
       });
     }
 
-    // Step 2: Studio Quality Image Polish / Retouching using Gemini 2.5 Flash Image ("Nano Banana")
-    let processedImageBase64: string | null = null;
+    // Step 2: Studio Quality Image Retouching using Gemini 2.5 Flash ("Nano Banana")
+    // Priority: customEnhancePrompt (from admin UI) > serverCustomPrompt > DEFAULT_STUDIO_ENHANCE_PROMPT
+    const selectedPromptTemplate =
+      customEnhancePrompt && typeof customEnhancePrompt === 'string' && customEnhancePrompt.trim()
+        ? customEnhancePrompt.trim()
+        : serverCustomPrompt || DEFAULT_STUDIO_ENHANCE_PROMPT;
 
-    const enhancementPrompt = `
-You are an e-commerce product photo retoucher specializing in fine gold jewelry.
+    // Enhance prompt with specific metadata context if helpful
+    const enhancementPrompt = `${selectedPromptTemplate}
 
-INPUT: One real photograph of a single ${itemType || 'jewelry'} item, ${purity || '22kt'} gold[, set with: specify gemstones if any]. Intended for: ${gender || "women's"} — for reference only, does not affect the edit.
-
-TASK: Edit this exact image. Do not invent, add, remove, or alter any physical detail of the jewelry — no changing stone count, size, engravings, clasp type, chain length, or design. Preserve 100% of the product's true geometry and proportions; this must remain a faithful photograph of the real item, not a reinterpretation.
-
-Apply only these changes:
-1. Replace the background with pure seamless white (#FFFFFF), studio e-commerce style — no gradient — with only a soft, realistic contact shadow beneath the piece for grounding.
-2. If a SKU/weight tag is visible AND does not overlap the jewelry itself, remove it along with the background — it is sitting on the same tray surface being replaced. If the tag overlaps or is looped through the jewelry (e.g. threaded through a bangle), do NOT attempt removal — instead set needs_reshoot=true and stop, so the app can flag this image back to staff.
-3. Correct white balance so the gold reads as true ${purity || '22kt'} warm yellow tone (not orange, not pale) under neutral 5500K studio lighting, regardless of what light source the original was shot under.
-4. Remove dust, fingerprints, handling smudges, and packaging reflections. Do NOT retouch or soften actual manufacturing texture, hallmark stamps, or engravings — those must remain sharp and legible.
-5. Enhance sharpness and micro-detail on filigree, stone facets, and metalwork so it reads as tack-sharp studio macro photography.
-6. Balance exposure so metal highlights are not blown out and shadows keep detail, even if the original was unevenly lit.
-
-SELF-CHECK before returning the result — grade the output against this checklist and report pass/fail on each:
-- Is the piece in sharp focus, edge to edge?
-- Is any part of the piece cropped out of frame?
-- Are highlights blown out (pure white with no detail) anywhere on the metal?
-- Is the hallmark/engraving (if visible) legible?
-- Is the white balance neutral (not orange, not blue-tinted)?
-If any check fails and this is the first attempt, regenerate once applying a correction for the specific failure. If it fails again, set needs_reshoot=true with the specific reason, instead of returning a low-quality image as final.
-
-OUTPUT: minimum 2000x2000px, square, sRGB, ready for e-commerce catalogue use, plus a status field: approved / needs_reshoot(reason). Style reference: clean, minimal, luxury studio photography consistent with established Indian gold jewelry catalogues (e.g., Tanishq/Kalyan online listings).
+ADDITIONAL CONTEXT (FROM CATALOG FORM):
+- Item Category: ${itemType || 'Jewellery'}
+- Purity: ${purity || '22kt'} Gold
+- Intended For: ${gender || "Women's"}
+${weight ? `- Weight: ${weight}g` : ''}
 `;
 
-    try {
-      // Primary model: gemini-2.5-flash-image (Nano Banana)
-      const imageGenResponse = await ai.models.generateContent({
-        model: 'gemini-2.5-flash-image',
-        contents: {
-          parts: [
-            {
-              inlineData: {
-                mimeType,
-                data: cleanBase64,
-              },
-            },
-            { text: enhancementPrompt },
-          ],
-        },
-      });
-
-      const parts = imageGenResponse.candidates?.[0]?.content?.parts || [];
-      for (const part of parts) {
-        if (part.inlineData && part.inlineData.data) {
-          processedImageBase64 = `data:${part.inlineData.mimeType || 'image/png'};base64,${part.inlineData.data}`;
-          break;
-        }
-      }
-    } catch (genErr) {
-      console.warn('Gemini 2.5 Flash Image primary attempt note:', genErr);
-      try {
-        // Fallback to gemini-2.5-flash / imagen
-        const fallbackResponse = await ai.models.generateContent({
-          model: 'gemini-2.5-flash',
-          contents: {
-            parts: [
-              {
-                inlineData: {
-                  mimeType,
-                  data: cleanBase64,
-                },
-              },
-              { text: enhancementPrompt },
-            ],
-          },
-        });
-        const fallbackParts = fallbackResponse.candidates?.[0]?.content?.parts || [];
-        for (const part of fallbackParts) {
-          if (part.inlineData && part.inlineData.data) {
-            processedImageBase64 = `data:${part.inlineData.mimeType || 'image/png'};base64,${part.inlineData.data}`;
-            break;
-          }
-        }
-      } catch (fallbackErr) {
-        console.warn('Image enhancement note (will use client-side Studio Retoucher):', fallbackErr);
-      }
-    }
+    const processedImageBase64 = await generateOrEditImageWithGemini(
+      ai,
+      cleanBase64,
+      mimeType,
+      enhancementPrompt
+    );
 
     return res.json({
       status: 'approved',
@@ -381,59 +479,12 @@ Task: Create a photorealistic lifestyle portrait of an elegant ${modelGender || 
 - Note: Overlay a subtle, elegant luxury badge text in a corner saying "Styled Visualization".
 `;
 
-    let tryonImageBase64: string | null = null;
-
-    try {
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash-image',
-        contents: {
-          parts: [
-            {
-              inlineData: {
-                mimeType,
-                data: cleanBase64,
-              },
-            },
-            { text: tryonPrompt },
-          ],
-        },
-      });
-
-      const parts = response.candidates?.[0]?.content?.parts || [];
-      for (const part of parts) {
-        if (part.inlineData && part.inlineData.data) {
-          tryonImageBase64 = `data:${part.inlineData.mimeType || 'image/png'};base64,${part.inlineData.data}`;
-          break;
-        }
-      }
-    } catch (tryonErr) {
-      console.warn('Tryon model primary attempt failed, trying gemini-2.5-flash fallback:', tryonErr);
-      try {
-        const liteResponse = await ai.models.generateContent({
-          model: 'gemini-2.5-flash',
-          contents: {
-            parts: [
-              {
-                inlineData: {
-                  mimeType,
-                  data: cleanBase64,
-                },
-              },
-              { text: tryonPrompt },
-            ],
-          },
-        });
-        const parts = liteResponse.candidates?.[0]?.content?.parts || [];
-        for (const part of parts) {
-          if (part.inlineData && part.inlineData.data) {
-            tryonImageBase64 = `data:${part.inlineData.mimeType || 'image/png'};base64,${part.inlineData.data}`;
-            break;
-          }
-        }
-      } catch (liteErr) {
-        console.error('Tryon generation failed:', liteErr);
-      }
-    }
+    const tryonImageBase64 = await generateOrEditImageWithGemini(
+      ai,
+      cleanBase64,
+      mimeType,
+      tryonPrompt
+    );
 
     return res.json({
       tryonImageBase64: tryonImageBase64 || imageBase64,

@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { PlusCircle, History, User, LogOut, Shield, KeyRound, Wifi, WifiOff, CloudCheck } from 'lucide-react';
+import { PlusCircle, History, User, LogOut, Shield, KeyRound, Wifi, WifiOff, CloudCheck, Sliders, Sparkles } from 'lucide-react';
 import { BrandLogo } from './BrandLogo';
 import { UserSession } from '../types';
 import { AdminSecurityModal } from './AdminSecurityModal';
+import { AdminPromptModal } from './AdminPromptModal';
 
 interface HeaderProps {
   currentTab: 'new' | 'history';
@@ -12,6 +13,7 @@ interface HeaderProps {
   hasApiKey: boolean;
   isOnline?: boolean;
   lastAutoSavedAt?: string | null;
+  onPromptUpdated?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -22,8 +24,10 @@ export const Header: React.FC<HeaderProps> = ({
   hasApiKey,
   isOnline = true,
   lastAutoSavedAt,
+  onPromptUpdated,
 }) => {
   const [showAdminSecurity, setShowAdminSecurity] = useState(false);
+  const [showAdminPrompts, setShowAdminPrompts] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
 
   const displayName = currentUser?.username || 'Counter Staff';
@@ -136,18 +140,33 @@ export const Header: React.FC<HeaderProps> = ({
                 </div>
 
                 {isAdmin && (
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setShowUserMenu(false);
-                      setShowAdminSecurity(true);
-                    }}
-                    className="w-full min-h-[44px] text-left px-3 py-2.5 rounded-xl hover:bg-stone-100 text-stone-700 font-semibold flex items-center gap-2"
-                  >
-                    <KeyRound className="w-4 h-4 text-red-600" />
-                    <span>Change Passwords</span>
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowUserMenu(false);
+                        setShowAdminPrompts(true);
+                      }}
+                      className="w-full min-h-[44px] text-left px-3 py-2.5 rounded-xl hover:bg-stone-100 text-stone-700 font-semibold flex items-center gap-2"
+                    >
+                      <Sparkles className="w-4 h-4 text-amber-600" />
+                      <span>Edit AI Prompts</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowUserMenu(false);
+                        setShowAdminSecurity(true);
+                      }}
+                      className="w-full min-h-[44px] text-left px-3 py-2.5 rounded-xl hover:bg-stone-100 text-stone-700 font-semibold flex items-center gap-2"
+                    >
+                      <KeyRound className="w-4 h-4 text-red-600" />
+                      <span>Change Passwords</span>
+                    </button>
+                  </>
                 )}
 
                 <button
@@ -170,6 +189,13 @@ export const Header: React.FC<HeaderProps> = ({
       <AdminSecurityModal
         isOpen={showAdminSecurity}
         onClose={() => setShowAdminSecurity(false)}
+      />
+
+      {/* Admin AI Prompt Customizer Modal */}
+      <AdminPromptModal
+        isOpen={showAdminPrompts}
+        onClose={() => setShowAdminPrompts(false)}
+        onPromptUpdated={onPromptUpdated}
       />
     </header>
   );

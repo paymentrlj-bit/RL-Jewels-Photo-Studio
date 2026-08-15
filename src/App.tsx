@@ -20,6 +20,7 @@ import { LoginModal, getStoredUserSession, saveStoredUserSession } from './compo
 import { loadProductDraft, saveProductDraft, clearProductDraft } from './utils/draftStorage';
 import { useNetworkStatus } from './utils/useNetworkStatus';
 import { retouchJewelryPhoto } from './utils/studioRetoucher';
+import { getStoredPromptConfig } from './utils/promptSettings';
 import { CheckCircle2, RotateCcw, WifiOff } from 'lucide-react';
 
 // Standard 5-slot capture structure
@@ -238,6 +239,7 @@ export default function App() {
       );
 
       try {
+        const promptConfig = getStoredPromptConfig();
         const res = await fetch('/api/audit-and-enhance', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -250,6 +252,7 @@ export default function App() {
             sku: cpc,
             cpc,
             weight: netWeight || grossWeight,
+            customEnhancePrompt: promptConfig.enhancePrompt,
           }),
         });
 
@@ -277,6 +280,8 @@ export default function App() {
                 processedUrl = await retouchJewelryPhoto(activePhoto.originalImage, {
                   purity,
                   itemType,
+                  gender,
+                  weight: netWeight || grossWeight,
                 });
               } catch {
                 processedUrl = activePhoto.originalImage;
@@ -301,6 +306,8 @@ export default function App() {
             fallbackProcessed = await retouchJewelryPhoto(activePhoto.originalImage, {
               purity,
               itemType,
+              gender,
+              weight: netWeight || grossWeight,
             });
           } catch {
             // ignore
@@ -332,6 +339,7 @@ export default function App() {
     );
 
     try {
+      const promptConfig = getStoredPromptConfig();
       const res = await fetch('/api/audit-and-enhance', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -344,6 +352,7 @@ export default function App() {
           sku: cpc,
           cpc,
           weight: netWeight || grossWeight,
+          customEnhancePrompt: promptConfig.enhancePrompt,
         }),
       });
 
@@ -354,6 +363,8 @@ export default function App() {
           processedUrl = await retouchJewelryPhoto(photo.originalImage, {
             purity,
             itemType,
+            gender,
+            weight: netWeight || grossWeight,
           });
         } catch {
           processedUrl = photo.originalImage;
@@ -388,6 +399,8 @@ export default function App() {
         fallbackProcessed = await retouchJewelryPhoto(photo.originalImage, {
           purity,
           itemType,
+          gender,
+          weight: netWeight || grossWeight,
         });
       } catch {
         // ignore
