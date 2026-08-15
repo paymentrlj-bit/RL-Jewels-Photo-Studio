@@ -202,6 +202,7 @@ export default function App() {
           ...prev,
           status: 'failed',
           failureReason: data.reason || 'AI enhancement failed. Please try again.',
+          debugDetail: data.debugDetail,
           reviewDecision: 'pending',
         }));
       }
@@ -253,6 +254,7 @@ export default function App() {
           ...prev,
           status: 'failed',
           failureReason: data.reason || 'AI enhancement failed. Please try again.',
+          debugDetail: data.debugDetail,
           reviewDecision: 'pending',
         }));
       }
