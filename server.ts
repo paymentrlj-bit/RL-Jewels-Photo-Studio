@@ -104,7 +104,10 @@ async function enhanceImage(
         ],
       },
       config: {
-        imageConfig: { aspectRatio: '1:1', imageSize: '2K' },
+        // 1K is visually indistinguishable from 2K at normal web/catalogue
+        // display sizes and costs roughly 33% less per image - 2K only
+        // matters for print or heavy pinch-zoom, neither of which applies here.
+        imageConfig: { aspectRatio: '1:1', imageSize: '1K' },
         abortSignal: controller.signal,
       } as any,
     });
