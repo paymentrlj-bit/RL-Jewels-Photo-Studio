@@ -1,34 +1,14 @@
 import React, { useState } from 'react';
-import { Lock, User, KeyRound, ShieldAlert, CheckCircle2, ArrowRight } from 'lucide-react';
+import { Lock, User, ShieldAlert, ArrowRight, Loader2 } from 'lucide-react';
 import { BrandLogo } from './BrandLogo';
-import { UserSession, AuthConfig, STAFF_MEMBERS } from '../types';
+import { UserSession } from '../types';
 
-const AUTH_CONFIG_STORAGE_KEY = 'rlj_auth_config_v1';
 const USER_SESSION_STORAGE_KEY = 'rlj_user_session_v1';
 
-export function getStoredAuthConfig(): AuthConfig {
-  try {
-    const raw = localStorage.getItem(AUTH_CONFIG_STORAGE_KEY);
-    if (raw) {
-      return JSON.parse(raw);
-    }
-  } catch (e) {
-    console.error('Failed to load auth config:', e);
-  }
-  return {
-    adminPassword: 'admin',
-    staffPassword: 'gold',
-  };
-}
-
-export function saveStoredAuthConfig(config: AuthConfig): void {
-  try {
-    localStorage.setItem(AUTH_CONFIG_STORAGE_KEY, JSON.stringify(config));
-  } catch (e) {
-    console.error('Failed to save auth config:', e);
-  }
-}
-
+// The session cookie set by the server is the actual access gate (httpOnly,
+// can't be read or forged from the browser). This local copy is only a display
+// convenience so the UI can show "signed in as X" without an extra round trip -
+// it is never trusted for access control.
 export function getStoredUserSession(): UserSession | null {
   try {
     const raw = localStorage.getItem(USER_SESSION_STORAGE_KEY);
@@ -62,10 +42,11 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onLoginSuccess }
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   if (!isOpen) return null;
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleanUser = username.trim();
     const cleanPass = password.trim();
@@ -79,47 +60,38 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onLoginSuccess }
       return;
     }
 
-    const authConfig = getStoredAuthConfig();
-    const isAdmin = cleanUser.toLowerCase() === 'admin';
-
-    if (isAdmin) {
-      if (cleanPass === authConfig.adminPassword) {
-        const session: UserSession = {
-          username: 'admin',
-          isAdmin: true,
-          loggedInAt: new Date().toISOString(),
-        };
-        saveStoredUserSession(session);
-        onLoginSuccess(session);
-        setErrorMsg('');
-      } else {
-        setErrorMsg('Invalid developer/admin password.');
+    setIsSubmitting(true);
+    setErrorMsg('');
+    try {
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: cleanUser, password: cleanPass }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setErrorMsg(data.error || 'Sign in failed.');
+        return;
       }
-    } else {
-      // General staff user
-      if (cleanPass === authConfig.staffPassword) {
-        const session: UserSession = {
-          username: cleanUser,
-          isAdmin: false,
-          loggedInAt: new Date().toISOString(),
-        };
-        saveStoredUserSession(session);
-        onLoginSuccess(session);
-        setErrorMsg('');
-      } else {
-        setErrorMsg('Incorrect staff password. (Default is "gold")');
-      }
+      const session: UserSession = {
+        username: data.username,
+        isAdmin: data.isAdmin,
+        loggedInAt: new Date().toISOString(),
+      };
+      saveStoredUserSession(session);
+      onLoginSuccess(session);
+    } catch (err) {
+      setErrorMsg('Could not reach the server. Check your connection and try again.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   return (
     <div className="fixed inset-0 z-50 bg-stone-900/80 backdrop-blur-sm flex items-center justify-center p-4">
       <div className="bg-white border border-stone-200 rounded-3xl p-6 sm:p-8 max-w-md w-full shadow-2xl space-y-6 relative overflow-hidden animate-in fade-in zoom-in duration-200">
-        
-        {/* Top Gold & Red Accent Line */}
         <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-red-600 via-amber-400 to-red-600" />
 
-        {/* Brand Header */}
         <div className="text-center space-y-2 pt-2">
           <div className="flex justify-center mb-3">
             <BrandLogo variant="3d-badge" size="md" />
@@ -128,7 +100,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onLoginSuccess }
             Internal Staff Sign In
           </h2>
           <p className="text-xs text-stone-500 font-medium">
-            RL Jewels Counter Photo Studio & ERP Management
+            RL Jewels Counter Photo Studio
           </p>
         </div>
 
@@ -140,7 +112,6 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onLoginSuccess }
         )}
 
         <form onSubmit={handleLogin} className="space-y-4">
-          {/* Username Input */}
           <div>
             <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1.5 flex items-center gap-1.5">
               <User className="w-3.5 h-3.5 text-stone-400" />
@@ -159,7 +130,6 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onLoginSuccess }
             />
           </div>
 
-          {/* Password Input */}
           <div>
             <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1.5 flex items-center">
               <span className="flex items-center gap-1.5">
@@ -179,13 +149,13 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onLoginSuccess }
             />
           </div>
 
-          {/* Login Submit Button */}
           <button
             type="submit"
-            className="w-full py-3.5 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-sm uppercase tracking-wider shadow-md shadow-red-900/15 flex items-center justify-center gap-2 transition-all active:scale-[0.99] mt-2"
+            disabled={isSubmitting}
+            className="w-full py-3.5 px-4 rounded-xl bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white font-bold text-sm uppercase tracking-wider shadow-md shadow-red-900/15 flex items-center justify-center gap-2 transition-all active:scale-[0.99] mt-2"
           >
-            <span>Access Counter Studio</span>
-            <ArrowRight className="w-4 h-4" />
+            {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />}
+            <span>{isSubmitting ? 'Signing in…' : 'Access Counter Studio'}</span>
           </button>
         </form>
 
@@ -194,7 +164,6 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onLoginSuccess }
             Internal RL Jewels Authorized Personnel Only
           </p>
         </div>
-
       </div>
     </div>
   );

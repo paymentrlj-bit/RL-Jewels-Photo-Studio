@@ -1,7 +1,5 @@
 import React, { useState } from 'react';
-import { KeyRound, ShieldCheck, X, Check, Lock } from 'lucide-react';
-import { AuthConfig } from '../types';
-import { getStoredAuthConfig, saveStoredAuthConfig } from './LoginModal';
+import { KeyRound, X, Check, Lock, Loader2 } from 'lucide-react';
 
 interface AdminSecurityModalProps {
   isOpen: boolean;
@@ -9,25 +7,48 @@ interface AdminSecurityModalProps {
 }
 
 export const AdminSecurityModal: React.FC<AdminSecurityModalProps> = ({ isOpen, onClose }) => {
-  const currentConfig = getStoredAuthConfig();
-  const [adminPassword, setAdminPassword] = useState(currentConfig.adminPassword);
-  const [staffPassword, setStaffPassword] = useState(currentConfig.staffPassword);
+  const [adminPassword, setAdminPassword] = useState('');
+  const [staffPassword, setStaffPassword] = useState('');
   const [savedMsg, setSavedMsg] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   if (!isOpen) return null;
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    const updated: AuthConfig = {
-      adminPassword: adminPassword.trim() || 'admin',
-      staffPassword: staffPassword.trim() || 'gold',
-    };
-    saveStoredAuthConfig(updated);
-    setSavedMsg(true);
-    setTimeout(() => {
-      setSavedMsg(false);
-      onClose();
-    }, 1200);
+    if (!adminPassword.trim() && !staffPassword.trim()) {
+      setErrorMsg('Enter at least one new password to update.');
+      return;
+    }
+    setIsSubmitting(true);
+    setErrorMsg('');
+    try {
+      const res = await fetch('/api/admin/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          adminPassword: adminPassword.trim() || undefined,
+          staffPassword: staffPassword.trim() || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setErrorMsg(data.error || 'Failed to update passwords.');
+        return;
+      }
+      setSavedMsg(true);
+      setAdminPassword('');
+      setStaffPassword('');
+      setTimeout(() => {
+        setSavedMsg(false);
+        onClose();
+      }, 1200);
+    } catch {
+      setErrorMsg('Could not reach the server.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -58,33 +79,40 @@ export const AdminSecurityModal: React.FC<AdminSecurityModalProps> = ({ isOpen, 
           </div>
         )}
 
+        {errorMsg && (
+          <div className="bg-red-50 border border-red-200 text-red-700 text-xs px-3 py-2 rounded-xl">
+            <span className="font-bold">{errorMsg}</span>
+          </div>
+        )}
+
         <form onSubmit={handleSave} className="space-y-4">
           <div>
-            <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1">
-              Developer / Admin Password
+            <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1 flex items-center gap-1.5">
+              <Lock className="w-3.5 h-3.5 text-stone-400" />
+              <span>New Developer / Admin Password</span>
             </label>
             <input
               type="text"
               value={adminPassword}
               onChange={(e) => setAdminPassword(e.target.value)}
               className="w-full bg-stone-50 border border-stone-200 focus:border-red-600 rounded-xl px-3.5 py-2.5 text-stone-900 text-sm font-mono focus:outline-none"
-              placeholder="admin"
+              placeholder="Leave blank to keep unchanged"
             />
-            <p className="text-[10px] text-stone-400 mt-1">Default is <code className="text-red-600 font-bold">admin</code></p>
           </div>
 
           <div>
-            <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1">
-              General Staff Password
+            <label className="block text-xs font-bold uppercase tracking-wider text-stone-700 mb-1 flex items-center gap-1.5">
+              <Lock className="w-3.5 h-3.5 text-stone-400" />
+              <span>New General Staff Password</span>
             </label>
             <input
               type="text"
               value={staffPassword}
               onChange={(e) => setStaffPassword(e.target.value)}
               className="w-full bg-stone-50 border border-stone-200 focus:border-red-600 rounded-xl px-3.5 py-2.5 text-stone-900 text-sm font-mono focus:outline-none"
-              placeholder="gold"
+              placeholder="Leave blank to keep unchanged"
             />
-            <p className="text-[10px] text-stone-400 mt-1">Default is <code className="text-amber-700 font-bold">gold</code> for all counter staff</p>
+            <p className="text-[10px] text-stone-400 mt-1">Shared by all counter staff.</p>
           </div>
 
           <div className="pt-2 flex items-center gap-2">
@@ -97,9 +125,11 @@ export const AdminSecurityModal: React.FC<AdminSecurityModalProps> = ({ isOpen, 
             </button>
             <button
               type="submit"
-              className="flex-1 py-2.5 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-xs uppercase tracking-wider shadow-xs transition-colors"
+              disabled={isSubmitting}
+              className="flex-1 py-2.5 px-4 rounded-xl bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white font-bold text-xs uppercase tracking-wider shadow-xs transition-colors flex items-center justify-center gap-1.5"
             >
-              Save Passwords
+              {isSubmitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              <span>Save Passwords</span>
             </button>
           </div>
         </form>

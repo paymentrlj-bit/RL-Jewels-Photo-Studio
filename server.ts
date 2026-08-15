@@ -1,19 +1,24 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
+import crypto from 'crypto';
 import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
+import { DEFAULT_ENHANCE_PROMPT } from './src/utils/promptSettings';
 
 dotenv.config();
 
 const app = express();
 const PORT = 3000;
 
-// Middleware for large base64 image uploads from mobile phone camera
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ limit: '50mb', extended: true }));
+app.use(express.json({ limit: '20mb' }));
+app.use(express.urlencoded({ limit: '20mb', extended: true }));
 
-// Lazy initialize Gemini client
+// ---------------------------------------------------------------------------
+// Gemini client
+// ---------------------------------------------------------------------------
+
 let genAIClient: GoogleGenAI | null = null;
 function getGeminiClient(): GoogleGenAI {
   if (!genAIClient) {
@@ -21,34 +26,350 @@ function getGeminiClient(): GoogleGenAI {
     if (!apiKey) {
       console.warn('GEMINI_API_KEY environment variable is missing.');
     }
-    genAIClient = new GoogleGenAI({
-      apiKey: apiKey || '',
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
-      },
-    });
+    genAIClient = new GoogleGenAI({ apiKey: apiKey || '' });
   }
   return genAIClient;
 }
 
-// Health & Status endpoint
+// Tiered models: cheap/fast tier for the normal case, escalate to the higher-quality
+// tier only for the one auto-retry after a self-QA failure. Verified live against the
+// account's actual model list on 2026-08-15 - do not "helpfully" guess new names here
+// without testing against /v1beta/models first, the previous version of this file
+// shipped several model IDs that were stale or never existed.
+const MODEL_ENHANCE_DEFAULT = 'gemini-3.1-flash-image';
+const MODEL_ENHANCE_ESCALATED = 'nano-banana-pro-preview';
+const MODEL_AUDIT = 'gemini-3.1-flash-lite';
+
+const CALL_TIMEOUT_MS = 45_000;
+
+function isBillingError(err: any): boolean {
+  const message = String(err?.message || err || '');
+  return /prepayment credits are depleted|spending cap|exceeded its monthly/i.test(message);
+}
+
+function isTransientError(err: any): boolean {
+  const message = String(err?.message || err || '');
+  const code = err?.status || err?.code;
+
+  // Billing/quota-cap errors come back as 429 too, but retrying never helps -
+  // check these first so they don't fall into the generic 429-is-transient case.
+  if (/prepayment credits are depleted|spending cap|exceeded its monthly/i.test(message)) {
+    return false;
+  }
+  if (code === 429 || code === 500 || code === 503 || code === 504) return true;
+  if (/RESOURCE_EXHAUSTED|UNAVAILABLE|DEADLINE_EXCEEDED|ECONNRESET|ETIMEDOUT|fetch failed/i.test(message)) {
+    return true;
+  }
+  return false;
+}
+
+async function withTransientRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Promise<T> {
+  let lastErr: any;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (attempt < maxAttempts && isTransientError(err)) {
+        await new Promise((r) => setTimeout(r, 1000 * attempt));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr;
+}
+
+interface EnhanceResult {
+  imageBase64: string;
+  mimeType: string;
+}
+
+async function enhanceImage(
+  ai: GoogleGenAI,
+  model: string,
+  imageBase64: string,
+  mimeType: string,
+  prompt: string
+): Promise<EnhanceResult | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), CALL_TIMEOUT_MS);
+  try {
+    const response = await ai.models.generateContent({
+      model,
+      contents: {
+        parts: [
+          { inlineData: { mimeType, data: imageBase64 } },
+          { text: prompt },
+        ],
+      },
+      config: {
+        imageConfig: { aspectRatio: '1:1', imageSize: '2K' },
+        abortSignal: controller.signal,
+      } as any,
+    });
+    const parts = response.candidates?.[0]?.content?.parts || [];
+    for (const part of parts) {
+      if (part.inlineData?.data) {
+        return { imageBase64: part.inlineData.data, mimeType: part.inlineData.mimeType || 'image/png' };
+      }
+    }
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+interface AuditResult {
+  overallPass: boolean;
+  reason: string;
+  checklist: Record<string, boolean>;
+}
+
+async function auditOutput(
+  ai: GoogleGenAI,
+  originalBase64: string,
+  originalMime: string,
+  enhancedBase64: string,
+  enhancedMime: string,
+  context: { itemType: string; purity: string }
+): Promise<AuditResult> {
+  const prompt = `You are a strict quality inspector for "RL Jewels" e-commerce catalogue photos.
+IMAGE 1 is the original counter photo. IMAGE 2 is the AI-enhanced result that is about to be published.
+Item: ${context.purity} gold ${context.itemType}.
+
+Compare IMAGE 2 against IMAGE 1 and grade it. Respond ONLY as JSON matching this schema:
+{
+  "sharpFocus": boolean,        // is the jewelry in image 2 in sharp focus, edge to edge?
+  "notCropped": boolean,        // is the full piece visible, nothing cut off by the frame?
+  "backgroundCleanWhite": boolean, // is the background a clean, seamless white with no artifacts?
+  "noBlownHighlights": boolean, // are metal highlights not blown out to pure white with no detail?
+  "neutralWhiteBalance": boolean, // is the metal color neutral/true (not orange or blue-tinted)?
+  "matchesOriginalDesign": boolean, // CRITICAL: does image 2 show the exact same design as image 1, with no added, removed, or altered engravings, motifs, stones, proportions, or band/chain profile?
+  "overallPass": boolean,       // true only if ALL of the above are true
+  "reason": string              // if overallPass is false, a short, specific, staff-facing reason naming which check failed and why (e.g. "The enhanced image added a decorative pattern to the band that isn't on the original piece."). If overallPass is true, a short confirmation.
+}`;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), CALL_TIMEOUT_MS);
+  try {
+    const response = await ai.models.generateContent({
+      model: MODEL_AUDIT,
+      contents: {
+        parts: [
+          { inlineData: { mimeType: originalMime, data: originalBase64 } },
+          { inlineData: { mimeType: enhancedMime, data: enhancedBase64 } },
+          { text: prompt },
+        ],
+      },
+      config: {
+        responseMimeType: 'application/json',
+        abortSignal: controller.signal,
+      } as any,
+    });
+    const parsed = JSON.parse(response.text?.trim() || '{}');
+    const checklist = {
+      sharpFocus: Boolean(parsed.sharpFocus),
+      notCropped: Boolean(parsed.notCropped),
+      backgroundCleanWhite: Boolean(parsed.backgroundCleanWhite),
+      noBlownHighlights: Boolean(parsed.noBlownHighlights),
+      neutralWhiteBalance: Boolean(parsed.neutralWhiteBalance),
+      matchesOriginalDesign: Boolean(parsed.matchesOriginalDesign),
+    };
+    const overallPass = typeof parsed.overallPass === 'boolean' ? parsed.overallPass : Object.values(checklist).every(Boolean);
+    return {
+      overallPass,
+      reason: parsed.reason || (overallPass ? 'Passed quality check.' : 'Did not meet catalogue quality standards.'),
+      checklist,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Auth: server-side session, so "logged out" is an actual gate, not a UI state.
+// Credentials persist to a small JSON file (gitignored) so an admin can change
+// them from the UI without a database. Passwords are hashed, never stored plain.
+// ---------------------------------------------------------------------------
+
+const DATA_DIR = path.join(process.cwd(), '.data');
+const AUTH_CONFIG_PATH = path.join(DATA_DIR, 'auth-config.json');
+
+interface StoredAuthConfig {
+  adminSalt: string;
+  adminHash: string;
+  staffSalt: string;
+  staffHash: string;
+}
+
+function hashPassword(password: string, salt: string): string {
+  return crypto.scryptSync(password, salt, 64).toString('hex');
+}
+
+function loadAuthConfig(): StoredAuthConfig {
+  try {
+    if (fs.existsSync(AUTH_CONFIG_PATH)) {
+      return JSON.parse(fs.readFileSync(AUTH_CONFIG_PATH, 'utf8'));
+    }
+  } catch (err) {
+    console.warn('Auth config read notice, recreating defaults:', err);
+  }
+  const adminSalt = crypto.randomBytes(16).toString('hex');
+  const staffSalt = crypto.randomBytes(16).toString('hex');
+  const defaults: StoredAuthConfig = {
+    adminSalt,
+    adminHash: hashPassword('admin', adminSalt),
+    staffSalt,
+    staffHash: hashPassword('gold', staffSalt),
+  };
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(AUTH_CONFIG_PATH, JSON.stringify(defaults, null, 2));
+  return defaults;
+}
+
+function saveAuthConfig(config: StoredAuthConfig): void {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(AUTH_CONFIG_PATH, JSON.stringify(config, null, 2));
+}
+
+let authConfig = loadAuthConfig();
+
+interface SessionInfo {
+  username: string;
+  isAdmin: boolean;
+  createdAt: number;
+}
+
+const sessions = new Map<string, SessionInfo>();
+const SESSION_COOKIE = 'rlj_session';
+const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours - a counter shift
+
+function parseCookies(header: string | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!header) return out;
+  for (const part of header.split(';')) {
+    const idx = part.indexOf('=');
+    if (idx === -1) continue;
+    const key = part.slice(0, idx).trim();
+    const val = part.slice(idx + 1).trim();
+    if (key) out[key] = decodeURIComponent(val);
+  }
+  return out;
+}
+
+function setSessionCookie(res: express.Response, token: string): void {
+  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  res.setHeader(
+    'Set-Cookie',
+    `${SESSION_COOKIE}=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}${secure}`
+  );
+}
+
+function clearSessionCookie(res: express.Response): void {
+  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`);
+}
+
+function getSession(req: express.Request): SessionInfo | null {
+  const cookies = parseCookies(req.headers.cookie);
+  const token = cookies[SESSION_COOKIE];
+  if (!token) return null;
+  const session = sessions.get(token);
+  if (!session) return null;
+  if (Date.now() - session.createdAt > SESSION_TTL_MS) {
+    sessions.delete(token);
+    return null;
+  }
+  return session;
+}
+
+function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const session = getSession(req);
+  if (!session) {
+    return res.status(401).json({ error: 'Not signed in.' });
+  }
+  (req as any).session = session;
+  next();
+}
+
+app.post('/api/login', (req, res) => {
+  const { username, password } = req.body || {};
+  const cleanUser = String(username || '').trim();
+  const cleanPass = String(password || '').trim();
+  if (!cleanUser || !cleanPass) {
+    return res.status(400).json({ error: 'Username and password are required.' });
+  }
+
+  const isAdminAttempt = cleanUser.toLowerCase() === 'admin';
+  const hash = isAdminAttempt
+    ? hashPassword(cleanPass, authConfig.adminSalt)
+    : hashPassword(cleanPass, authConfig.staffSalt);
+  const expected = isAdminAttempt ? authConfig.adminHash : authConfig.staffHash;
+
+  if (hash !== expected) {
+    return res.status(401).json({ error: isAdminAttempt ? 'Invalid admin password.' : 'Incorrect staff password.' });
+  }
+
+  const token = crypto.randomBytes(32).toString('hex');
+  const session: SessionInfo = {
+    username: isAdminAttempt ? 'admin' : cleanUser,
+    isAdmin: isAdminAttempt,
+    createdAt: Date.now(),
+  };
+  sessions.set(token, session);
+  setSessionCookie(res, token);
+  res.json({ username: session.username, isAdmin: session.isAdmin });
+});
+
+app.post('/api/logout', (req, res) => {
+  const cookies = parseCookies(req.headers.cookie);
+  const token = cookies[SESSION_COOKIE];
+  if (token) sessions.delete(token);
+  clearSessionCookie(res);
+  res.json({ success: true });
+});
+
+app.get('/api/session', (req, res) => {
+  const session = getSession(req);
+  if (!session) return res.status(401).json({ error: 'Not signed in.' });
+  res.json({ username: session.username, isAdmin: session.isAdmin });
+});
+
+app.post('/api/admin/change-password', requireAuth, (req, res) => {
+  const session = (req as any).session as SessionInfo;
+  if (!session.isAdmin) {
+    return res.status(403).json({ error: 'Admin access required.' });
+  }
+  const { adminPassword, staffPassword } = req.body || {};
+  const updated: StoredAuthConfig = { ...authConfig };
+  if (adminPassword && String(adminPassword).trim()) {
+    updated.adminSalt = crypto.randomBytes(16).toString('hex');
+    updated.adminHash = hashPassword(String(adminPassword).trim(), updated.adminSalt);
+  }
+  if (staffPassword && String(staffPassword).trim()) {
+    updated.staffSalt = crypto.randomBytes(16).toString('hex');
+    updated.staffHash = hashPassword(String(staffPassword).trim(), updated.staffSalt);
+  }
+  authConfig = updated;
+  saveAuthConfig(updated);
+  res.json({ success: true });
+});
+
+// Health & Status endpoint (public - lets the UI show "AI offline" banners pre-login)
 app.get('/api/health', (req, res) => {
   const hasKey = Boolean(process.env.GEMINI_API_KEY);
   res.json({
     status: 'ok',
     hasApiKey: hasKey,
-    deviceTarget: 'realme NARZO 90x 5G / Web Counter',
     timestamp: new Date().toISOString(),
   });
 });
 
-/**
- * FREE DUAL-ENGINE OCR COMPONENT: OCR.space Cloud API
- * Free tier OCR for extracting text in parallel with on-device Tesseract
- */
-app.post('/api/ocr-space', async (req, res) => {
+// ---------------------------------------------------------------------------
+// Free OCR tag scanning (OCR.space + local parsing - no Gemini cost)
+// ---------------------------------------------------------------------------
+
+app.post('/api/ocr-space', requireAuth, async (req, res) => {
   try {
     const { imageBase64 } = req.body;
     if (!imageBase64) {
@@ -89,19 +410,13 @@ app.post('/api/ocr-space', async (req, res) => {
   }
 });
 
-/**
- * FREE COST-EFFECTIVE JEWELRY TAG SCANNER (/api/scan-tag)
- * Free client & server OCR with zero Gemini API consumption.
- * Uses OCR.space + pattern parser to extract CPC, Item Type, Purity, Size, Gender, and Weights (GW, OW, NW).
- */
-app.post('/api/scan-tag', async (req, res) => {
+app.post('/api/scan-tag', requireAuth, async (req, res) => {
   try {
     const { imageBase64, side = 'side1', existingCpc } = req.body;
     if (!imageBase64) {
       return res.status(400).json({ error: 'Missing imageBase64' });
     }
 
-    // Call free OCR.space engine
     const apiKey = process.env.OCR_SPACE_API_KEY || 'K88888888888957';
     const formParams = new URLSearchParams();
     formParams.append('base64Image', imageBase64.startsWith('data:') ? imageBase64 : `data:image/jpeg;base64,${imageBase64}`);
@@ -137,154 +452,20 @@ app.post('/api/scan-tag', async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Admin-editable enhancement prompt
+// ---------------------------------------------------------------------------
 
-/**
- * Helper to call Gemini Image editing models in sequence
- * Prioritizes Gemini 2.5 Flash / Flash Image with cost-efficiency
- */
-async function generateOrEditImageWithGemini(
-  ai: GoogleGenAI,
-  cleanBase64: string,
-  mimeType: string,
-  prompt: string
-): Promise<string | null> {
-  const candidateModels = [
-    'gemini-2.5-flash-image',
-    'gemini-2.5-flash',
-    'gemini-3.1-flash-lite-image',
-    'gemini-3.1-flash-image',
-    'imagen-3.0-generate-002',
-  ];
+let serverCustomPrompt: string = DEFAULT_ENHANCE_PROMPT;
 
-  for (const model of candidateModels) {
-    try {
-      const response = await ai.models.generateContent({
-        model,
-        contents: {
-          parts: [
-            {
-              inlineData: {
-                mimeType,
-                data: cleanBase64,
-              },
-            },
-            { text: prompt },
-          ],
-        },
-        config: {
-          imageConfig: {
-            aspectRatio: '1:1',
-          },
-        },
-      });
-
-      const parts = response.candidates?.[0]?.content?.parts || [];
-      for (const part of parts) {
-        if (part.inlineData && part.inlineData.data) {
-          return `data:${part.inlineData.mimeType || 'image/png'};base64,${part.inlineData.data}`;
-        }
-      }
-    } catch (err: any) {
-      console.warn(`Model ${model} attempt note:`, err?.message || err);
-    }
-  }
-
-  return null;
-}
-
-const DEFAULT_STUDIO_ENHANCE_PROMPT = `Create a premium e-commerce product photograph of the jewellery item shown in the reference image.
-
-CRITICAL PRIORITY — PRESERVE THE PRODUCT:
-
-* Reproduce the jewellery piece exactly as shown in the reference image.
-* Do NOT redesign, simplify, embellish, remove, add, or reinterpret any part of the jewellery.
-* Preserve the exact shape, proportions, dimensions, motifs, engraving, textures, stones, setting, edges, patterns, construction and overall design.
-* Preserve the correct orientation and viewing angle of the original product.
-* The final image must clearly depict the same physical jewellery item, not an AI-invented variation.
-* Do not add gemstones, diamonds, pearls, chains, clasps, decorative elements or patterns that are not present in the reference.
-* Do not change the jewellery into a different type of ornament.
-
-PRODUCT PHOTOGRAPHY:
-
-* Professional high-end jewellery e-commerce photography.
-* Product isolated on a pure seamless white background (#FFFFFF).
-* Product positioned centrally with generous clean whitespace around it.
-* Camera positioned at the most natural straight-on product/catalogue angle appropriate for the jewellery.
-* Product should occupy approximately 65–80% of the image frame, depending on its shape.
-* Extremely sharp focus across the entire jewellery piece.
-* High-resolution commercial photography.
-* Realistic macro-level detail and physically accurate geometry.
-* Clean edges with precise background separation.
-* No hands, fingers, people, mannequin, jewellery box, props, fabric, table, flowers or decorative background elements.
-
-LIGHTING:
-
-* Use a professional multi-light jewellery studio setup.
-* Large soft diffused key light with carefully controlled fill lighting.
-* Add subtle directional highlights to reveal the jewellery’s contours and craftsmanship.
-* Preserve realistic metallic reflections without creating distracting hotspots.
-* Ensure intricate engraving, filigree, textures and recessed areas remain clearly visible.
-* Balanced exposure with excellent highlight and shadow detail.
-* No blown-out reflections.
-* No harsh artificial glow.
-
-MATERIAL & COLOUR ACCURACY:
-
-* Accurately reproduce the jewellery’s actual metal colour and finish from the reference.
-* For gold: rich, realistic 22K/24K-style warm yellow-gold appearance without excessive orange saturation.
-* For silver/platinum/white gold: realistic neutral metallic appearance.
-* Preserve the exact finish visible in the reference: polished, matte, brushed, textured, oxidised, etc.
-* Metal must look physically realistic, dense and premium — not plastic, CGI or overly glossy.
-* Preserve the natural micro-reflections expected from real precious metal.
-
-SHADOW & REFLECTION:
-
-* Add a very subtle, soft natural contact shadow directly beneath the product where physically appropriate.
-* Optional extremely subtle studio reflection beneath the product.
-* The shadow/reflection must remain understated and must never distract from the jewellery.
-* Avoid floating-product appearance.
-
-IMAGE QUALITY:
-
-* Luxury jewellery catalogue aesthetic.
-* Photorealistic.
-* Clean, minimal, premium and sophisticated.
-* Accurate fine details.
-* No artificial sharpening halos.
-* No blur.
-* No noise.
-* No watermark.
-* No text.
-* No logo.
-* No price tag.
-* No packaging.
-
-COMPOSITION:
-
-* Square 1:1 composition suitable for an e-commerce product catalogue.
-* Product perfectly centered.
-* Consistent scale and framing.
-* White background extending seamlessly to all edges.
-* Leave enough margin so no part of the jewellery is cropped.
-
-FINAL RESULT:
-The result should look like a photograph produced by a top-tier professional jewellery e-commerce studio, suitable for the main product image on a premium jewellery website such as a luxury Indian jewellery retailer.
-
-MOST IMPORTANT: The reference jewellery itself is the source of truth. The photography style, lighting and background may be improved, but the jewellery’s actual design must remain unchanged.`;
-
-let serverCustomPrompt: string = DEFAULT_STUDIO_ENHANCE_PROMPT;
-
-/**
- * Endpoints for Admin to read and update AI prompts directly from the web app
- */
-app.get('/api/prompt-config', (req, res) => {
+app.get('/api/prompt-config', requireAuth, (req, res) => {
   res.json({
-    enhancePrompt: serverCustomPrompt || DEFAULT_STUDIO_ENHANCE_PROMPT,
-    defaultPrompt: DEFAULT_STUDIO_ENHANCE_PROMPT,
+    enhancePrompt: serverCustomPrompt || DEFAULT_ENHANCE_PROMPT,
+    defaultPrompt: DEFAULT_ENHANCE_PROMPT,
   });
 });
 
-app.post('/api/prompt-config', (req, res) => {
+app.post('/api/prompt-config', requireAuth, (req, res) => {
   const { enhancePrompt } = req.body;
   if (enhancePrompt && typeof enhancePrompt === 'string') {
     serverCustomPrompt = enhancePrompt.trim();
@@ -295,212 +476,156 @@ app.post('/api/prompt-config', (req, res) => {
   });
 });
 
-/**
- * Quality & Hallmarking Audit + Studio Grade Enhancement
- * Uses Gemini Flash Image ("Nano Banana") exclusively for image retouching and enhancing.
- */
-app.post('/api/audit-and-enhance', async (req, res) => {
-  try {
-    const { imageBase64, itemType, purity, gender, photoType, sku, weight, customEnhancePrompt } = req.body;
+// ---------------------------------------------------------------------------
+// Core pipeline: enhance -> audit the OUTPUT -> one escalated retry -> else
+// needs_reshoot with a specific reason. Never silently ship a failed result,
+// and never fall back to a fake local "enhancement" - a failed AI call is
+// reported as failed so staff can just retry, not papered over.
+// ---------------------------------------------------------------------------
 
-    if (!imageBase64) {
-      return res.status(400).json({ error: 'Missing imageBase64 data' });
-    }
+app.post('/api/audit-and-enhance', requireAuth, async (req, res) => {
+  const { imageBase64, itemType, purity, gender, sku, cpc, weight, customEnhancePrompt } = req.body;
 
-    // Clean up base64 string
-    const match = imageBase64.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,(.+)$/);
-    const mimeType = match ? match[1] : 'image/jpeg';
-    const cleanBase64 = match ? match[2] : imageBase64;
+  if (!imageBase64) {
+    return res.status(400).json({ error: 'Missing imageBase64 data' });
+  }
 
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      console.warn('No GEMINI_API_KEY found. Generating simulated response for dev environment.');
-      return res.json({
-        status: 'approved',
-        reason: 'Photo meets high clarity standards. Lighting and gold luster verified.',
-        confidence: 0.94,
-        processedImageBase64: imageBase64,
-        photoType,
-      });
-    }
+  const match = imageBase64.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,(.+)$/);
+  const mimeType = match ? match[1] : 'image/jpeg';
+  const cleanBase64 = match ? match[2] : imageBase64;
 
-    const ai = getGeminiClient();
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return res.json({
+      status: 'failed',
+      reason: 'GEMINI_API_KEY is not configured on the server.',
+      retryable: false,
+    });
+  }
 
-    // Step 1: Quality & Hallmarking Audit using Gemini 3.7 Flash
-    const auditPrompt = `
-You are the senior Quality Inspector for "RL Jewels", an esteemed luxury gold and diamond jeweler.
-Examine this store-counter photo of a jewelry item.
-Product Metadata:
-- Item Type: ${itemType || 'Jewelry'}
-- Gold Purity: ${purity || '22kt'}
-- Gender/Category: ${gender || "women's"}
-- Photo Angle/Slot: ${photoType || 'hero'}
-- Weight: ${weight || 'N/A'}g
+  const ai = getGeminiClient();
+  const promptTemplate =
+    customEnhancePrompt && typeof customEnhancePrompt === 'string' && customEnhancePrompt.trim()
+      ? customEnhancePrompt.trim()
+      : serverCustomPrompt || DEFAULT_ENHANCE_PROMPT;
 
-Carefully check for any of these critical retail photography defects:
-1. Physical obstruction: Is a barcode tag, price tag, security string, or finger covering/overlapping any part of the jewelry metal or gemstones? If a tag is overlapping or looped through the jewelry itself, mark "status": "needs_reshoot" and reason "tag overlaps piece".
-2. Focus/Blur: Is the jewelry piece blurry, out of focus, or shaking?
-3. Macro Hallmark (if slot is macro_hallmark): Is the BIS hallmark, purity stamp (e.g., 916, 750, 22K), or HUID stamp clear and legible? If it's illegible or blurred, it MUST be marked "needs_reshoot".
-4. Severe Glare/Darkness: Is there intense blinding counter spotlight glare obscuring details, or is the lighting too dark to discern intricate craftsmanship?
-5. Framing: Is more than 30% of the piece cut outside the frame?
-
-Respond ONLY in valid JSON format matching this schema:
-{
-  "status": "approved" | "needs_reshoot",
-  "reason": "Brief, respectful, direct instruction for counter staff (e.g., 'Price tag overlaps the pendant — please tuck or remove the tag and retake' or 'Hallmark stamp is out of focus — please hold the lens 5cm away and tap to focus' or 'Photo is crisp, clear, and perfectly centered')",
-  "confidence": number between 0.1 and 1.0,
-  "detectedPurityLuster": "24kt rich deep yellow" | "22kt warm radiant yellow" | "18kt refined gold" | "white gold" | "rose gold" | "other"
-}
-`;
-
-    let auditResult = {
-      status: 'approved',
-      reason: 'Photo inspected: High showroom clarity and gold luster verified.',
-      confidence: 0.94,
-    };
-
-    try {
-      const auditResponse = await ai.models.generateContent({
-        model: 'gemini-3.7-flash',
-        contents: {
-          parts: [
-            {
-              inlineData: {
-                mimeType,
-                data: cleanBase64,
-              },
-            },
-            { text: auditPrompt },
-          ],
-        },
-        config: {
-          responseMimeType: 'application/json',
-        },
-      });
-
-      const rawText = auditResponse.text?.trim() || '{}';
-      const parsed = JSON.parse(rawText);
-      if (parsed && parsed.status) {
-        auditResult = parsed;
-      }
-    } catch (e: any) {
-      console.warn('Audit model note (using counter auto-pass):', e?.message || e);
-    }
-
-    // If marked needs_reshoot, return immediately with the counter guidance reason
-    if (auditResult.status === 'needs_reshoot') {
-      return res.json({
-        status: 'needs_reshoot',
-        reason: auditResult.reason || 'Image quality does not meet store standards. Please adjust and retake.',
-        confidence: auditResult.confidence || 0.85,
-        originalImage: imageBase64,
-        photoType,
-      });
-    }
-
-    // Step 2: Studio Quality Image Retouching using Gemini 2.5 Flash ("Nano Banana")
-    // Priority: customEnhancePrompt (from admin UI) > serverCustomPrompt > DEFAULT_STUDIO_ENHANCE_PROMPT
-    const selectedPromptTemplate =
-      customEnhancePrompt && typeof customEnhancePrompt === 'string' && customEnhancePrompt.trim()
-        ? customEnhancePrompt.trim()
-        : serverCustomPrompt || DEFAULT_STUDIO_ENHANCE_PROMPT;
-
-    // Enhance prompt with specific metadata context if helpful
-    const enhancementPrompt = `${selectedPromptTemplate}
+  const contextBlock = `
 
 ADDITIONAL CONTEXT (FROM CATALOG FORM):
-- Item Category: ${itemType || 'Jewellery'}
+- Item Category: ${itemType || 'jewellery'}
 - Purity: ${purity || '22kt'} Gold
-- Intended For: ${gender || "Women's"}
-${weight ? `- Weight: ${weight}g` : ''}
-`;
+- Intended For: ${gender || "women's"}
+${weight ? `- Weight: ${weight}g` : ''}`;
 
-    const processedImageBase64 = await generateOrEditImageWithGemini(
-      ai,
-      cleanBase64,
-      mimeType,
-      enhancementPrompt
+  const auditContext = { itemType: itemType || 'jewellery', purity: purity || '22kt' };
+
+  try {
+    // Attempt 1: default (cheap/fast) tier
+    let enhanced: EnhanceResult | null = null;
+    try {
+      enhanced = await withTransientRetry(() =>
+        enhanceImage(ai, MODEL_ENHANCE_DEFAULT, cleanBase64, mimeType, promptTemplate + contextBlock)
+      );
+    } catch (err: any) {
+      console.error('Enhance (default tier) failed after retries:', err?.message || err);
+      if (isBillingError(err)) {
+        return res.json({
+          status: 'failed',
+          reason: 'The Gemini account has hit its billing/spend cap. An admin needs to raise it in AI Studio before photos can be processed.',
+          retryable: false,
+        });
+      }
+      return res.json({
+        status: 'failed',
+        reason: 'AI enhancement service did not respond. Please try again.',
+        retryable: true,
+      });
+    }
+
+    if (!enhanced) {
+      return res.json({
+        status: 'failed',
+        reason: 'The AI model did not return an edited image. Please try again.',
+        retryable: true,
+      });
+    }
+
+    let audit = await withTransientRetry(() =>
+      auditOutput(ai, cleanBase64, mimeType, enhanced!.imageBase64, enhanced!.mimeType, auditContext)
     );
+    let modelUsed = MODEL_ENHANCE_DEFAULT;
+    let attemptCount = 1;
+
+    if (!audit.overallPass) {
+      // Single escalated retry with the specific failure reason fed back in.
+      const correctivePrompt = `${promptTemplate}${contextBlock}
+
+IMPORTANT: A previous attempt at this edit failed quality review for this specific reason:
+"${audit.reason}"
+Correct this specific issue while still following every rule above.`;
+
+      try {
+        const retryEnhanced = await withTransientRetry(() =>
+          enhanceImage(ai, MODEL_ENHANCE_ESCALATED, cleanBase64, mimeType, correctivePrompt)
+        );
+        attemptCount = 2;
+        if (retryEnhanced) {
+          const retryAudit = await withTransientRetry(() =>
+            auditOutput(ai, cleanBase64, mimeType, retryEnhanced.imageBase64, retryEnhanced.mimeType, auditContext)
+          );
+          if (retryAudit.overallPass) {
+            enhanced = retryEnhanced;
+            audit = retryAudit;
+            modelUsed = MODEL_ENHANCE_ESCALATED;
+          } else {
+            return res.json({
+              status: 'needs_reshoot',
+              reason: retryAudit.reason,
+              checklist: retryAudit.checklist,
+              originalImage: imageBase64,
+            });
+          }
+        } else {
+          return res.json({
+            status: 'needs_reshoot',
+            reason: audit.reason,
+            checklist: audit.checklist,
+            originalImage: imageBase64,
+          });
+        }
+      } catch (err: any) {
+        console.error('Escalated retry failed:', err?.message || err);
+        return res.json({
+          status: 'needs_reshoot',
+          reason: audit.reason,
+          checklist: audit.checklist,
+          originalImage: imageBase64,
+        });
+      }
+    }
 
     return res.json({
       status: 'approved',
-      reason: auditResult.reason || 'Verified: Optimal studio lighting, hallmark legible, frame filled.',
-      confidence: auditResult.confidence || 0.95,
-      processedImageBase64: processedImageBase64 || imageBase64,
-      photoType,
+      reason: audit.reason,
+      checklist: audit.checklist,
+      processedImageBase64: `data:${enhanced.mimeType};base64,${enhanced.imageBase64}`,
+      modelUsed,
+      attemptCount,
     });
   } catch (error: any) {
     console.error('Error in /api/audit-and-enhance:', error);
     return res.json({
-      status: 'approved',
-      reason: 'Photo inspected: Sharp showroom quality and authentic gold luster verified.',
-      confidence: 0.92,
-      processedImageBase64: req.body?.imageBase64 || null,
-      photoType: req.body?.photoType || 'hero',
+      status: 'failed',
+      reason: 'Unexpected error while processing this photo. Please try again.',
+      retryable: true,
     });
   }
 });
 
-/**
- * PROMPT B: Virtual Model Try-On & Styled Visualization
- * Generates an on-model editorial visualization featuring the exact jewelry item,
- * with skin tone and backdrop presets, stamped with mandatory "Styled Visualization" badge.
- */
-app.post('/api/generate-tryon', async (req, res) => {
-  try {
-    const { imageBase64, itemType, purity, gender, skinTone, backdropStyle, modelGender } = req.body;
+// ---------------------------------------------------------------------------
+// Vite middleware / static production serving
+// ---------------------------------------------------------------------------
 
-    if (!imageBase64) {
-      return res.status(400).json({ error: 'Missing imageBase64 data for try-on' });
-    }
-
-    const match = imageBase64.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,(.+)$/);
-    const mimeType = match ? match[1] : 'image/jpeg';
-    const cleanBase64 = match ? match[2] : imageBase64;
-
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      return res.json({
-        tryonImageBase64: imageBase64,
-        badgeText: 'Styled Visualization',
-        simulated: true,
-      });
-    }
-
-    const ai = getGeminiClient();
-
-    const tryonPrompt = `
-High-fashion luxury jewelry editorial photograph for "RL Jewels".
-Task: Create a photorealistic lifestyle portrait of an elegant ${modelGender || gender || "women's"} model with a ${skinTone || 'Warm Golden Indian'} skin tone gracefully wearing this exact ${purity || '22kt'} gold ${itemType || 'jewelry'} piece.
-- Setting/Aesthetic: ${backdropStyle || 'Traditional Festive & Velvet Maroon'}.
-- Placement: The jewelry piece must be accurately worn in its natural place (e.g. necklace gracefully sitting on neckline, earrings on earlobe, bangle/kada on wrist, ring on slender finger, mangalsutra on bride).
-- Authentic detailing: The exact design, gold color tone (${purity || '22kt'}), gemstones, and motifs of the provided jewelry reference image must be strictly respected and rendered in sharp focus.
-- Framing: Elegant portrait angle, cinematic soft studio lighting, high fashion magazine quality.
-- Note: Overlay a subtle, elegant luxury badge text in a corner saying "Styled Visualization".
-`;
-
-    const tryonImageBase64 = await generateOrEditImageWithGemini(
-      ai,
-      cleanBase64,
-      mimeType,
-      tryonPrompt
-    );
-
-    return res.json({
-      tryonImageBase64: tryonImageBase64 || imageBase64,
-      badgeText: 'Styled Visualization',
-    });
-  } catch (error: any) {
-    console.error('Error in /api/generate-tryon:', error);
-    return res.json({
-      tryonImageBase64: req.body?.imageBase64 || null,
-      badgeText: 'Styled Visualization',
-      simulated: true,
-    });
-  }
-});
-
-// Vite middleware or static serving
 async function setupServer() {
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({

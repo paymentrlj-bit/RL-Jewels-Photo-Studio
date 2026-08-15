@@ -1,5 +1,22 @@
-import { GoldPurity, ProductGender } from '../types';
+import { GoldPurity, ProductGender, ITEM_TYPE_SUGGESTIONS } from '../types';
 import { ScannedProductData } from '../components/BarcodeScannerModal';
+
+// Real ERP category vocabulary, longest/most-specific term first, so "Kada Sardar"
+// wins over the more generic "Kada" when both appear as word-boundary matches.
+// Store-printed tags use this exact vocabulary, so checking it first is far more
+// reliable than guessing from generic English jewelry words.
+const TAXONOMY_TERMS = [...ITEM_TYPE_SUGGESTIONS].sort((a, b) => b.length - a.length);
+
+function matchTaxonomyTerm(upperText: string): string | null {
+  for (const term of TAXONOMY_TERMS) {
+    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp(`\\b${escaped.toUpperCase()}\\b`);
+    if (pattern.test(upperText)) {
+      return term;
+    }
+  }
+  return null;
+}
 
 /**
  * Normalizes numbers extracted via OCR by repairing common OCR digit character confusions
@@ -259,17 +276,30 @@ export function parseJewelryTagText(
   let detectedTitleSubstr = '';
   let matchedRule: ItemCategoryRule | null = null;
 
+  // Check the real RL Jewels ERP category vocabulary first - store-printed tags use
+  // this exact wording, so a whole-word match here is more trustworthy than a guess
+  // from generic English jewelry terms.
+  const taxonomyMatch = matchTaxonomyTerm(upper);
+  if (taxonomyMatch) {
+    detectedType = taxonomyMatch.toLowerCase();
+    detectedTitleSubstr = taxonomyMatch;
+  }
+
   // First check specific compound multi-word keywords (e.g. "FANCY PADAK", "GENTS FANCY A", "KUNDAN HARAM")
-  for (const rule of CATEGORY_RULES) {
-    for (const kw of rule.keywords) {
-      if (upper.includes(kw)) {
-        detectedType = rule.type;
-        detectedTitleSubstr = kw;
-        matchedRule = rule;
-        break;
+  // - only when the real taxonomy above didn't already find a match, so a stray
+  // generic keyword can't override an authentic ERP category name.
+  if (!taxonomyMatch) {
+    for (const rule of CATEGORY_RULES) {
+      for (const kw of rule.keywords) {
+        if (upper.includes(kw)) {
+          detectedType = rule.type;
+          detectedTitleSubstr = kw;
+          matchedRule = rule;
+          break;
+        }
       }
+      if (detectedType) break;
     }
-    if (detectedType) break;
   }
 
   // Second check regex patterns (handles word boundaries and abbreviations like ER, RN, PD, NK)
