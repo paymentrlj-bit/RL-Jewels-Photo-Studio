@@ -34,8 +34,8 @@ export const UploadPhotosStep: React.FC<UploadPhotosStepProps> = ({
 }) => {
   const isCaptured = Boolean(photo.originalImage);
 
-  const handleLoadSample = () => {
-    const sampleDataUrl = createJewelryPlaceholderSvg(purity, itemType || 'ring', photo.title);
+  const handleLoadSample = async () => {
+    const sampleDataUrl = await createJewelryPlaceholderSvg(purity, itemType || 'ring', photo.title);
     onUpdatePhoto(sampleDataUrl);
   };
 
