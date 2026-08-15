@@ -39,6 +39,18 @@ const MODEL_ENHANCE_DEFAULT = 'gemini-3.1-flash-image';
 const MODEL_ENHANCE_ESCALATED = 'nano-banana-pro-preview';
 const MODEL_AUDIT = 'gemini-3.1-flash-lite';
 
+// Segmentation grounding (experimental): a small vision call that traces the
+// real jewelry's exact silhouette in the ORIGINAL photo, so the enhance call
+// gets real computer-vision facts (interior opening, exact outline including
+// engraved/motif areas) instead of guessing where the piece's edges are. This
+// is one extra small/fast call, not another expensive image-generation
+// attempt - it is NOT Best-of-N. It fails open: if this call errors, times
+// out, or returns nothing usable, the pipeline proceeds exactly as before at
+// zero extra cost. Flip this to false to disable it instantly if it turns out
+// not to be worth the added per-photo call.
+const ENABLE_SEGMENTATION_GROUNDING = true;
+const MODEL_SEGMENT = 'gemini-robotics-er-1.6-preview';
+
 // A complex real photo can genuinely take 30-40s+ for the model to process,
 // especially under real network conditions rather than a well-connected test
 // environment - 45s cut it too close in practice.
@@ -165,7 +177,9 @@ Compare IMAGE 2 against IMAGE 1 and grade it. Respond ONLY as JSON matching this
   "backgroundCleanWhite": boolean, // is the background a clean, seamless white with no artifacts?
   "noBlownHighlights": boolean, // are metal highlights not blown out to pure white with no detail?
   "neutralWhiteBalance": boolean, // is the metal color neutral/true (not orange or blue-tinted)?
-  "matchesOriginalDesign": boolean, // CRITICAL: does image 2 show the exact same design as image 1, with no added, removed, or altered engravings, motifs, stones, proportions, or band/chain profile?
+  "colorConsistentAcrossSurface": boolean, // is the color/white-balance correction UNIFORM across the entire piece? Look closely at motifs, engraved details, and recessed/shadowed areas - fail this if any sub-region of the piece (e.g. around a motif) has a visibly different color cast than the open/flat metal surfaces around it. This patchy, inconsistent correction is a common failure - check it carefully.
+  "clearlyIdentifiableCategory": boolean, // is the item unmistakably recognizable as a "${context.itemType}" at a glance, with its defining structural features clearly visible (e.g. a ring/bangle's interior opening, a chain's link structure and clasp)?
+  "matchesOriginalDesign": boolean, // CRITICAL: does image 2 show the exact same design as image 1, with no added, removed, or altered engravings, motifs, stones, proportions, or band/chain profile? (Note: a different camera angle/pose than image 1 is fine and expected - only judge the actual design, not the viewpoint.)
   "overallPass": boolean,       // true only if ALL of the above are true
   "reason": string              // if overallPass is false, a short, specific, staff-facing reason naming which check failed and why (e.g. "The enhanced image added a decorative pattern to the band that isn't on the original piece."). If overallPass is true, a short confirmation.
 }`;
@@ -194,6 +208,8 @@ Compare IMAGE 2 against IMAGE 1 and grade it. Respond ONLY as JSON matching this
       backgroundCleanWhite: Boolean(parsed.backgroundCleanWhite),
       noBlownHighlights: Boolean(parsed.noBlownHighlights),
       neutralWhiteBalance: Boolean(parsed.neutralWhiteBalance),
+      colorConsistentAcrossSurface: Boolean(parsed.colorConsistentAcrossSurface),
+      clearlyIdentifiableCategory: Boolean(parsed.clearlyIdentifiableCategory),
       matchesOriginalDesign: Boolean(parsed.matchesOriginalDesign),
     };
     const overallPass = typeof parsed.overallPass === 'boolean' ? parsed.overallPass : Object.values(checklist).every(Boolean);
@@ -202,6 +218,61 @@ Compare IMAGE 2 against IMAGE 1 and grade it. Respond ONLY as JSON matching this
       reason: parsed.reason || (overallPass ? 'Passed quality check.' : 'Did not meet catalogue quality standards.'),
       checklist,
     };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+interface SegmentationResult {
+  boxTwoD: number[];
+  polygon: number[][];
+  label: string;
+}
+
+// Traces the jewelry's real silhouette in the ORIGINAL photo only, via a
+// small/fast vision model - not another image-generation call. Used to give
+// the enhance prompt real geometric facts (exact outline, interior opening on
+// a ring/bangle) instead of leaving the model to guess. Always fails open:
+// any error, timeout, or malformed response just returns null and the caller
+// proceeds without grounding, at zero extra cost beyond this one short call.
+async function segmentJewelry(
+  ai: GoogleGenAI,
+  imageBase64: string,
+  mimeType: string
+): Promise<SegmentationResult | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20_000);
+  try {
+    const prompt = `Give the precise segmentation outline of the single jewelry item in this image.
+Output a JSON list with exactly one entry:
+{ "box_2d": [ymin, xmin, ymax, xmax], "mask": [[y, x], [y, x], ...polygon points tracing the item's actual silhouette in order...], "label": "short description of the item" }
+All coordinates normalized 0-1000. Trace the jewelry's real outline closely, including any visible interior opening (e.g. a ring or bangle's finger/wrist hole) as part of the silhouette, not as a filled solid.`;
+    const response = await ai.models.generateContent({
+      model: MODEL_SEGMENT,
+      contents: {
+        parts: [
+          { inlineData: { mimeType, data: imageBase64 } },
+          { text: prompt },
+        ],
+      },
+      config: {
+        responseMimeType: 'application/json',
+        abortSignal: controller.signal,
+      } as any,
+    });
+    const parsed = JSON.parse(response.text?.trim() || '[]');
+    const first = Array.isArray(parsed) ? parsed[0] : null;
+    if (
+      !first ||
+      !Array.isArray(first.box_2d) || first.box_2d.length !== 4 ||
+      !Array.isArray(first.mask) || first.mask.length < 3
+    ) {
+      return null;
+    }
+    return { boxTwoD: first.box_2d, polygon: first.mask, label: String(first.label || 'jewelry item') };
+  } catch (err) {
+    console.error('Segmentation grounding (non-blocking) failed:', (err as any)?.message || err);
+    return null;
   } finally {
     clearTimeout(timeout);
   }
@@ -514,6 +585,22 @@ ${weight ? `- Weight: ${weight}g` : ''}`;
 
   const auditContext = { itemType: itemType || 'jewellery', purity: purity || '22kt' };
 
+  // Non-blocking: one small vision call to trace the jewelry's real outline in
+  // the ORIGINAL photo, so the enhance prompt gets real computer-vision facts
+  // instead of guessing. If this fails or times out, segmentationBlock is just
+  // empty and the pipeline behaves exactly as it did before this feature.
+  let segmentationBlock = '';
+  if (ENABLE_SEGMENTATION_GROUNDING) {
+    const segmentation = await segmentJewelry(ai, cleanBase64, mimeType);
+    if (segmentation) {
+      segmentationBlock = `
+
+PRECISE JEWELRY OUTLINE (from computer-vision analysis of the original photo, normalized 0-1000 [y, x] coordinates, traced in order around the actual physical silhouette including any interior opening): ${JSON.stringify(segmentation.polygon)}
+Bounding box [ymin, xmin, ymax, xmax]: ${JSON.stringify(segmentation.boxTwoD)}
+Every point inside this outline is part of the SAME physical piece described above. Use it to make sure you have not missed or misjudged any part of the item's true shape (including its interior opening, if any), and to apply your color correction and finish with perfect uniformity across the whole outlined area - including any motifs, engravings, or recessed details inside it.`;
+    }
+  }
+
   try {
     // Attempt 1: default (cheap/fast) tier
     let enhanced: EnhanceResult | null = null;
@@ -521,7 +608,7 @@ ${weight ? `- Weight: ${weight}g` : ''}`;
       // Only 2 attempts here (not the default 3) - each can take up to
       // CALL_TIMEOUT_MS, and staff are waiting at the counter for this.
       enhanced = await withTransientRetry(
-        () => enhanceImage(ai, MODEL_ENHANCE_DEFAULT, cleanBase64, mimeType, promptTemplate + contextBlock),
+        () => enhanceImage(ai, MODEL_ENHANCE_DEFAULT, cleanBase64, mimeType, promptTemplate + contextBlock + segmentationBlock),
         2
       );
     } catch (err: any) {
@@ -558,7 +645,7 @@ ${weight ? `- Weight: ${weight}g` : ''}`;
 
     if (!audit.overallPass) {
       // Single escalated retry with the specific failure reason fed back in.
-      const correctivePrompt = `${promptTemplate}${contextBlock}
+      const correctivePrompt = `${promptTemplate}${contextBlock}${segmentationBlock}
 
 IMPORTANT: A previous attempt at this edit failed quality review for this specific reason:
 "${audit.reason}"
