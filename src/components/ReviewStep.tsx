@@ -157,6 +157,11 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
               <p className="text-[11px] text-stone-500 mt-1">
                 This is a service hiccup, not a problem with your photo - no need to retake, just try again.
               </p>
+              {photo.debugDetail && (
+                <p className="text-[10px] text-stone-400 mt-2 font-mono bg-stone-50 border border-stone-200 rounded-lg px-2 py-1.5 break-words">
+                  Technical detail (for reporting this issue): {photo.debugDetail}
+                </p>
+              )}
             </div>
           </div>
 

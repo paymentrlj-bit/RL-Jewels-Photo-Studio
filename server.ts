@@ -39,7 +39,19 @@ const MODEL_ENHANCE_DEFAULT = 'gemini-3.1-flash-image';
 const MODEL_ENHANCE_ESCALATED = 'nano-banana-pro-preview';
 const MODEL_AUDIT = 'gemini-3.1-flash-lite';
 
-const CALL_TIMEOUT_MS = 45_000;
+// A complex real photo can genuinely take 30-40s+ for the model to process,
+// especially under real network conditions rather than a well-connected test
+// environment - 45s cut it too close in practice.
+const CALL_TIMEOUT_MS = 75_000;
+
+// A short, sanitized version of the real error for the response body - the
+// Gemini SDK's error messages are human-readable API errors, not secrets, and
+// having this visible in the UI beats being blind on a deployment we can't
+// tail server logs on.
+function debugDetail(err: any): string {
+  const message = String(err?.message || err || 'unknown error');
+  return message.slice(0, 300);
+}
 
 function isBillingError(err: any): boolean {
   const message = String(err?.message || err || '');
@@ -56,6 +68,12 @@ function isTransientError(err: any): boolean {
     return false;
   }
   if (code === 429 || code === 500 || code === 503 || code === 504) return true;
+  // AbortController timeouts throw a DOMException/AbortError whose message is
+  // just "The operation was aborted" - that's exactly the kind of thing worth
+  // retrying (the next attempt may simply be faster), not giving up on.
+  if (err?.name === 'AbortError' || message.toLowerCase().includes('aborted')) {
+    return true;
+  }
   if (/RESOURCE_EXHAUSTED|UNAVAILABLE|DEADLINE_EXCEEDED|ECONNRESET|ETIMEDOUT|fetch failed/i.test(message)) {
     return true;
   }
@@ -500,8 +518,11 @@ ${weight ? `- Weight: ${weight}g` : ''}`;
     // Attempt 1: default (cheap/fast) tier
     let enhanced: EnhanceResult | null = null;
     try {
-      enhanced = await withTransientRetry(() =>
-        enhanceImage(ai, MODEL_ENHANCE_DEFAULT, cleanBase64, mimeType, promptTemplate + contextBlock)
+      // Only 2 attempts here (not the default 3) - each can take up to
+      // CALL_TIMEOUT_MS, and staff are waiting at the counter for this.
+      enhanced = await withTransientRetry(
+        () => enhanceImage(ai, MODEL_ENHANCE_DEFAULT, cleanBase64, mimeType, promptTemplate + contextBlock),
+        2
       );
     } catch (err: any) {
       console.error('Enhance (default tier) failed after retries:', err?.message || err);
@@ -510,12 +531,14 @@ ${weight ? `- Weight: ${weight}g` : ''}`;
           status: 'failed',
           reason: 'The Gemini account has hit its billing/spend cap. An admin needs to raise it in AI Studio before photos can be processed.',
           retryable: false,
+          debugDetail: debugDetail(err),
         });
       }
       return res.json({
         status: 'failed',
         reason: 'AI enhancement service did not respond. Please try again.',
         retryable: true,
+        debugDetail: debugDetail(err),
       });
     }
 
@@ -542,8 +565,9 @@ IMPORTANT: A previous attempt at this edit failed quality review for this specif
 Correct this specific issue while still following every rule above.`;
 
       try {
-        const retryEnhanced = await withTransientRetry(() =>
-          enhanceImage(ai, MODEL_ENHANCE_ESCALATED, cleanBase64, mimeType, correctivePrompt)
+        const retryEnhanced = await withTransientRetry(
+          () => enhanceImage(ai, MODEL_ENHANCE_ESCALATED, cleanBase64, mimeType, correctivePrompt),
+          2
         );
         attemptCount = 2;
         if (retryEnhanced) {
@@ -595,6 +619,7 @@ Correct this specific issue while still following every rule above.`;
       status: 'failed',
       reason: 'Unexpected error while processing this photo. Please try again.',
       retryable: true,
+      debugDetail: debugDetail(error),
     });
   }
 });

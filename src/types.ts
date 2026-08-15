@@ -26,6 +26,10 @@ export interface PhotoItem {
   status: PhotoStatus;
   reshootReason?: string;
   failureReason?: string;
+  // Short, sanitized underlying error string from the server for a 'failed'
+  // status - shown to admins so an incident is diagnosable without server log
+  // access, which isn't available on most hosting dashboards.
+  debugDetail?: string;
   confidenceScore?: number;
   processedImage?: string; // base64 data URL
   reviewDecision: ReviewDecision;
