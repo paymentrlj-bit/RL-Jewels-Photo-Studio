@@ -1,6 +1,5 @@
 import express from 'express';
 import path from 'path';
-import fs from 'fs';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
@@ -196,57 +195,58 @@ Compare IMAGE 2 against IMAGE 1 and grade it. Respond ONLY as JSON matching this
 // them from the UI without a database. Passwords are hashed, never stored plain.
 // ---------------------------------------------------------------------------
 
-const DATA_DIR = path.join(process.cwd(), '.data');
-const AUTH_CONFIG_PATH = path.join(DATA_DIR, 'auth-config.json');
+// Credentials live in environment variables, not a local file - free/serverless
+// hosts (Cloud Run, Render's free tier, etc.) run on ephemeral containers that
+// get recycled on every deploy and, on some free tiers, after any idle period.
+// A local JSON file would silently reset to defaults on every restart.
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin';
+const STAFF_PASSWORD = process.env.STAFF_PASSWORD || 'gold';
 
-interface StoredAuthConfig {
-  adminSalt: string;
-  adminHash: string;
-  staffSalt: string;
-  staffHash: string;
+// Sessions are stateless signed cookies (not an in-memory Map) for the same
+// reason: an in-memory session store would log every signed-in staff member
+// out the moment the container restarts, which on a free tier that spins down
+// after idle time could happen several times a day.
+const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+if (!process.env.SESSION_SECRET) {
+  console.warn(
+    'SESSION_SECRET is not set - a random one was generated for this process only. ' +
+    'Every restart will log all staff out. Set SESSION_SECRET as a fixed environment ' +
+    'variable in your hosting provider to avoid this.'
+  );
 }
-
-function hashPassword(password: string, salt: string): string {
-  return crypto.scryptSync(password, salt, 64).toString('hex');
-}
-
-function loadAuthConfig(): StoredAuthConfig {
-  try {
-    if (fs.existsSync(AUTH_CONFIG_PATH)) {
-      return JSON.parse(fs.readFileSync(AUTH_CONFIG_PATH, 'utf8'));
-    }
-  } catch (err) {
-    console.warn('Auth config read notice, recreating defaults:', err);
-  }
-  const adminSalt = crypto.randomBytes(16).toString('hex');
-  const staffSalt = crypto.randomBytes(16).toString('hex');
-  const defaults: StoredAuthConfig = {
-    adminSalt,
-    adminHash: hashPassword('admin', adminSalt),
-    staffSalt,
-    staffHash: hashPassword('gold', staffSalt),
-  };
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(AUTH_CONFIG_PATH, JSON.stringify(defaults, null, 2));
-  return defaults;
-}
-
-function saveAuthConfig(config: StoredAuthConfig): void {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(AUTH_CONFIG_PATH, JSON.stringify(config, null, 2));
-}
-
-let authConfig = loadAuthConfig();
 
 interface SessionInfo {
   username: string;
   isAdmin: boolean;
-  createdAt: number;
+  exp: number; // epoch ms
 }
 
-const sessions = new Map<string, SessionInfo>();
 const SESSION_COOKIE = 'rlj_session';
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours - a counter shift
+
+function signSession(info: SessionInfo): string {
+  const payload = Buffer.from(JSON.stringify(info)).toString('base64url');
+  const sig = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('base64url');
+  return `${payload}.${sig}`;
+}
+
+function verifySession(token: string): SessionInfo | null {
+  const [payload, sig] = token.split('.');
+  if (!payload || !sig) return null;
+  const expectedSig = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('base64url');
+  const sigBuf = Buffer.from(sig);
+  const expectedBuf = Buffer.from(expectedSig);
+  if (sigBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(sigBuf, expectedBuf)) {
+    return null;
+  }
+  try {
+    const info: SessionInfo = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    if (!info.exp || Date.now() > info.exp) return null;
+    return info;
+  } catch {
+    return null;
+  }
+}
 
 function parseCookies(header: string | undefined): Record<string, string> {
   const out: Record<string, string> = {};
@@ -261,8 +261,9 @@ function parseCookies(header: string | undefined): Record<string, string> {
   return out;
 }
 
-function setSessionCookie(res: express.Response, token: string): void {
+function setSessionCookie(res: express.Response, info: SessionInfo): void {
   const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  const token = signSession(info);
   res.setHeader(
     'Set-Cookie',
     `${SESSION_COOKIE}=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}${secure}`
@@ -277,13 +278,7 @@ function getSession(req: express.Request): SessionInfo | null {
   const cookies = parseCookies(req.headers.cookie);
   const token = cookies[SESSION_COOKIE];
   if (!token) return null;
-  const session = sessions.get(token);
-  if (!session) return null;
-  if (Date.now() - session.createdAt > SESSION_TTL_MS) {
-    sessions.delete(token);
-    return null;
-  }
-  return session;
+  return verifySession(token);
 }
 
 function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -295,6 +290,13 @@ function requireAuth(req: express.Request, res: express.Response, next: express.
   next();
 }
 
+function timingSafeStringEqual(a: string, b: string): boolean {
+  const aBuf = Buffer.from(a);
+  const bBuf = Buffer.from(b);
+  if (aBuf.length !== bBuf.length) return false;
+  return crypto.timingSafeEqual(aBuf, bBuf);
+}
+
 app.post('/api/login', (req, res) => {
   const { username, password } = req.body || {};
   const cleanUser = String(username || '').trim();
@@ -304,30 +306,22 @@ app.post('/api/login', (req, res) => {
   }
 
   const isAdminAttempt = cleanUser.toLowerCase() === 'admin';
-  const hash = isAdminAttempt
-    ? hashPassword(cleanPass, authConfig.adminSalt)
-    : hashPassword(cleanPass, authConfig.staffSalt);
-  const expected = isAdminAttempt ? authConfig.adminHash : authConfig.staffHash;
+  const expected = isAdminAttempt ? ADMIN_PASSWORD : STAFF_PASSWORD;
 
-  if (hash !== expected) {
+  if (!timingSafeStringEqual(cleanPass, expected)) {
     return res.status(401).json({ error: isAdminAttempt ? 'Invalid admin password.' : 'Incorrect staff password.' });
   }
 
-  const token = crypto.randomBytes(32).toString('hex');
   const session: SessionInfo = {
     username: isAdminAttempt ? 'admin' : cleanUser,
     isAdmin: isAdminAttempt,
-    createdAt: Date.now(),
+    exp: Date.now() + SESSION_TTL_MS,
   };
-  sessions.set(token, session);
-  setSessionCookie(res, token);
+  setSessionCookie(res, session);
   res.json({ username: session.username, isAdmin: session.isAdmin });
 });
 
 app.post('/api/logout', (req, res) => {
-  const cookies = parseCookies(req.headers.cookie);
-  const token = cookies[SESSION_COOKIE];
-  if (token) sessions.delete(token);
   clearSessionCookie(res);
   res.json({ success: true });
 });
@@ -336,26 +330,6 @@ app.get('/api/session', (req, res) => {
   const session = getSession(req);
   if (!session) return res.status(401).json({ error: 'Not signed in.' });
   res.json({ username: session.username, isAdmin: session.isAdmin });
-});
-
-app.post('/api/admin/change-password', requireAuth, (req, res) => {
-  const session = (req as any).session as SessionInfo;
-  if (!session.isAdmin) {
-    return res.status(403).json({ error: 'Admin access required.' });
-  }
-  const { adminPassword, staffPassword } = req.body || {};
-  const updated: StoredAuthConfig = { ...authConfig };
-  if (adminPassword && String(adminPassword).trim()) {
-    updated.adminSalt = crypto.randomBytes(16).toString('hex');
-    updated.adminHash = hashPassword(String(adminPassword).trim(), updated.adminSalt);
-  }
-  if (staffPassword && String(staffPassword).trim()) {
-    updated.staffSalt = crypto.randomBytes(16).toString('hex');
-    updated.staffHash = hashPassword(String(staffPassword).trim(), updated.staffSalt);
-  }
-  authConfig = updated;
-  saveAuthConfig(updated);
-  res.json({ success: true });
 });
 
 // Health & Status endpoint (public - lets the UI show "AI offline" banners pre-login)
