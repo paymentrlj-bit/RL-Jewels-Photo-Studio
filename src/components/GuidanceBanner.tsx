@@ -76,4 +76,3 @@ export const GuidanceBanner: React.FC = () => {
     </div>
   );
 };
-
