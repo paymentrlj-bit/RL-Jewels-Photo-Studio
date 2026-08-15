@@ -32,6 +32,9 @@ export interface PhotoItem {
   processedAt?: string;
   modelUsed?: string;
   attemptCount?: number;
+  // True only for the "Load Sample" demo mockup - never sent to the Gemini API,
+  // so testing/demoing the flow never costs a real API call.
+  isSample?: boolean;
 }
 
 export interface ProductRecord {

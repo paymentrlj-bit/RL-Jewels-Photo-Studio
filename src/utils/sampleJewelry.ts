@@ -1,6 +1,8 @@
 /**
  * Generates a photographic-mockup SVG data URL for the "Load Sample" demo/testing
  * shortcut, so staff (or a reviewer) can see the flow without a real phone photo.
+ * This is never sent to the Gemini API (see App.tsx's isSample handling) - it's a
+ * pure UI mockup, so it costs nothing to use regardless of format.
  */
 export function createJewelryPlaceholderSvg(
   purity: string = '22kt',

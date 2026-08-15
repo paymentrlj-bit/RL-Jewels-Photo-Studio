@@ -180,9 +180,15 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
           <div className="flex items-center justify-between border-b border-stone-100 pb-3 flex-wrap gap-2">
             <div className="flex items-center gap-2">
               <span className="font-serif italic font-bold text-lg text-stone-900">{photo.title}</span>
-              <span className="text-[10px] bg-emerald-50 text-emerald-700 px-2.5 py-0.5 rounded-full border border-emerald-200 font-bold uppercase tracking-wider">
-                Studio E-Commerce Grade
-              </span>
+              {photo.isSample ? (
+                <span className="text-[10px] bg-amber-50 text-amber-800 px-2.5 py-0.5 rounded-full border border-amber-200 font-bold uppercase tracking-wider">
+                  Demo Sample - Not AI Enhanced
+                </span>
+              ) : (
+                <span className="text-[10px] bg-emerald-50 text-emerald-700 px-2.5 py-0.5 rounded-full border border-emerald-200 font-bold uppercase tracking-wider">
+                  Studio E-Commerce Grade
+                </span>
+              )}
             </div>
           </div>
 
