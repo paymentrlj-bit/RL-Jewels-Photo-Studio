@@ -1,15 +1,14 @@
 /**
- * Generates a photographic-mockup image for the "Load Sample" demo/testing
+ * Generates a photographic-mockup SVG data URL for the "Load Sample" demo/testing
  * shortcut, so staff (or a reviewer) can see the flow without a real phone photo.
- * Returns a rasterized PNG data URL, not raw SVG - the Gemini API rejects
- * image/svg+xml outright, so a caller sending this straight to /api/audit-and-enhance
- * would always fail without this conversion.
+ * This is never sent to the Gemini API (see App.tsx's isSample handling) - it's a
+ * pure UI mockup, so it costs nothing to use regardless of format.
  */
-export async function createJewelryPlaceholderSvg(
+export function createJewelryPlaceholderSvg(
   purity: string = '22kt',
   itemType: string = 'necklace',
   customTitle?: string
-): Promise<string> {
+): string {
   const normType = itemType.toLowerCase().trim();
   const is24k = purity.toLowerCase().includes('24');
   const is18k = purity.toLowerCase().includes('18');
@@ -134,23 +133,10 @@ export async function createJewelryPlaceholderSvg(
 </svg>
   `.trim();
 
-  const svgUrl = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
-
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = 600;
-      canvas.height = 600;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) {
-        resolve(svgUrl);
-        return;
-      }
-      ctx.drawImage(img, 0, 0, 600, 600);
-      resolve(canvas.toDataURL('image/png'));
-    };
-    img.onerror = () => resolve(svgUrl);
-    img.src = svgUrl;
-  });
+  try {
+    const base64 = btoa(unescape(encodeURIComponent(svg)));
+    return `data:image/svg+xml;base64,${base64}`;
+  } catch (e) {
+    return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+  }
 }

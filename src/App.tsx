@@ -109,7 +109,7 @@ export default function App() {
     setIsLoginModalOpen(true);
   };
 
-  const handleUpdatePhoto = (dataUrl: string) => {
+  const handleUpdatePhoto = (dataUrl: string, options?: { isSample?: boolean }) => {
     setPhoto((prev) => ({
       ...prev,
       originalImage: dataUrl,
@@ -118,6 +118,7 @@ export default function App() {
       reshootReason: undefined,
       failureReason: undefined,
       processedImage: undefined,
+      isSample: Boolean(options?.isSample),
     }));
   };
 
@@ -150,8 +151,28 @@ export default function App() {
     return res.json();
   };
 
+  // Sample/demo photos never touch the paid API - approve them locally so
+  // testing or demoing the flow never costs a real Gemini call.
+  const approveSampleLocally = () => {
+    setPhoto((prev) => ({
+      ...prev,
+      status: 'approved',
+      processedImage: prev.originalImage,
+      reviewDecision: 'approved',
+      modelUsed: 'demo-sample',
+      attemptCount: 0,
+    }));
+  };
+
   const handleSubmitForProcessing = async () => {
     if (!photo.originalImage) return;
+
+    if (photo.isSample) {
+      setCurrentStep('processing');
+      approveSampleLocally();
+      setCurrentStep('review');
+      return;
+    }
 
     setCurrentStep('processing');
     setPhoto((prev) => ({ ...prev, status: 'processing' }));
@@ -199,6 +220,11 @@ export default function App() {
 
   const handleRegeneratePhoto = async () => {
     if (!photo.originalImage) return;
+
+    if (photo.isSample) {
+      approveSampleLocally();
+      return;
+    }
 
     setPhoto((prev) => ({ ...prev, status: 'processing', reviewDecision: 'regenerating' }));
 
@@ -250,6 +276,7 @@ export default function App() {
       reshootReason: undefined,
       failureReason: undefined,
       reviewDecision: 'pending',
+      isSample: false,
     }));
     setTimeout(() => {
       handleRegeneratePhoto();

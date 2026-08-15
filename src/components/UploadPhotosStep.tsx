@@ -13,7 +13,7 @@ interface UploadPhotosStepProps {
   gender: ProductGender;
   netWeight: string;
   photo: PhotoItem;
-  onUpdatePhoto: (dataUrl: string) => void;
+  onUpdatePhoto: (dataUrl: string, options?: { isSample?: boolean }) => void;
   onRemovePhoto: () => void;
   onBack: () => void;
   onSubmitForProcessing: () => void;
@@ -34,9 +34,9 @@ export const UploadPhotosStep: React.FC<UploadPhotosStepProps> = ({
 }) => {
   const isCaptured = Boolean(photo.originalImage);
 
-  const handleLoadSample = async () => {
-    const sampleDataUrl = await createJewelryPlaceholderSvg(purity, itemType || 'ring', photo.title);
-    onUpdatePhoto(sampleDataUrl);
+  const handleLoadSample = () => {
+    const sampleDataUrl = createJewelryPlaceholderSvg(purity, itemType || 'ring', photo.title);
+    onUpdatePhoto(sampleDataUrl, { isSample: true });
   };
 
   return (
