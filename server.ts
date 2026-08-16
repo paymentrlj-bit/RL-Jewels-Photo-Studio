@@ -69,12 +69,15 @@ const COST_PER_CALL_USD: Record<string, number> = {
 // Per-call-type timeouts. These used to share one 75s constant, including for
 // the audit call - but audit is a small JSON/vision call (observed 3-10s),
 // not an image-generation call, and its own default 3-attempt retry meant a
-// single audit could theoretically eat up to 225s if it kept stalling. Two
-// audits (first pass + escalated retry) plus two enhance calls under the old
-// numbers could theoretically stack past 700s in the worst case - far beyond
-// any hosting platform's request timeout, and the real cause of "it just
-// never comes back" failures reported from real (slower, mobile) networks.
-const ENHANCE_TIMEOUT_MS = 50_000;
+// single audit could theoretically eat up to 225s if it kept stalling.
+//
+// ENHANCE_TIMEOUT_MS was previously 50s, which real-world usage showed is
+// routinely too tight for the image-generation call itself (staff reported
+// repeated "Enhancement service did not respond" failures whose technical
+// detail was literally our own AbortController firing at 50s, not a host/
+// proxy timeout - the SSE heartbeat every 8s rules that out). Raised to 90s
+// to match how long this call can legitimately take under real load.
+const ENHANCE_TIMEOUT_MS = 90_000;
 const AUDIT_TIMEOUT_MS = 20_000;
 const SEGMENT_TIMEOUT_MS = 15_000;
 
@@ -82,8 +85,11 @@ const SEGMENT_TIMEOUT_MS = 15_000;
 // individual per-call timeouts and retries stack. Once this elapses, the
 // pipeline stops retrying and returns a clear, fast "failed, please retry"
 // response instead of silently running for minutes until some proxy or
-// hosting platform kills the connection out from under it.
-const PIPELINE_BUDGET_MS = 100_000;
+// hosting platform kills the connection out from under it. Raised alongside
+// ENHANCE_TIMEOUT_MS so a single slow-but-real enhance attempt (up to 90s)
+// still leaves room for its retry and the audit stage before the budget
+// cuts things off.
+const PIPELINE_BUDGET_MS = 220_000;
 
 // A short, sanitized version of the real error for the response body - the
 // Gemini SDK's error messages are human-readable API errors, not secrets, and
