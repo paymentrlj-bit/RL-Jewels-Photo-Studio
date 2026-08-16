@@ -254,7 +254,7 @@ export async function queryAxiomEvents(days: number): Promise<LogEvent[]> {
         Authorization: `Bearer ${AXIOM_TOKEN}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ apl }),
+      body: JSON.stringify({ apl, format: 'legacy' }),
       signal: controller.signal,
     });
     if (!res.ok) {
