@@ -39,7 +39,12 @@ export interface PhotoItem {
   // True only for the "Load Sample" demo mockup - never sent to the Gemini API,
   // so testing/demoing the flow never costs a real API call.
   isSample?: boolean;
+  // Live stage name streamed from the server while status is 'processing' -
+  // drives the real progress bar instead of a plain spinner.
+  processingStage?: ProcessingStage;
 }
+
+export type ProcessingStage = 'segmenting' | 'enhancing' | 'auditing' | 'escalating';
 
 export interface ProductRecord {
   id: string;

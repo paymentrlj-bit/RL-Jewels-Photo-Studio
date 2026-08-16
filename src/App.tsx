@@ -6,11 +6,11 @@ import {
   ProductRecord,
   ReviewDecision,
   UserSession,
+  ProcessingStage,
 } from './types';
 import { Header } from './components/Header';
 import { ProductForm } from './components/ProductForm';
 import { UploadPhotosStep } from './components/UploadPhotosStep';
-import { ProcessingStep } from './components/ProcessingStep';
 import { ReviewStep } from './components/ReviewStep';
 import { ExportStep } from './components/ExportStep';
 import { LoginModal, getStoredUserSession, saveStoredUserSession } from './components/LoginModal';
@@ -34,7 +34,7 @@ export default function App() {
 
   const [currentUser, setCurrentUser] = useState<UserSession | null>(() => getStoredUserSession());
   const [isLoginModalOpen, setIsLoginModalOpen] = useState<boolean>(() => !getStoredUserSession());
-  const [currentStep, setCurrentStep] = useState<'form' | 'upload' | 'processing' | 'review' | 'export'>('form');
+  const [currentStep, setCurrentStep] = useState<'capture' | 'details' | 'review' | 'export'>('capture');
   const [hasApiKey, setHasApiKey] = useState(true);
 
   const [cpc, setCpc] = useState('RLJ-RN-8821');
@@ -126,7 +126,10 @@ export default function App() {
     setPhoto(createInitialPhoto());
   };
 
-  const runPipeline = async (activePhoto: PhotoItem) => {
+  // Streams newline-delimited progress events from the server (stage names as
+  // each pipeline step starts) so the UI can show real progress instead of a
+  // spinner, then resolves with the final {..., done:true} result line.
+  const runPipeline = async (activePhoto: PhotoItem, onStage: (stage: ProcessingStage) => void) => {
     const promptConfig = getStoredPromptConfig();
     const res = await fetch('/api/audit-and-enhance', {
       method: 'POST',
@@ -148,7 +151,77 @@ export default function App() {
       throw new Error('Session expired');
     }
 
-    return res.json();
+    if (!res.body) {
+      return res.json();
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let finalPayload: any = null;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let newlineIdx: number;
+      while ((newlineIdx = buffer.indexOf('\n')) !== -1) {
+        const line = buffer.slice(0, newlineIdx).trim();
+        buffer = buffer.slice(newlineIdx + 1);
+        if (!line) continue;
+        let event: any;
+        try {
+          event = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (event.done) {
+          finalPayload = event;
+        } else if (event.stage) {
+          onStage(event.stage);
+        }
+      }
+    }
+
+    return finalPayload || {
+      status: 'failed',
+      reason: 'Connection closed before a result came back. Please try again.',
+      retryable: true,
+    };
+  };
+
+  // Shared by the initial run and every regenerate/retry so the three result
+  // branches (approved / needs_reshoot / failed) are only written once.
+  const applyPipelineResult = (data: any) => {
+    if (data.status === 'needs_reshoot') {
+      setPhoto((prev) => ({
+        ...prev,
+        status: 'needs_reshoot',
+        reshootReason: data.reason || 'Photo did not meet quality standards. Please reshoot.',
+        reviewDecision: 'pending',
+        processingStage: undefined,
+      }));
+    } else if (data.status === 'approved') {
+      setPhoto((prev) => ({
+        ...prev,
+        status: 'approved',
+        processedImage: data.processedImageBase64,
+        confidenceScore: data.confidence,
+        reviewDecision: 'approved',
+        modelUsed: data.modelUsed,
+        attemptCount: data.attemptCount,
+        processingStage: undefined,
+      }));
+    } else {
+      setPhoto((prev) => ({
+        ...prev,
+        status: 'failed',
+        failureReason: data.reason || 'Enhancement failed. Please try again.',
+        debugDetail: data.debugDetail,
+        reviewDecision: 'pending',
+        processingStage: undefined,
+      }));
+    }
   };
 
   // Sample/demo photos never touch the paid API - approve them locally so
@@ -164,48 +237,27 @@ export default function App() {
     }));
   };
 
+  // Fires the moment a photo is captured - runs in the background while staff
+  // moves straight on to the Details step and keeps typing. No more full-
+  // screen blocking wait: the ProcessingStatusCard on Details (and Review, as
+  // a safety net) reflects live progress via photo.status/processingStage.
   const handleSubmitForProcessing = async () => {
     if (!photo.originalImage) return;
 
     if (photo.isSample) {
-      setCurrentStep('processing');
       approveSampleLocally();
-      setCurrentStep('review');
+      setCurrentStep('details');
       return;
     }
 
-    setCurrentStep('processing');
-    setPhoto((prev) => ({ ...prev, status: 'processing' }));
+    setPhoto((prev) => ({ ...prev, status: 'processing', processingStage: undefined }));
+    setCurrentStep('details');
 
     try {
-      const data = await runPipeline(photo);
-
-      if (data.status === 'needs_reshoot') {
-        setPhoto((prev) => ({
-          ...prev,
-          status: 'needs_reshoot',
-          reshootReason: data.reason || 'Photo did not meet quality standards. Please reshoot.',
-          reviewDecision: 'pending',
-        }));
-      } else if (data.status === 'approved') {
-        setPhoto((prev) => ({
-          ...prev,
-          status: 'approved',
-          processedImage: data.processedImageBase64,
-          confidenceScore: data.confidence,
-          reviewDecision: 'approved',
-          modelUsed: data.modelUsed,
-          attemptCount: data.attemptCount,
-        }));
-      } else {
-        setPhoto((prev) => ({
-          ...prev,
-          status: 'failed',
-          failureReason: data.reason || 'Enhancement failed. Please try again.',
-          debugDetail: data.debugDetail,
-          reviewDecision: 'pending',
-        }));
-      }
+      const data = await runPipeline(photo, (stage) => {
+        setPhoto((prev) => ({ ...prev, processingStage: stage }));
+      });
+      applyPipelineResult(data);
     } catch (err: any) {
       console.error('Processing error:', err);
       setPhoto((prev) => ({
@@ -213,10 +265,9 @@ export default function App() {
         status: 'failed',
         failureReason: 'Could not reach the server. Check your connection and try again.',
         reviewDecision: 'pending',
+        processingStage: undefined,
       }));
     }
-
-    setCurrentStep('review');
   };
 
   const handleRegeneratePhoto = async () => {
@@ -227,37 +278,13 @@ export default function App() {
       return;
     }
 
-    setPhoto((prev) => ({ ...prev, status: 'processing', reviewDecision: 'regenerating' }));
+    setPhoto((prev) => ({ ...prev, status: 'processing', reviewDecision: 'regenerating', processingStage: undefined }));
 
     try {
-      const data = await runPipeline(photo);
-
-      if (data.status === 'needs_reshoot') {
-        setPhoto((prev) => ({
-          ...prev,
-          status: 'needs_reshoot',
-          reshootReason: data.reason || 'Photo did not meet quality standards.',
-          reviewDecision: 'pending',
-        }));
-      } else if (data.status === 'approved') {
-        setPhoto((prev) => ({
-          ...prev,
-          status: 'approved',
-          processedImage: data.processedImageBase64,
-          confidenceScore: data.confidence,
-          reviewDecision: 'approved',
-          modelUsed: data.modelUsed,
-          attemptCount: data.attemptCount,
-        }));
-      } else {
-        setPhoto((prev) => ({
-          ...prev,
-          status: 'failed',
-          failureReason: data.reason || 'Enhancement failed. Please try again.',
-          debugDetail: data.debugDetail,
-          reviewDecision: 'pending',
-        }));
-      }
+      const data = await runPipeline(photo, (stage) => {
+        setPhoto((prev) => ({ ...prev, processingStage: stage }));
+      });
+      applyPipelineResult(data);
     } catch (err) {
       console.error('Regenerate error:', err);
       setPhoto((prev) => ({
@@ -265,6 +292,7 @@ export default function App() {
         status: 'failed',
         failureReason: 'Could not reach the server. Check your connection and try again.',
         reviewDecision: 'pending',
+        processingStage: undefined,
       }));
     }
   };
@@ -305,7 +333,7 @@ export default function App() {
     setOtherWeight('0.250');
     setNetWeight('8.250');
     setPhoto(createInitialPhoto());
-    setCurrentStep('form');
+    setCurrentStep('capture');
   };
 
   const currentProductRecord: ProductRecord = {
@@ -351,18 +379,17 @@ export default function App() {
           </div>
         )}
 
-        {currentStep !== 'processing' && (
-          <div className="space-y-2 mb-4 sm:mb-6">
+        <div className="space-y-2 mb-4 sm:mb-6">
             <div className="bg-white border border-stone-200 shadow-xs rounded-2xl p-1.5 sm:p-2.5 flex items-center justify-between gap-1 overflow-x-auto scrollbar-none text-xs">
-              {(['form', 'upload', 'review', 'export'] as const).map((step, idx) => {
+              {(['capture', 'details', 'review', 'export'] as const).map((step, idx) => {
                 const labels: Record<typeof step, string> = {
-                  form: 'Product Info',
-                  upload: 'Capture Photo',
+                  capture: 'Capture Photo',
+                  details: 'Product Details',
                   review: 'Review',
                   export: 'Export',
                 };
                 const isActive = currentStep === step;
-                const isClickable = step === 'form' || (step === 'upload') || (step === 'review' && photo.status !== 'idle') || (step === 'export' && photo.reviewDecision === 'approved');
+                const isClickable = step === 'capture' || step === 'details' || (step === 'review' && photo.status !== 'idle') || (step === 'export' && photo.reviewDecision === 'approved');
                 return (
                   <React.Fragment key={step}>
                     {idx > 0 && <div className="w-3 sm:w-4 h-[1px] bg-stone-200 shrink-0" />}
@@ -384,9 +411,24 @@ export default function App() {
               })}
             </div>
           </div>
+
+        {currentStep === 'capture' && (
+          <UploadPhotosStep
+            cpc={cpc}
+            productName={productName}
+            itemType={itemType}
+            setItemType={setItemType}
+            purity={purity}
+            gender={gender}
+            netWeight={netWeight}
+            photo={photo}
+            onUpdatePhoto={handleUpdatePhoto}
+            onRemovePhoto={handleRemovePhoto}
+            onSubmitForProcessing={handleSubmitForProcessing}
+          />
         )}
 
-        {currentStep === 'form' && (
+        {currentStep === 'details' && (
           <ProductForm
             cpc={cpc}
             setCpc={setCpc}
@@ -408,28 +450,10 @@ export default function App() {
             setNetWeight={setNetWeight}
             staffName={staffName}
             setStaffName={setStaffName}
-            onProceed={() => setCurrentStep('upload')}
-          />
-        )}
-
-        {currentStep === 'upload' && (
-          <UploadPhotosStep
-            cpc={cpc}
-            productName={productName}
-            itemType={itemType}
-            purity={purity}
-            gender={gender}
-            netWeight={netWeight}
             photo={photo}
-            onUpdatePhoto={handleUpdatePhoto}
-            onRemovePhoto={handleRemovePhoto}
-            onBack={() => setCurrentStep('form')}
-            onSubmitForProcessing={handleSubmitForProcessing}
+            onRetryProcessing={handleSubmitForProcessing}
+            onProceed={() => setCurrentStep('review')}
           />
-        )}
-
-        {currentStep === 'processing' && (
-          <ProcessingStep cpc={cpc} purity={purity} itemType={itemType} photo={photo} />
         )}
 
         {currentStep === 'review' && (
@@ -444,7 +468,7 @@ export default function App() {
             onUpdateReviewDecision={handleUpdateReviewDecision}
             onRegeneratePhoto={handleRegeneratePhoto}
             onRetakePhoto={handleRetakePhoto}
-            onBackToPhotos={() => setCurrentStep('upload')}
+            onBackToPhotos={() => setCurrentStep('capture')}
             onProceedToExport={handleProceedToExport}
           />
         )}

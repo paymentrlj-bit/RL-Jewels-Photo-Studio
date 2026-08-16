@@ -569,11 +569,36 @@ app.post('/api/prompt-config', requireAuth, (req, res) => {
 // reported as failed so staff can just retry, not papered over.
 // ---------------------------------------------------------------------------
 
+// Streamed as newline-delimited JSON so the client can show real stage-by-
+// stage progress instead of a spinner, and so a heartbeat line can be sent
+// during any single long-running call - a completely silent connection for
+// 30-50s is exactly the kind of thing a mobile carrier's NAT/proxy or a
+// hosting platform's idle timeout can kill out from under a normal request.
+// Every response (including instant failures) uses the same {..., done:true}
+// shape on its last line, so the client only needs one parsing path.
 app.post('/api/audit-and-enhance', requireAuth, async (req, res) => {
+  res.setHeader('Content-Type', 'application/x-ndjson');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('X-Accel-Buffering', 'no');
+
+  const sendEvent = (event: Record<string, unknown>) => {
+    res.write(JSON.stringify(event) + '\n');
+  };
+  const sendFinal = (event: Record<string, unknown>) => {
+    sendEvent({ ...event, done: true });
+    res.end();
+  };
+  // Keeps a byte flowing every few seconds while a single Gemini call is
+  // in flight, so the stream never goes silent long enough to look dead.
+  const withHeartbeat = <T,>(stage: string, promise: Promise<T>): Promise<T> => {
+    const interval = setInterval(() => sendEvent({ stage, heartbeat: true }), 8000);
+    return promise.finally(() => clearInterval(interval));
+  };
+
   const { imageBase64, itemType, purity, gender, sku, cpc, weight, customEnhancePrompt } = req.body;
 
   if (!imageBase64) {
-    return res.status(400).json({ error: 'Missing imageBase64 data' });
+    return sendFinal({ status: 'failed', reason: 'Missing imageBase64 data', retryable: false });
   }
 
   const match = imageBase64.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,(.+)$/);
@@ -582,7 +607,7 @@ app.post('/api/audit-and-enhance', requireAuth, async (req, res) => {
 
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    return res.json({
+    return sendFinal({
       status: 'failed',
       reason: 'GEMINI_API_KEY is not configured on the server.',
       retryable: false,
@@ -614,7 +639,8 @@ ${weight ? `- Weight: ${weight}g` : ''}`;
   // empty and the pipeline behaves exactly as it did before this feature.
   let segmentationBlock = '';
   if (ENABLE_SEGMENTATION_GROUNDING) {
-    const segmentation = await segmentJewelry(ai, cleanBase64, mimeType);
+    sendEvent({ stage: 'segmenting' });
+    const segmentation = await withHeartbeat('segmenting', segmentJewelry(ai, cleanBase64, mimeType));
     if (segmentation) {
       segmentationBlock = `
 
@@ -628,43 +654,51 @@ Every point inside this outline is part of the SAME physical piece described abo
     // Attempt 1: default (cheap/fast) tier
     let enhanced: EnhanceResult | null = null;
     try {
+      sendEvent({ stage: 'enhancing', attempt: 1 });
       // Only 2 attempts here (not the default 3) - each can take up to
       // ENHANCE_TIMEOUT_MS, and staff are waiting at the counter for this.
-      enhanced = await withTransientRetry(
-        () => enhanceImage(ai, MODEL_ENHANCE_DEFAULT, cleanBase64, mimeType, promptTemplate + contextBlock + segmentationBlock),
-        2,
-        deadline
+      enhanced = await withHeartbeat(
+        'enhancing',
+        withTransientRetry(
+          () => enhanceImage(ai, MODEL_ENHANCE_DEFAULT, cleanBase64, mimeType, promptTemplate + contextBlock + segmentationBlock),
+          2,
+          deadline
+        )
       );
     } catch (err: any) {
       console.error('Enhance (default tier) failed after retries:', err?.message || err);
       if (isBillingError(err)) {
-        return res.json({
+        return sendFinal({
           status: 'failed',
           reason: 'The Gemini account has hit its billing/spend cap. An admin needs to raise it in AI Studio before photos can be processed.',
           retryable: false,
           debugDetail: debugDetail(err),
         });
       }
-      return res.json({
+      return sendFinal({
         status: 'failed',
-        reason: 'AI enhancement service did not respond. Please try again.',
+        reason: 'Enhancement service did not respond. Please try again.',
         retryable: true,
         debugDetail: debugDetail(err),
       });
     }
 
     if (!enhanced) {
-      return res.json({
+      return sendFinal({
         status: 'failed',
-        reason: 'The AI model did not return an edited image. Please try again.',
+        reason: 'The model did not return an edited image. Please try again.',
         retryable: true,
       });
     }
 
-    let audit = await withTransientRetry(
-      () => auditOutput(ai, cleanBase64, mimeType, enhanced!.imageBase64, enhanced!.mimeType, auditContext),
-      2,
-      deadline
+    sendEvent({ stage: 'auditing' });
+    let audit = await withHeartbeat(
+      'auditing',
+      withTransientRetry(
+        () => auditOutput(ai, cleanBase64, mimeType, enhanced!.imageBase64, enhanced!.mimeType, auditContext),
+        2,
+        deadline
+      )
     );
     let modelUsed = MODEL_ENHANCE_DEFAULT;
     let attemptCount = 1;
@@ -678,24 +712,32 @@ IMPORTANT: A previous attempt at this edit failed quality review for this specif
 Correct this specific issue while still following every rule above.`;
 
       try {
-        const retryEnhanced = await withTransientRetry(
-          () => enhanceImage(ai, MODEL_ENHANCE_ESCALATED, cleanBase64, mimeType, correctivePrompt),
-          2,
-          deadline
+        sendEvent({ stage: 'escalating', attempt: 2 });
+        const retryEnhanced = await withHeartbeat(
+          'escalating',
+          withTransientRetry(
+            () => enhanceImage(ai, MODEL_ENHANCE_ESCALATED, cleanBase64, mimeType, correctivePrompt),
+            2,
+            deadline
+          )
         );
         attemptCount = 2;
         if (retryEnhanced) {
-          const retryAudit = await withTransientRetry(
-            () => auditOutput(ai, cleanBase64, mimeType, retryEnhanced.imageBase64, retryEnhanced.mimeType, auditContext),
-            2,
-            deadline
+          sendEvent({ stage: 'auditing', attempt: 2 });
+          const retryAudit = await withHeartbeat(
+            'auditing',
+            withTransientRetry(
+              () => auditOutput(ai, cleanBase64, mimeType, retryEnhanced.imageBase64, retryEnhanced.mimeType, auditContext),
+              2,
+              deadline
+            )
           );
           if (retryAudit.overallPass) {
             enhanced = retryEnhanced;
             audit = retryAudit;
             modelUsed = MODEL_ENHANCE_ESCALATED;
           } else {
-            return res.json({
+            return sendFinal({
               status: 'needs_reshoot',
               reason: retryAudit.reason,
               checklist: retryAudit.checklist,
@@ -703,7 +745,7 @@ Correct this specific issue while still following every rule above.`;
             });
           }
         } else {
-          return res.json({
+          return sendFinal({
             status: 'needs_reshoot',
             reason: audit.reason,
             checklist: audit.checklist,
@@ -712,7 +754,7 @@ Correct this specific issue while still following every rule above.`;
         }
       } catch (err: any) {
         console.error('Escalated retry failed:', err?.message || err);
-        return res.json({
+        return sendFinal({
           status: 'needs_reshoot',
           reason: audit.reason,
           checklist: audit.checklist,
@@ -721,7 +763,7 @@ Correct this specific issue while still following every rule above.`;
       }
     }
 
-    return res.json({
+    return sendFinal({
       status: 'approved',
       reason: audit.reason,
       checklist: audit.checklist,
@@ -731,7 +773,7 @@ Correct this specific issue while still following every rule above.`;
     });
   } catch (error: any) {
     console.error('Error in /api/audit-and-enhance:', error);
-    return res.json({
+    return sendFinal({
       status: 'failed',
       reason: 'Unexpected error while processing this photo. Please try again.',
       retryable: true,
