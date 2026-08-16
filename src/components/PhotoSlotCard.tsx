@@ -18,7 +18,6 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
   onLoadSample,
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const cameraInputRef = useRef<HTMLInputElement | null>(null);
   const [showCameraModal, setShowCameraModal] = useState(false);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
   const [preflightIssues, setPreflightIssues] = useState<PreflightIssue[]>([]);
@@ -74,7 +73,6 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
       } p-4 sm:p-5 flex flex-col justify-between`}
     >
       <input ref={fileInputRef} type="file" accept="image/*" onChange={handleFileChange} className="hidden" />
-      <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" onChange={handleFileChange} className="hidden" />
 
       <div className="flex items-start justify-between gap-2 mb-3">
         <div>
@@ -156,9 +154,7 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
           <div className="w-full flex items-center gap-2">
             <button
               type="button"
-              onClick={() => {
-                if (cameraInputRef.current) cameraInputRef.current.click();
-              }}
+              onClick={() => setShowCameraModal(true)}
               className="min-h-[44px] flex-1 py-2.5 px-4 rounded-xl bg-stone-100 hover:bg-stone-200 text-stone-800 text-xs font-bold flex items-center justify-center gap-2 border border-stone-200 transition-colors uppercase tracking-wider"
             >
               <Camera className="w-4 h-4 text-red-600" />
@@ -180,9 +176,7 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
           <div className="w-full flex flex-col sm:flex-row items-stretch gap-2">
             <button
               type="button"
-              onClick={() => {
-                if (cameraInputRef.current) cameraInputRef.current.click();
-              }}
+              onClick={() => setShowCameraModal(true)}
               className="min-h-[44px] flex-1 py-3 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-xs sm:text-sm uppercase tracking-wider flex items-center justify-center gap-2 shadow-xs active:scale-95 transition-all"
             >
               <Camera className="w-4 h-4 text-white" />
