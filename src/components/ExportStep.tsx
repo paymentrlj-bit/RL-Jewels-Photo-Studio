@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Download, FileSpreadsheet, Archive, Copy, Check, PlusCircle, CheckCircle2, CloudUpload, ExternalLink } from 'lucide-react';
 import { ProductRecord } from '../types';
 import { downloadProductZip, downloadCsvFile, generateErpCsv } from '../utils/exportUtils';
+import { logClientEvent } from '../utils/analytics';
 
 interface ExportStepProps {
   product: ProductRecord;
@@ -92,16 +93,24 @@ export const ExportStep: React.FC<ExportStepProps> = ({ product, onStartNewProdu
     setIsZipping(true);
     try {
       await downloadProductZip(product);
+      logClientEvent('export_action', { method: 'zip', success: true, itemType: product.itemType });
     } catch (e) {
       console.error('Failed to generate ZIP:', e);
+      logClientEvent('export_action', { method: 'zip', success: false, itemType: product.itemType });
     } finally {
       setIsZipping(false);
     }
   };
 
+  const handleDownloadCsv = () => {
+    downloadCsvFile(product);
+    logClientEvent('export_action', { method: 'csv_download', success: true, itemType: product.itemType });
+  };
+
   const handleCopyCsv = () => {
     navigator.clipboard.writeText(csvString);
     setCopiedCsv(true);
+    logClientEvent('export_action', { method: 'csv_copy', success: true, itemType: product.itemType });
     setTimeout(() => setCopiedCsv(false), 2500);
   };
 
@@ -190,7 +199,7 @@ export const ExportStep: React.FC<ExportStepProps> = ({ product, onStartNewProdu
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => downloadCsvFile(product)}
+              onClick={handleDownloadCsv}
               className="flex-1 py-3.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs sm:text-sm uppercase tracking-wider shadow-xs flex items-center justify-center gap-1.5 transition-colors"
             >
               <Download className="w-4 h-4" />

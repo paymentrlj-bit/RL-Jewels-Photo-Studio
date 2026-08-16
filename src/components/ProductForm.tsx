@@ -3,6 +3,7 @@ import { Sparkles, Scan, ChevronRight, Scale, User, ShieldAlert, Calculator, Che
 import { GoldPurity, ProductGender, ITEM_TYPE_SUGGESTIONS, PhotoItem } from '../types';
 import { BarcodeScannerModal, ScannedProductData } from './BarcodeScannerModal';
 import { ProcessingStatusCard } from './ProcessingStatusCard';
+import { logClientEvent } from '../utils/analytics';
 
 interface ProductFormProps {
   cpc: string;
@@ -59,6 +60,10 @@ export const ProductForm: React.FC<ProductFormProps> = ({
   const [showScannerModal, setShowScannerModal] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [scanSuccessBanner, setScanSuccessBanner] = useState<string | null>(null);
+  // Snapshot of what the tag scan actually read, kept purely to detect (and
+  // log) when staff had to correct an OCR-autofilled field before proceeding
+  // - the single best signal for which field/parser step needs improving.
+  const [scanBaseline, setScanBaseline] = useState<ScannedProductData | null>(null);
 
   // Calculate Net Weight: Net = Gross - Other
   const calculateNetWeight = (grossVal: string, otherVal: string) => {
@@ -108,7 +113,8 @@ export const ProductForm: React.FC<ProductFormProps> = ({
     if (data.grossWeight) setGrossWeight(data.grossWeight);
     if (data.otherWeight) setOtherWeight(data.otherWeight);
     if (data.netWeight) setNetWeight(data.netWeight);
-    
+
+    setScanBaseline(data);
     setErrorMsg('');
     setScanSuccessBanner(`Tag ${data.cpc} parsed successfully: ${data.purity.toUpperCase()} ${data.itemType} (${data.grossWeight}g GW, ${data.netWeight}g NW)`);
     setTimeout(() => {
@@ -126,6 +132,26 @@ export const ProductForm: React.FC<ProductFormProps> = ({
       return;
     }
     setErrorMsg('');
+
+    // A staff correction to a tag-scanned field is the clearest possible
+    // signal that the OCR/parsing step got it wrong - log every one so
+    // /api/analytics/summary can show which field needs the most work.
+    if (scanBaseline) {
+      const fieldsToCheck: Array<[string, string | undefined, string]> = [
+        ['grossWeight', scanBaseline.grossWeight, grossWeight],
+        ['otherWeight', scanBaseline.otherWeight, otherWeight],
+        ['itemType', scanBaseline.itemType, itemType],
+        ['purity', scanBaseline.purity, purity],
+        ['gender', scanBaseline.gender, gender],
+        ['cpc', scanBaseline.cpc, cpc],
+      ];
+      for (const [field, ocrValue, finalValue] of fieldsToCheck) {
+        if (ocrValue && finalValue && ocrValue.toString().trim().toLowerCase() !== finalValue.toString().trim().toLowerCase()) {
+          logClientEvent('field_corrected', { field, ocrValue, finalValue });
+        }
+      }
+    }
+
     onProceed();
   };
 

@@ -3,6 +3,7 @@ import { Camera, Upload, Trash2, CheckCircle2, Eye, Sparkles, AlertTriangle } fr
 import { PhotoItem, PreflightIssue } from '../types';
 import { CameraModal } from './CameraModal';
 import { downscaleImage, analyzeImageQuality, checkFlashFired } from '../utils/imagePreflight';
+import { logClientEvent } from '../utils/analytics';
 
 interface PhotoSlotCardProps {
   photo: PhotoItem;
@@ -23,7 +24,8 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
   const [preflightIssues, setPreflightIssues] = useState<PreflightIssue[]>([]);
   const [isChecking, setIsChecking] = useState(false);
 
-  const runPreflight = async (dataUrl: string, sourceFile?: File) => {
+  const runPreflight = async (dataUrl: string, sourceFile?: File, method: 'in-app-camera' | 'gallery-upload' = 'in-app-camera') => {
+    const isRetake = Boolean(photo.originalImage);
     setIsChecking(true);
     try {
       const downscaled = await downscaleImage(dataUrl);
@@ -41,6 +43,8 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
         });
       }
       setPreflightIssues(issues);
+      logClientEvent('capture_completed', { method, isRetake, issueCodes: issues.map((i) => i.code) });
+      if (isRetake) logClientEvent('retake', { method });
     } finally {
       setIsChecking(false);
     }
@@ -53,7 +57,7 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
     const reader = new FileReader();
     reader.onload = (event) => {
       if (typeof event.target?.result === 'string') {
-        runPreflight(event.target.result, file);
+        runPreflight(event.target.result, file, 'gallery-upload');
       }
     };
     reader.readAsDataURL(file);

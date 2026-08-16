@@ -6,6 +6,7 @@ import { GoogleGenAI } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 import { DEFAULT_ENHANCE_PROMPT } from './src/utils/promptSettings';
 import { isDriveConfigured, exportProductToDrive } from './driveExport';
+import { logEvent, newRequestId, readEvents, LoggedSession } from './logging';
 
 dotenv.config();
 
@@ -51,6 +52,19 @@ const MODEL_AUDIT = 'gemini-3.1-flash-lite';
 // not to be worth the added per-photo call.
 const ENABLE_SEGMENTATION_GROUNDING = true;
 const MODEL_SEGMENT = 'gemini-robotics-er-1.6-preview';
+
+// Rough, PLACEHOLDER per-call cost estimates in USD, used only to give
+// /api/analytics/summary a relative cost signal (e.g. "escalation is costing
+// us roughly $X/week") - these are NOT verified against real Gemini billing
+// rates. Override with real numbers once you've checked your Cloud Billing
+// console, via these env vars, so the analytics dashboard reports a figure
+// you can actually trust rather than a rough proxy.
+const COST_PER_CALL_USD: Record<string, number> = {
+  [MODEL_ENHANCE_DEFAULT]: Number(process.env.COST_ENHANCE_DEFAULT_USD) || 0.04,
+  [MODEL_ENHANCE_ESCALATED]: Number(process.env.COST_ENHANCE_ESCALATED_USD) || 0.13,
+  [MODEL_AUDIT]: Number(process.env.COST_AUDIT_USD) || 0.001,
+  [MODEL_SEGMENT]: Number(process.env.COST_SEGMENT_USD) || 0.001,
+};
 
 // Per-call-type timeouts. These used to share one 75s constant, including for
 // the audit call - but audit is a small JSON/vision call (observed 3-10s),
@@ -107,19 +121,38 @@ function isTransientError(err: any): boolean {
   return false;
 }
 
+interface RetryAttemptInfo {
+  attempt: number;
+  latencyMs: number;
+  success: boolean;
+  error?: any;
+}
+
 // deadline (epoch ms) bounds the WHOLE pipeline, not just this one call - once
 // past it, stop retrying immediately rather than stacking another attempt on
-// top of an already-overrun request.
-async function withTransientRetry<T>(fn: () => Promise<T>, maxAttempts = 3, deadline?: number): Promise<T> {
+// top of an already-overrun request. onAttempt (optional) fires after every
+// single attempt, success or failure - this is what gives the analytics log
+// per-attempt latency/outcome data instead of only the final outcome, which
+// is what actually shows retry/timeout patterns over time.
+async function withTransientRetry<T>(
+  fn: () => Promise<T>,
+  maxAttempts = 3,
+  deadline?: number,
+  onAttempt?: (info: RetryAttemptInfo) => void
+): Promise<T> {
   let lastErr: any;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     if (deadline && Date.now() > deadline) {
       throw lastErr || new Error('Pipeline time budget exceeded before this step could run.');
     }
+    const startedAt = Date.now();
     try {
-      return await fn();
+      const result = await fn();
+      onAttempt?.({ attempt, latencyMs: Date.now() - startedAt, success: true });
+      return result;
     } catch (err) {
       lastErr = err;
+      onAttempt?.({ attempt, latencyMs: Date.now() - startedAt, success: false, error: err });
       if (attempt < maxAttempts && isTransientError(err) && (!deadline || Date.now() < deadline)) {
         await new Promise((r) => setTimeout(r, 1000 * attempt));
         continue;
@@ -419,6 +452,7 @@ app.post('/api/login', (req, res) => {
   const expected = isAdminAttempt ? ADMIN_PASSWORD : STAFF_PASSWORD;
 
   if (!timingSafeStringEqual(cleanPass, expected)) {
+    logEvent('auth.login_failure', { username: cleanUser, isAdminAttempt, ip: req.ip });
     return res.status(401).json({ error: isAdminAttempt ? 'Invalid admin password.' : 'Incorrect staff password.' });
   }
 
@@ -428,10 +462,13 @@ app.post('/api/login', (req, res) => {
     exp: Date.now() + SESSION_TTL_MS,
   };
   setSessionCookie(res, session);
+  logEvent('auth.login_success', { ip: req.ip }, { username: session.username, isAdmin: session.isAdmin });
   res.json({ username: session.username, isAdmin: session.isAdmin });
 });
 
 app.post('/api/logout', (req, res) => {
+  const session = getSession(req);
+  if (session) logEvent('auth.logout', {}, { username: session.username, isAdmin: session.isAdmin });
   clearSessionCookie(res);
   res.json({ success: true });
 });
@@ -457,6 +494,8 @@ app.get('/api/health', (req, res) => {
 // ---------------------------------------------------------------------------
 
 app.post('/api/ocr-space', requireAuth, async (req, res) => {
+  const startedAt = Date.now();
+  const session = (req as any).session as SessionInfo;
   try {
     const { imageBase64 } = req.body;
     if (!imageBase64) {
@@ -482,6 +521,14 @@ app.post('/api/ocr-space', requireAuth, async (req, res) => {
     const ocrData: any = await ocrResponse.json();
     const rawText = ocrData?.ParsedResults?.[0]?.ParsedText || '';
 
+    logEvent('ocr.call', {
+      endpoint: 'ocr-space',
+      success: true,
+      latencyMs: Date.now() - startedAt,
+      exitCode: ocrData?.OCRExitCode,
+      rawTextLength: rawText.length,
+    }, session);
+
     return res.json({
       success: true,
       rawText,
@@ -489,6 +536,12 @@ app.post('/api/ocr-space', requireAuth, async (req, res) => {
     });
   } catch (error: any) {
     console.warn('OCR.space call notice:', error?.message);
+    logEvent('ocr.call', {
+      endpoint: 'ocr-space',
+      success: false,
+      latencyMs: Date.now() - startedAt,
+      errorMessage: debugDetail(error),
+    }, session);
     return res.json({
       success: false,
       rawText: '',
@@ -498,6 +551,8 @@ app.post('/api/ocr-space', requireAuth, async (req, res) => {
 });
 
 app.post('/api/scan-tag', requireAuth, async (req, res) => {
+  const startedAt = Date.now();
+  const session = (req as any).session as SessionInfo;
   try {
     const { imageBase64, side = 'side1', existingCpc } = req.body;
     if (!imageBase64) {
@@ -523,6 +578,14 @@ app.post('/api/scan-tag', requireAuth, async (req, res) => {
     const ocrData: any = await ocrResponse.json();
     const rawText = ocrData?.ParsedResults?.[0]?.ParsedText || '';
 
+    logEvent('ocr.tag_scan', {
+      side,
+      success: true,
+      latencyMs: Date.now() - startedAt,
+      exitCode: ocrData?.OCRExitCode,
+      rawTextLength: rawText.length,
+    }, session);
+
     return res.json({
       success: true,
       rawText,
@@ -531,6 +594,11 @@ app.post('/api/scan-tag', requireAuth, async (req, res) => {
     });
   } catch (err: any) {
     console.warn('Free tag scan notice:', err?.message || err);
+    logEvent('ocr.tag_scan', {
+      success: false,
+      latencyMs: Date.now() - startedAt,
+      errorMessage: debugDetail(err),
+    }, session);
     return res.json({
       success: false,
       rawText: '',
@@ -585,7 +653,67 @@ app.post('/api/audit-and-enhance', requireAuth, async (req, res) => {
   const sendEvent = (event: Record<string, unknown>) => {
     res.write(JSON.stringify(event) + '\n');
   };
+
+  const { imageBase64, itemType, purity, gender, sku, cpc, weight, customEnhancePrompt } = req.body;
+
+  const session = (req as any).session as SessionInfo;
+  const requestId = newRequestId();
+  const pipelineStart = Date.now();
+  let estimatedCostUsd = 0;
+  let apiCallCount = 0;
+
+  logEvent('pipeline.started', {
+    requestId,
+    itemType: itemType || null,
+    purity: purity || null,
+    gender: gender || null,
+    hasWeight: Boolean(weight),
+    cpc: cpc || sku || null,
+    imageBytesApprox: typeof imageBase64 === 'string' ? Math.round((imageBase64.length * 3) / 4) : 0,
+    segmentationEnabled: ENABLE_SEGMENTATION_GROUNDING,
+    hasCustomPrompt: Boolean(customEnhancePrompt && String(customEnhancePrompt).trim()),
+  }, session);
+
+  // Every attempt at every Gemini call in this pipeline funnels through here,
+  // so retry/timeout/latency patterns per stage+model are always captured -
+  // this is the single richest signal for spotting flakiness or a stage
+  // that's quietly getting slower/more expensive over time.
+  const recordAttempt = (stage: string, model: string) => (info: RetryAttemptInfo) => {
+    apiCallCount++;
+    estimatedCostUsd += COST_PER_CALL_USD[model] || 0;
+    const timedOut = info.error?.name === 'AbortError' || /aborted/i.test(String(info.error?.message || ''));
+    logEvent('pipeline.api_call', {
+      requestId,
+      stage,
+      model,
+      attempt: info.attempt,
+      latencyMs: info.latencyMs,
+      success: info.success,
+      timedOut,
+      errorType: info.success ? undefined : (info.error?.name || info.error?.code || info.error?.status || 'error'),
+      errorMessage: info.success ? undefined : debugDetail(info.error),
+    }, session);
+  };
+
+  // Centralizes pipeline.completed logging so every exit path (early
+  // validation failure, billing error, timeout, needs_reshoot, approved) is
+  // captured exactly once, in exactly one place, without touching every
+  // individual return site below.
   const sendFinal = (event: Record<string, unknown>) => {
+    logEvent('pipeline.completed', {
+      requestId,
+      status: event.status,
+      reason: event.reason,
+      retryable: event.retryable,
+      totalLatencyMs: Date.now() - pipelineStart,
+      apiCallCount,
+      estimatedCostUsd: Number(estimatedCostUsd.toFixed(4)),
+      modelUsed: event.modelUsed,
+      attemptCount: event.attemptCount,
+      itemType: itemType || null,
+      purity: purity || null,
+      gender: gender || null,
+    }, session);
     sendEvent({ ...event, done: true });
     res.end();
   };
@@ -595,8 +723,6 @@ app.post('/api/audit-and-enhance', requireAuth, async (req, res) => {
     const interval = setInterval(() => sendEvent({ stage, heartbeat: true }), 8000);
     return promise.finally(() => clearInterval(interval));
   };
-
-  const { imageBase64, itemType, purity, gender, sku, cpc, weight, customEnhancePrompt } = req.body;
 
   if (!imageBase64) {
     return sendFinal({ status: 'failed', reason: 'Missing imageBase64 data', retryable: false });
@@ -641,7 +767,15 @@ ${weight ? `- Weight: ${weight}g` : ''}`;
   let segmentationBlock = '';
   if (ENABLE_SEGMENTATION_GROUNDING) {
     sendEvent({ stage: 'segmenting' });
+    const segmentStartedAt = Date.now();
     const segmentation = await withHeartbeat('segmenting', segmentJewelry(ai, cleanBase64, mimeType));
+    apiCallCount++;
+    estimatedCostUsd += COST_PER_CALL_USD[MODEL_SEGMENT] || 0;
+    logEvent('pipeline.segmentation', {
+      requestId,
+      found: Boolean(segmentation),
+      latencyMs: Date.now() - segmentStartedAt,
+    }, session);
     if (segmentation) {
       segmentationBlock = `
 
@@ -663,7 +797,8 @@ Every point inside this outline is part of the SAME physical piece described abo
         withTransientRetry(
           () => enhanceImage(ai, MODEL_ENHANCE_DEFAULT, cleanBase64, mimeType, promptTemplate + contextBlock + segmentationBlock),
           2,
-          deadline
+          deadline,
+          recordAttempt('enhance', MODEL_ENHANCE_DEFAULT)
         )
       );
     } catch (err: any) {
@@ -698,11 +833,20 @@ Every point inside this outline is part of the SAME physical piece described abo
       withTransientRetry(
         () => auditOutput(ai, cleanBase64, mimeType, enhanced!.imageBase64, enhanced!.mimeType, auditContext),
         2,
-        deadline
+        deadline,
+        recordAttempt('audit', MODEL_AUDIT)
       )
     );
     let modelUsed = MODEL_ENHANCE_DEFAULT;
     let attemptCount = 1;
+
+    logEvent('pipeline.audit_verdict', {
+      requestId,
+      attempt: 1,
+      overallPass: audit.overallPass,
+      reason: audit.reason,
+      checklist: audit.checklist,
+    }, session);
 
     if (!audit.overallPass) {
       // Single escalated retry with the specific failure reason fed back in.
@@ -712,6 +856,13 @@ IMPORTANT: A previous attempt at this edit failed quality review for this specif
 "${audit.reason}"
 Correct this specific issue while still following every rule above.`;
 
+      logEvent('pipeline.escalated', {
+        requestId,
+        reason: audit.reason,
+        fromModel: MODEL_ENHANCE_DEFAULT,
+        toModel: MODEL_ENHANCE_ESCALATED,
+      }, session);
+
       try {
         sendEvent({ stage: 'escalating', attempt: 2 });
         const retryEnhanced = await withHeartbeat(
@@ -719,7 +870,8 @@ Correct this specific issue while still following every rule above.`;
           withTransientRetry(
             () => enhanceImage(ai, MODEL_ENHANCE_ESCALATED, cleanBase64, mimeType, correctivePrompt),
             2,
-            deadline
+            deadline,
+            recordAttempt('enhance-escalated', MODEL_ENHANCE_ESCALATED)
           )
         );
         attemptCount = 2;
@@ -730,9 +882,17 @@ Correct this specific issue while still following every rule above.`;
             withTransientRetry(
               () => auditOutput(ai, cleanBase64, mimeType, retryEnhanced.imageBase64, retryEnhanced.mimeType, auditContext),
               2,
-              deadline
+              deadline,
+              recordAttempt('audit', MODEL_AUDIT)
             )
           );
+          logEvent('pipeline.audit_verdict', {
+            requestId,
+            attempt: 2,
+            overallPass: retryAudit.overallPass,
+            reason: retryAudit.reason,
+            checklist: retryAudit.checklist,
+          }, session);
           if (retryAudit.overallPass) {
             enhanced = retryEnhanced;
             audit = retryAudit;
@@ -793,6 +953,8 @@ Correct this specific issue while still following every rule above.`;
 // ---------------------------------------------------------------------------
 
 app.post('/api/generate-copy', requireAuth, async (req, res) => {
+  const startedAt = Date.now();
+  const session = (req as any).session as SessionInfo;
   const { imageBase64, itemType, purity, gender, weight, size } = req.body;
   if (!imageBase64) {
     return res.status(400).json({ error: 'Missing imageBase64 data' });
@@ -836,11 +998,18 @@ Respond ONLY as JSON: {"name": string, "description": string}`;
     );
     const parsed = JSON.parse(response.text?.trim() || '{}');
     if (!parsed.name || !parsed.description) {
+      logEvent('copy.generated', { itemType, purity, success: false, latencyMs: Date.now() - startedAt, errorType: 'no_usable_copy' }, session);
       return res.json({ success: false, error: 'The model did not return usable copy.' });
     }
+    logEvent('copy.generated', {
+      itemType, purity, success: true, latencyMs: Date.now() - startedAt,
+      nameLength: String(parsed.name).length, descriptionLength: String(parsed.description).length,
+      estimatedCostUsd: COST_PER_CALL_USD[MODEL_AUDIT] || 0,
+    }, session);
     return res.json({ success: true, name: String(parsed.name), description: String(parsed.description) });
   } catch (err: any) {
     console.error('generate-copy failed:', err?.message || err);
+    logEvent('copy.generated', { itemType, purity, success: false, latencyMs: Date.now() - startedAt, errorMessage: debugDetail(err) }, session);
     return res.json({ success: false, error: debugDetail(err) });
   } finally {
     clearTimeout(timeout);
@@ -861,6 +1030,8 @@ app.get('/api/drive-status', requireAuth, (req, res) => {
 });
 
 app.post('/api/export-to-drive', requireAuth, async (req, res) => {
+  const startedAt = Date.now();
+  const session = (req as any).session as SessionInfo;
   if (!isDriveConfigured()) {
     return res.json({ success: false, error: 'Google Drive export is not configured on this server.' });
   }
@@ -876,11 +1047,180 @@ app.post('/api/export-to-drive', requireAuth, async (req, res) => {
       photoMimeType: 'image/jpeg',
       metadataCsv,
     });
+    logEvent('drive.export', { cpc, itemType, success: true, latencyMs: Date.now() - startedAt }, session);
     return res.json({ success: true, ...result });
   } catch (err: any) {
     console.error('export-to-drive failed:', err?.message || err);
+    logEvent('drive.export', { cpc, itemType, success: false, latencyMs: Date.now() - startedAt, errorMessage: debugDetail(err) }, session);
     return res.json({ success: false, error: debugDetail(err) });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Observability: client-side event ingestion + an aggregated analytics
+// endpoint. Everything logged here (server-side pipeline instrumentation
+// above, plus these client-reported events) is the raw material for spotting
+// what's actually slow, flaky, or expensive over time - and what's worth
+// fixing next - instead of relying on staff remembering to mention it.
+// ---------------------------------------------------------------------------
+
+// Client events are batched and posted here - see src/utils/analytics.ts.
+// Best-effort only: a logging failure must never surface to the user, so
+// this always responds success even if an individual event was malformed.
+app.post('/api/log-event', requireAuth, (req, res) => {
+  const session = (req as any).session as SessionInfo;
+  const events = Array.isArray(req.body?.events) ? req.body.events : [];
+  for (const evt of events.slice(0, 50)) {
+    if (!evt || typeof evt.type !== 'string') continue;
+    const data = evt.data && typeof evt.data === 'object' ? evt.data : {};
+    logEvent(`client.${evt.type}`, data, session);
+  }
+  res.json({ success: true });
+});
+
+function percentile(sorted: number[], p: number): number {
+  if (sorted.length === 0) return 0;
+  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))];
+}
+
+// Admin-only: aggregates the raw event log into the numbers that actually
+// guide decisions - approval/reshoot/failure rates, latency percentiles,
+// how often escalation or timeouts happen, which audit checklist item fails
+// most (the best target for prompt tuning), OCR autofill correction rates
+// per field, funnel/device breakdown, copy-edit rate, and rough cost. Every
+// figure here reads directly off logged events - nothing is estimated
+// beyond the deliberately-labeled cost figures.
+app.get('/api/analytics/summary', requireAuth, (req, res) => {
+  const session = (req as any).session as SessionInfo;
+  if (!session?.isAdmin) {
+    return res.status(403).json({ error: 'Admin access required.' });
+  }
+
+  const days = Math.min(90, Math.max(1, Number(req.query.days) || 30));
+  const events = readEvents(days);
+
+  const pipelineCompleted = events.filter((e) => e.type === 'pipeline.completed');
+  const approved = pipelineCompleted.filter((e) => e.status === 'approved');
+  const reshoot = pipelineCompleted.filter((e) => e.status === 'needs_reshoot');
+  const failed = pipelineCompleted.filter((e) => e.status === 'failed');
+  const total = pipelineCompleted.length;
+
+  const latencies = pipelineCompleted
+    .map((e) => Number(e.totalLatencyMs) || 0)
+    .sort((a, b) => a - b);
+  const escalatedCount = pipelineCompleted.filter((e) => Number(e.attemptCount) >= 2).length;
+  const totalCostUsd = pipelineCompleted.reduce((sum, e) => sum + (Number(e.estimatedCostUsd) || 0), 0);
+
+  const apiCalls = events.filter((e) => e.type === 'pipeline.api_call');
+  const failedCalls = apiCalls.filter((e) => e.success === false).length;
+  const timedOutCalls = apiCalls.filter((e) => e.timedOut).length;
+
+  const auditVerdicts = events.filter((e) => e.type === 'pipeline.audit_verdict');
+  const checklistFailCounts: Record<string, number> = {};
+  for (const v of auditVerdicts) {
+    const checklist = (v.checklist as Record<string, boolean>) || {};
+    for (const [k, val] of Object.entries(checklist)) {
+      if (val === false) checklistFailCounts[k] = (checklistFailCounts[k] || 0) + 1;
+    }
+  }
+
+  const ocrTagScans = events.filter((e) => e.type === 'ocr.tag_scan');
+  const ocrApplied = events.filter((e) => e.type === 'client.ocr_scan_applied').length;
+  const fieldCorrections = events.filter((e) => e.type === 'client.field_corrected');
+  const correctionsByField: Record<string, number> = {};
+  for (const c of fieldCorrections) {
+    const f = String(c.field || 'unknown');
+    correctionsByField[f] = (correctionsByField[f] || 0) + 1;
+  }
+
+  const stepViews = events.filter((e) => e.type === 'client.step_view');
+  const stepCounts: Record<string, number> = {};
+  let mobileViews = 0;
+  for (const s of stepViews) {
+    const step = String(s.step || 'unknown');
+    stepCounts[step] = (stepCounts[step] || 0) + 1;
+    if (s.isMobile) mobileViews++;
+  }
+
+  const retakes = events.filter((e) => e.type === 'client.retake').length;
+  const captureCompleted = events.filter((e) => e.type === 'client.capture_completed');
+  const captureByMethod: Record<string, number> = {};
+  for (const c of captureCompleted) {
+    const m = String(c.method || 'unknown');
+    captureByMethod[m] = (captureByMethod[m] || 0) + 1;
+  }
+
+  const copyEditedEvents = events.filter((e) => e.type === 'client.copy_edited');
+  const copyEditedCount = copyEditedEvents.filter((e) => e.nameChanged || e.descriptionChanged).length;
+
+  const driveExports = events.filter((e) => e.type === 'drive.export');
+  const driveSuccesses = driveExports.filter((e) => e.success).length;
+
+  const loginFailures = events.filter((e) => e.type === 'auth.login_failure').length;
+  const loginSuccesses = events.filter((e) => e.type === 'auth.login_success').length;
+
+  res.json({
+    windowDays: days,
+    generatedAt: new Date().toISOString(),
+    totalEventsLogged: events.length,
+    pipeline: {
+      totalRuns: total,
+      approved: approved.length,
+      needsReshoot: reshoot.length,
+      failed: failed.length,
+      approvalRate: total ? approved.length / total : null,
+      reshootRate: total ? reshoot.length / total : null,
+      failureRate: total ? failed.length / total : null,
+      escalationRate: total ? escalatedCount / total : null,
+      avgLatencyMs: latencies.length ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length) : null,
+      p50LatencyMs: percentile(latencies, 0.5),
+      p95LatencyMs: percentile(latencies, 0.95),
+    },
+    apiCalls: {
+      total: apiCalls.length,
+      failed: failedCalls,
+      timedOut: timedOutCalls,
+      failureRate: apiCalls.length ? failedCalls / apiCalls.length : null,
+      timeoutRate: apiCalls.length ? timedOutCalls / apiCalls.length : null,
+    },
+    cost: {
+      estimatedTotalUsd: Number(totalCostUsd.toFixed(2)),
+      estimatedAvgPerApprovedUsd: approved.length ? Number((totalCostUsd / approved.length).toFixed(3)) : null,
+      note: 'Approximate - based on placeholder per-model rates (COST_*_USD env vars). Calibrate those against your real Cloud Billing console for accurate figures.',
+    },
+    qualityChecklist: {
+      failCounts: checklistFailCounts,
+      note: 'How often each audit check failed across all attempts - the most frequent failures are the best targets for enhancement-prompt improvements.',
+    },
+    ocr: {
+      tagScansAttempted: ocrTagScans.length,
+      tagScansApplied: ocrApplied,
+      fieldCorrections: correctionsByField,
+      note: 'fieldCorrections counts how often staff had to fix an OCR-autofilled field before proceeding - a high count flags which field needs a parser/OCR-provider improvement.',
+    },
+    funnel: {
+      stepViews: stepCounts,
+      retakes,
+      captureByMethod,
+    },
+    device: {
+      mobileViewShare: stepViews.length ? mobileViews / stepViews.length : null,
+    },
+    copy: {
+      reviewedAfterApproval: copyEditedEvents.length,
+      editedCount: copyEditedCount,
+      editRate: copyEditedEvents.length ? copyEditedCount / copyEditedEvents.length : null,
+    },
+    drive: {
+      attempts: driveExports.length,
+      successes: driveSuccesses,
+      successRate: driveExports.length ? driveSuccesses / driveExports.length : null,
+    },
+    auth: {
+      loginSuccesses,
+      loginFailures,
+    },
+  });
 });
 
 // ---------------------------------------------------------------------------

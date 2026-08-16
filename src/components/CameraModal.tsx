@@ -1,5 +1,6 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { Camera, X, RefreshCw, AlertCircle, Sparkles } from 'lucide-react';
+import { logClientEvent } from '../utils/analytics';
 
 interface CameraModalProps {
   isOpen: boolean;
@@ -41,6 +42,7 @@ export const CameraModal: React.FC<CameraModalProps> = ({
         // ignore
       }
       if (!next) setLiveReadout(null);
+      logClientEvent('guide_toggled', { enabled: next });
       return next;
     });
   };
@@ -172,6 +174,12 @@ export const CameraModal: React.FC<CameraModalProps> = ({
     if (ctx) {
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+      logClientEvent('capture_shutter', {
+        method: 'in-app-camera',
+        guideEnabled,
+        liveReadoutLabel: liveReadout?.label,
+        liveReadoutTone: liveReadout?.tone,
+      });
       onCapture(dataUrl);
       onClose();
     }
@@ -291,6 +299,7 @@ export const CameraModal: React.FC<CameraModalProps> = ({
               const reader = new FileReader();
               reader.onload = (event) => {
                 if (typeof event.target?.result === 'string') {
+                  logClientEvent('capture_shutter', { method: 'native-upload-fallback' });
                   onCapture(event.target.result);
                   onClose();
                 }

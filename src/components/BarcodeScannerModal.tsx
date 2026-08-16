@@ -18,6 +18,7 @@ import {
 import jsQR from 'jsqr';
 import { GoldPurity, ProductGender } from '../types';
 import { parseJewelryTagText, mergeScannedTagData } from '../utils/tagParser';
+import { logClientEvent } from '../utils/analytics';
 
 export interface ScannedProductData {
   cpc: string;
@@ -462,6 +463,14 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
   const handleApplyResult = () => {
     const finalData = combinedData || side1Data || side2Data;
     if (finalData) {
+      logClientEvent('ocr_scan_applied', {
+        hasCpc: Boolean(finalData.cpc && finalData.cpc !== 'RLJ-TAG'),
+        hasGrossWeight: parseFloat(finalData.grossWeight) > 0,
+        hasOtherWeight: parseFloat(finalData.otherWeight) > 0,
+        itemType: finalData.itemType,
+        purity: finalData.purity,
+        capturedBothSides: Boolean(side1Data && side2Data),
+      });
       onScanSuccess(finalData);
       onClose();
     }
