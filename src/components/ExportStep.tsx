@@ -14,10 +14,40 @@ export const ExportStep: React.FC<ExportStepProps> = ({ product, onStartNewProdu
 
   const displayCpc = product.cpc || product.sku;
 
+  // A plain .split(',') breaks the moment a quoted field (like a generated
+  // description) contains a comma of its own - this respects CSV quoting.
+  const parseCsvLine = (line: string): string[] => {
+    const cells: string[] = [];
+    let current = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+      if (inQuotes) {
+        if (char === '"' && line[i + 1] === '"') {
+          current += '"';
+          i++;
+        } else if (char === '"') {
+          inQuotes = false;
+        } else {
+          current += char;
+        }
+      } else if (char === '"') {
+        inQuotes = true;
+      } else if (char === ',') {
+        cells.push(current);
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+    cells.push(current);
+    return cells;
+  };
+
   const csvString = generateErpCsv(product);
   const csvLines = csvString.split('\n');
-  const csvHeaders = csvLines[0]?.split(',') || [];
-  const csvValues = csvLines[1]?.split(',') || [];
+  const csvHeaders = csvLines[0] ? parseCsvLine(csvLines[0]) : [];
+  const csvValues = csvLines[1] ? parseCsvLine(csvLines[1]) : [];
 
   const handleDownloadZip = async () => {
     setIsZipping(true);

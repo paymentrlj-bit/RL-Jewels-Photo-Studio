@@ -12,12 +12,17 @@ import {
 } from 'lucide-react';
 import { PhotoItem, GoldPurity, ProductGender, ReviewDecision } from '../types';
 import { ProcessingStatusCard } from './ProcessingStatusCard';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Sparkles } from 'lucide-react';
 
 interface ReviewStepProps {
   sku: string;
   cpc?: string;
   productName: string;
+  setProductName: (val: string) => void;
+  productDescription: string;
+  setProductDescription: (val: string) => void;
+  isGeneratingCopy: boolean;
+  onRegenerateCopy: () => void;
   itemType: string;
   purity: GoldPurity;
   gender: ProductGender;
@@ -33,6 +38,11 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
   sku,
   cpc,
   productName,
+  setProductName,
+  productDescription,
+  setProductDescription,
+  isGeneratingCopy,
+  onRegenerateCopy,
   itemType,
   purity,
   photo,
@@ -274,6 +284,55 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
               </button>
             </div>
           </div>
+
+          {decision === 'approved' && !photo.isSample && (
+            <div className="pt-4 border-t border-stone-100 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-stone-700 flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                  <span>Catalogue Copy</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={onRegenerateCopy}
+                  disabled={isGeneratingCopy}
+                  className="text-[11px] font-bold text-stone-500 hover:text-stone-800 disabled:opacity-50 flex items-center gap-1"
+                >
+                  <RefreshCw className={`w-3 h-3 ${isGeneratingCopy ? 'animate-spin' : ''}`} />
+                  <span>{isGeneratingCopy ? 'Writing…' : 'Rewrite'}</span>
+                </button>
+              </div>
+              <div>
+                <label className="block text-[10px] font-semibold uppercase tracking-wider text-stone-400 mb-1">
+                  Product Name
+                </label>
+                <input
+                  type="text"
+                  value={productName}
+                  onChange={(e) => setProductName(e.target.value)}
+                  disabled={isGeneratingCopy}
+                  placeholder={isGeneratingCopy ? 'Writing a name for this piece…' : ''}
+                  className="min-h-[44px] w-full bg-stone-50/80 border border-stone-200 focus:border-red-600 focus:bg-white rounded-xl px-3.5 py-2.5 text-stone-900 text-sm font-semibold focus:outline-none disabled:opacity-60"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-semibold uppercase tracking-wider text-stone-400 mb-1">
+                  Description
+                </label>
+                <textarea
+                  value={productDescription}
+                  onChange={(e) => setProductDescription(e.target.value)}
+                  disabled={isGeneratingCopy}
+                  rows={3}
+                  placeholder={isGeneratingCopy ? 'Writing a description from the approved photo…' : 'Generated once you approve the photo.'}
+                  className="w-full bg-stone-50/80 border border-stone-200 focus:border-red-600 focus:bg-white rounded-xl px-3.5 py-2.5 text-stone-700 text-sm focus:outline-none resize-none disabled:opacity-60"
+                />
+              </div>
+              <p className="text-[10px] text-stone-400">
+                Written from the approved photo - review and edit before it goes on the website.
+              </p>
+            </div>
+          )}
         </div>
       )}
 
