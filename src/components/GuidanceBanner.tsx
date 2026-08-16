@@ -62,13 +62,13 @@ export const GuidanceBanner: React.FC = () => {
           <div className="flex items-start gap-2">
             <AlertCircle className="w-4 h-4 text-[#B8860B] shrink-0 mt-0.5" />
             <p>
-              <strong className="text-stone-900">Avoid Obstructions:</strong> Tuck or tape price tags and string out of frame so the AI doesn't reject the image.
+              <strong className="text-stone-900">Avoid Obstructions:</strong> Tuck or tape price tags and string out of frame so the image isn't rejected.
             </p>
           </div>
           <div className="flex items-start gap-2">
             <Eye className="w-4 h-4 text-[#B8860B] shrink-0 mt-0.5" />
             <p>
-              <strong className="text-stone-900">One good shot is enough:</strong> tap the screen once on the piece to lock focus before shooting - the AI handles cleanup, centering, and background from this single photo.
+              <strong className="text-stone-900">One good shot is enough:</strong> tap the screen once on the piece to lock focus before shooting - the studio handles cleanup, centering, and background from this single photo.
             </p>
           </div>
         </div>

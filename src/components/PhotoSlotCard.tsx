@@ -85,7 +85,7 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
             </span>
           </div>
           <p className="text-xs text-stone-500 mt-1 leading-snug">
-            One decent counter shot - flash off, fill the frame, avoid direct glare. The AI does the rest.
+            One decent counter shot - flash off, fill the frame, avoid direct glare. The studio does the rest.
           </p>
         </div>
 

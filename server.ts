@@ -51,10 +51,24 @@ const MODEL_AUDIT = 'gemini-3.1-flash-lite';
 const ENABLE_SEGMENTATION_GROUNDING = true;
 const MODEL_SEGMENT = 'gemini-robotics-er-1.6-preview';
 
-// A complex real photo can genuinely take 30-40s+ for the model to process,
-// especially under real network conditions rather than a well-connected test
-// environment - 45s cut it too close in practice.
-const CALL_TIMEOUT_MS = 75_000;
+// Per-call-type timeouts. These used to share one 75s constant, including for
+// the audit call - but audit is a small JSON/vision call (observed 3-10s),
+// not an image-generation call, and its own default 3-attempt retry meant a
+// single audit could theoretically eat up to 225s if it kept stalling. Two
+// audits (first pass + escalated retry) plus two enhance calls under the old
+// numbers could theoretically stack past 700s in the worst case - far beyond
+// any hosting platform's request timeout, and the real cause of "it just
+// never comes back" failures reported from real (slower, mobile) networks.
+const ENHANCE_TIMEOUT_MS = 50_000;
+const AUDIT_TIMEOUT_MS = 20_000;
+const SEGMENT_TIMEOUT_MS = 15_000;
+
+// Hard ceiling on the ENTIRE pipeline's wall-clock time, independent of how
+// individual per-call timeouts and retries stack. Once this elapses, the
+// pipeline stops retrying and returns a clear, fast "failed, please retry"
+// response instead of silently running for minutes until some proxy or
+// hosting platform kills the connection out from under it.
+const PIPELINE_BUDGET_MS = 100_000;
 
 // A short, sanitized version of the real error for the response body - the
 // Gemini SDK's error messages are human-readable API errors, not secrets, and
@@ -92,14 +106,20 @@ function isTransientError(err: any): boolean {
   return false;
 }
 
-async function withTransientRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Promise<T> {
+// deadline (epoch ms) bounds the WHOLE pipeline, not just this one call - once
+// past it, stop retrying immediately rather than stacking another attempt on
+// top of an already-overrun request.
+async function withTransientRetry<T>(fn: () => Promise<T>, maxAttempts = 3, deadline?: number): Promise<T> {
   let lastErr: any;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    if (deadline && Date.now() > deadline) {
+      throw lastErr || new Error('Pipeline time budget exceeded before this step could run.');
+    }
     try {
       return await fn();
     } catch (err) {
       lastErr = err;
-      if (attempt < maxAttempts && isTransientError(err)) {
+      if (attempt < maxAttempts && isTransientError(err) && (!deadline || Date.now() < deadline)) {
         await new Promise((r) => setTimeout(r, 1000 * attempt));
         continue;
       }
@@ -122,7 +142,7 @@ async function enhanceImage(
   prompt: string
 ): Promise<EnhanceResult | null> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), CALL_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), ENHANCE_TIMEOUT_MS);
   try {
     const response = await ai.models.generateContent({
       model,
@@ -185,7 +205,7 @@ Compare IMAGE 2 against IMAGE 1 and grade it. Respond ONLY as JSON matching this
 }`;
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), CALL_TIMEOUT_MS);
+  const timeout = setTimeout(() => controller.abort(), AUDIT_TIMEOUT_MS);
   try {
     const response = await ai.models.generateContent({
       model: MODEL_AUDIT,
@@ -241,7 +261,7 @@ async function segmentJewelry(
   mimeType: string
 ): Promise<SegmentationResult | null> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 20_000);
+  const timeout = setTimeout(() => controller.abort(), SEGMENT_TIMEOUT_MS);
   try {
     const prompt = `Give the precise segmentation outline of the single jewelry item in this image.
 Output a JSON list with exactly one entry:
@@ -585,6 +605,9 @@ ${weight ? `- Weight: ${weight}g` : ''}`;
 
   const auditContext = { itemType: itemType || 'jewellery', purity: purity || '22kt' };
 
+  // Bounds the ENTIRE pipeline below - see PIPELINE_BUDGET_MS.
+  const deadline = Date.now() + PIPELINE_BUDGET_MS;
+
   // Non-blocking: one small vision call to trace the jewelry's real outline in
   // the ORIGINAL photo, so the enhance prompt gets real computer-vision facts
   // instead of guessing. If this fails or times out, segmentationBlock is just
@@ -606,10 +629,11 @@ Every point inside this outline is part of the SAME physical piece described abo
     let enhanced: EnhanceResult | null = null;
     try {
       // Only 2 attempts here (not the default 3) - each can take up to
-      // CALL_TIMEOUT_MS, and staff are waiting at the counter for this.
+      // ENHANCE_TIMEOUT_MS, and staff are waiting at the counter for this.
       enhanced = await withTransientRetry(
         () => enhanceImage(ai, MODEL_ENHANCE_DEFAULT, cleanBase64, mimeType, promptTemplate + contextBlock + segmentationBlock),
-        2
+        2,
+        deadline
       );
     } catch (err: any) {
       console.error('Enhance (default tier) failed after retries:', err?.message || err);
@@ -637,8 +661,10 @@ Every point inside this outline is part of the SAME physical piece described abo
       });
     }
 
-    let audit = await withTransientRetry(() =>
-      auditOutput(ai, cleanBase64, mimeType, enhanced!.imageBase64, enhanced!.mimeType, auditContext)
+    let audit = await withTransientRetry(
+      () => auditOutput(ai, cleanBase64, mimeType, enhanced!.imageBase64, enhanced!.mimeType, auditContext),
+      2,
+      deadline
     );
     let modelUsed = MODEL_ENHANCE_DEFAULT;
     let attemptCount = 1;
@@ -654,12 +680,15 @@ Correct this specific issue while still following every rule above.`;
       try {
         const retryEnhanced = await withTransientRetry(
           () => enhanceImage(ai, MODEL_ENHANCE_ESCALATED, cleanBase64, mimeType, correctivePrompt),
-          2
+          2,
+          deadline
         );
         attemptCount = 2;
         if (retryEnhanced) {
-          const retryAudit = await withTransientRetry(() =>
-            auditOutput(ai, cleanBase64, mimeType, retryEnhanced.imageBase64, retryEnhanced.mimeType, auditContext)
+          const retryAudit = await withTransientRetry(
+            () => auditOutput(ai, cleanBase64, mimeType, retryEnhanced.imageBase64, retryEnhanced.mimeType, auditContext),
+            2,
+            deadline
           );
           if (retryAudit.overallPass) {
             enhanced = retryEnhanced;

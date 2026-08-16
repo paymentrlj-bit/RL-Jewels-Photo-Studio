@@ -94,7 +94,7 @@ export const UploadPhotosStep: React.FC<UploadPhotosStepProps> = ({
         {!isCaptured && (
           <div className="flex items-center gap-2 text-xs text-red-800 bg-red-50 border border-red-200 px-3.5 py-2.5 rounded-xl">
             <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
-            <span className="font-medium">Please capture the product photo to begin AI retouching & enhancement.</span>
+            <span className="font-medium">Please capture the product photo to begin retouching & enhancement.</span>
           </div>
         )}
 
@@ -114,7 +114,7 @@ export const UploadPhotosStep: React.FC<UploadPhotosStepProps> = ({
             className="w-full flex-1 py-3.5 sm:py-4 px-6 rounded-2xl bg-red-600 hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs sm:text-sm uppercase tracking-wider shadow-md shadow-red-900/15 flex items-center justify-center gap-2 transition-all active:scale-[0.99] order-1 sm:order-2"
           >
             <Sparkles className="w-5 h-5 text-amber-300" />
-            <span>Retouch & Enhance with AI</span>
+            <span>Retouch & Enhance</span>
             <ArrowRight className="w-5 h-5" />
           </button>
         </div>
