@@ -6,7 +6,7 @@ import { GoogleGenAI } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 import { DEFAULT_ENHANCE_PROMPT } from './src/utils/promptSettings';
 import { isDriveConfigured, exportProductToDrive } from './driveExport';
-import { logEvent, newRequestId, readEvents, LoggedSession } from './logging';
+import { logEvent, newRequestId, readEventsMerged, isAxiomConfigured, getAxiomDataset, LoggedSession } from './logging';
 
 dotenv.config();
 
@@ -1090,14 +1090,14 @@ function percentile(sorted: number[], p: number): number {
 // per field, funnel/device breakdown, copy-edit rate, and rough cost. Every
 // figure here reads directly off logged events - nothing is estimated
 // beyond the deliberately-labeled cost figures.
-app.get('/api/analytics/summary', requireAuth, (req, res) => {
+app.get('/api/analytics/summary', requireAuth, async (req, res) => {
   const session = (req as any).session as SessionInfo;
   if (!session?.isAdmin) {
     return res.status(403).json({ error: 'Admin access required.' });
   }
 
   const days = Math.min(90, Math.max(1, Number(req.query.days) || 30));
-  const events = readEvents(days);
+  const { events, sources } = await readEventsMerged(days);
 
   const pipelineCompleted = events.filter((e) => e.type === 'pipeline.completed');
   const approved = pipelineCompleted.filter((e) => e.status === 'approved');
@@ -1159,10 +1159,74 @@ app.get('/api/analytics/summary', requireAuth, (req, res) => {
   const loginFailures = events.filter((e) => e.type === 'auth.login_failure').length;
   const loginSuccesses = events.filter((e) => e.type === 'auth.login_success').length;
 
+  // Per-staff breakdown - every event already carries `username` from the
+  // session, so this costs nothing extra to capture, only to aggregate.
+  // Useful for spotting whether a specific counter/staff member is running
+  // into more reshoots/retakes than others (which usually means a coaching
+  // opportunity, not a model problem).
+  const staffStats: Record<string, { runs: number; approved: number; reshoot: number; failed: number; retakes: number }> = {};
+  for (const e of pipelineCompleted) {
+    const u = String(e.username || 'unknown');
+    if (!staffStats[u]) staffStats[u] = { runs: 0, approved: 0, reshoot: 0, failed: 0, retakes: 0 };
+    staffStats[u].runs++;
+    if (e.status === 'approved') staffStats[u].approved++;
+    else if (e.status === 'needs_reshoot') staffStats[u].reshoot++;
+    else if (e.status === 'failed') staffStats[u].failed++;
+  }
+  for (const r of events.filter((e) => e.type === 'client.retake')) {
+    const u = String(r.username || 'unknown');
+    if (!staffStats[u]) staffStats[u] = { runs: 0, approved: 0, reshoot: 0, failed: 0, retakes: 0 };
+    staffStats[u].retakes++;
+  }
+
+  // Per-item-type breakdown - itemType is already on every pipeline.completed
+  // event, so this is free to compute. Surfaces things like "bangles fail
+  // audit far more than rings", which is a much sharper prompt-tuning signal
+  // than the checklist breakdown alone (which doesn't say WHICH items).
+  const itemTypeStats: Record<string, { runs: number; approved: number; reshoot: number; failed: number; escalated: number }> = {};
+  for (const e of pipelineCompleted) {
+    const t = String(e.itemType || 'unknown').toLowerCase();
+    if (!itemTypeStats[t]) itemTypeStats[t] = { runs: 0, approved: 0, reshoot: 0, failed: 0, escalated: 0 };
+    itemTypeStats[t].runs++;
+    if (e.status === 'approved') itemTypeStats[t].approved++;
+    else if (e.status === 'needs_reshoot') itemTypeStats[t].reshoot++;
+    else if (e.status === 'failed') itemTypeStats[t].failed++;
+    if (Number(e.attemptCount) >= 2) itemTypeStats[t].escalated++;
+  }
+
+  // Network condition at the moments staff were actively using the app -
+  // tests the original "mobile timeouts" theory directly: if timeouts
+  // cluster on '2g'/'slow-2g' effectiveType, that confirms it's a network
+  // problem rather than a server one. Only populated in browsers that
+  // support the Network Information API (mainly Chrome/Android).
+  const networkSamples = events.filter((e) => typeof e.networkEffectiveType === 'string');
+  const networkTypeCounts: Record<string, number> = {};
+  for (const n of networkSamples) {
+    const t = String(n.networkEffectiveType);
+    networkTypeCounts[t] = (networkTypeCounts[t] || 0) + 1;
+  }
+
+  const jsErrors = events.filter((e) => e.type === 'client.js_error');
+
+  const weightParseMethods = events.filter((e) => e.type === 'client.ocr_scan_applied');
+  const weightParseMethodCounts: Record<string, number> = {};
+  for (const w of weightParseMethods) {
+    const m = String(w.weightParseMethod || 'unknown');
+    weightParseMethodCounts[m] = (weightParseMethodCounts[m] || 0) + 1;
+  }
+
   res.json({
     windowDays: days,
     generatedAt: new Date().toISOString(),
     totalEventsLogged: events.length,
+    dataSources: sources,
+    sinks: {
+      axiomConfigured: isAxiomConfigured(),
+      axiomDataset: isAxiomConfigured() ? getAxiomDataset() : null,
+      note: isAxiomConfigured()
+        ? 'Events are written to local disk and forwarded to Axiom - this dashboard merges both, so history survives a restart.'
+        : 'Events are only on local disk right now, which will not survive a restart on hosts with ephemeral storage. Set AXIOM_TOKEN (see LOGGING_SETUP.md) for a durable external copy.',
+    },
     pipeline: {
       totalRuns: total,
       approved: approved.length,
@@ -1196,7 +1260,8 @@ app.get('/api/analytics/summary', requireAuth, (req, res) => {
       tagScansAttempted: ocrTagScans.length,
       tagScansApplied: ocrApplied,
       fieldCorrections: correctionsByField,
-      note: 'fieldCorrections counts how often staff had to fix an OCR-autofilled field before proceeding - a high count flags which field needs a parser/OCR-provider improvement.',
+      weightParseMethods: weightParseMethodCounts,
+      note: 'fieldCorrections counts how often staff had to fix an OCR-autofilled field before proceeding. weightParseMethods shows how the weights were actually derived (labeled = explicit GW/OW tag match, table = 3-column sequence detected, fallback = guessed from an unlabeled decimal array) - a rising share of "fallback" is the earliest warning that tag print quality or the parser needs attention, well before it shows up as a staff correction.',
     },
     funnel: {
       stepViews: stepCounts,
@@ -1219,6 +1284,27 @@ app.get('/api/analytics/summary', requireAuth, (req, res) => {
     auth: {
       loginSuccesses,
       loginFailures,
+    },
+    byStaff: Object.fromEntries(
+      Object.entries(staffStats).map(([u, s]) => [
+        u,
+        { ...s, approvalRate: s.runs ? s.approved / s.runs : null },
+      ])
+    ),
+    byItemType: Object.fromEntries(
+      Object.entries(itemTypeStats).map(([t, s]) => [
+        t,
+        { ...s, approvalRate: s.runs ? s.approved / s.runs : null, escalationRate: s.runs ? s.escalated / s.runs : null },
+      ])
+    ),
+    network: {
+      sampledEvents: networkSamples.length,
+      effectiveTypeCounts: networkTypeCounts,
+      note: 'Only populated in browsers that expose the Network Information API (mainly Chrome/Android) - if timeouts cluster on 2g/slow-2g here, that confirms a network cause rather than a server one.',
+    },
+    clientErrors: {
+      count: jsErrors.length,
+      note: 'Uncaught JS errors/promise rejections from the staff app, regardless of where they happened - a catch-all beyond the specific pipeline/copy error events above.',
     },
   });
 });

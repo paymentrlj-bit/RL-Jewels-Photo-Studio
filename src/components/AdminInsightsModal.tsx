@@ -1,10 +1,16 @@
 import React, { useEffect, useState } from 'react';
-import { X, BarChart3, RefreshCw, TrendingUp, Clock, DollarSign, ScanLine, Smartphone, AlertTriangle } from 'lucide-react';
+import { X, BarChart3, RefreshCw, TrendingUp, Clock, DollarSign, ScanLine, Smartphone, AlertTriangle, Database, Users, Wifi } from 'lucide-react';
 
 interface AnalyticsSummary {
   windowDays: number;
   generatedAt: string;
   totalEventsLogged: number;
+  dataSources: string[];
+  sinks: {
+    axiomConfigured: boolean;
+    axiomDataset: string | null;
+    note: string;
+  };
   pipeline: {
     totalRuns: number;
     approved: number;
@@ -38,6 +44,7 @@ interface AnalyticsSummary {
     tagScansAttempted: number;
     tagScansApplied: number;
     fieldCorrections: Record<string, number>;
+    weightParseMethods: Record<string, number>;
     note: string;
   };
   funnel: {
@@ -61,6 +68,17 @@ interface AnalyticsSummary {
   auth: {
     loginSuccesses: number;
     loginFailures: number;
+  };
+  byStaff: Record<string, { runs: number; approved: number; reshoot: number; failed: number; retakes: number; approvalRate: number | null }>;
+  byItemType: Record<string, { runs: number; approved: number; reshoot: number; failed: number; escalated: number; approvalRate: number | null; escalationRate: number | null }>;
+  network: {
+    sampledEvents: number;
+    effectiveTypeCounts: Record<string, number>;
+    note: string;
+  };
+  clientErrors: {
+    count: number;
+    note: string;
   };
 }
 
@@ -198,6 +216,26 @@ export const AdminInsightsModal: React.FC<AdminInsightsModalProps> = ({ isOpen, 
           </button>
         </div>
 
+        {data && (
+          <div className="px-4 sm:px-6 pt-3">
+            <div
+              className={`flex items-center gap-2 text-[11px] font-semibold px-3 py-2 rounded-xl border ${
+                data.sinks.axiomConfigured
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                  : 'bg-amber-50 border-amber-200 text-amber-800'
+              }`}
+              title={data.sinks.note}
+            >
+              <Database className="w-3.5 h-3.5 shrink-0" />
+              <span>
+                {data.sinks.axiomConfigured
+                  ? `Durable: local disk + Axiom (${data.sinks.axiomDataset})`
+                  : 'Local disk only - not durable across a restart. See LOGGING_SETUP.md.'}
+              </span>
+            </div>
+          </div>
+        )}
+
         {/* Body */}
         <div className="p-4 sm:p-6 overflow-y-auto space-y-1 flex-1">
           {error && (
@@ -267,6 +305,24 @@ export const AdminInsightsModal: React.FC<AdminInsightsModalProps> = ({ isOpen, 
                     <StatTile label="Tag Scans Attempted" value={String(data.ocr.tagScansAttempted)} />
                     <StatTile label="Applied to Form" value={String(data.ocr.tagScansApplied)} />
                   </div>
+                  {Object.keys(data.ocr.weightParseMethods).length > 0 && (
+                    <div className="flex flex-wrap gap-2 mt-2.5">
+                      {Object.entries(data.ocr.weightParseMethods).map(([method, count]) => (
+                        <span
+                          key={method}
+                          className={`text-[11px] rounded-full px-2.5 py-1 font-medium border ${
+                            method === 'labeled'
+                              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                              : method === 'fallback'
+                              ? 'bg-amber-50 border-amber-200 text-amber-800'
+                              : 'bg-white border-stone-200 text-stone-600'
+                          }`}
+                        >
+                          {method}: <strong>{count}</strong>
+                        </span>
+                      ))}
+                    </div>
+                  )}
                   {topFieldCorrections.length > 0 && (
                     <div className="bg-stone-50 border border-stone-200 rounded-2xl p-3.5 space-y-2 mt-2.5">
                       <span className="text-[10px] font-bold uppercase tracking-wider text-stone-500">Field Corrections After Scan</span>
@@ -306,6 +362,101 @@ export const AdminInsightsModal: React.FC<AdminInsightsModalProps> = ({ isOpen, 
                         </span>
                       ))}
                     </div>
+                  )}
+
+                  {(data.network.sampledEvents > 0 || data.clientErrors.count > 0) && (
+                    <>
+                      <SectionTitle icon={<Wifi className="w-3.5 h-3.5 text-red-600" />}>Network & Errors</SectionTitle>
+                      <div className="grid grid-cols-2 gap-2.5">
+                        <div className="rounded-2xl border bg-white border-stone-200 p-3.5">
+                          <div className="text-[10px] font-bold uppercase tracking-wider opacity-60">Network Samples</div>
+                          <div className="flex flex-wrap gap-1.5 mt-1.5">
+                            {Object.entries(data.network.effectiveTypeCounts).length > 0 ? (
+                              Object.entries(data.network.effectiveTypeCounts).map(([t, c]) => (
+                                <span
+                                  key={t}
+                                  className={`text-[10px] rounded-full px-2 py-0.5 font-bold border ${
+                                    t === '2g' || t === 'slow-2g'
+                                      ? 'bg-red-50 border-red-200 text-red-700'
+                                      : 'bg-stone-100 border-stone-200 text-stone-600'
+                                  }`}
+                                >
+                                  {t}: {c}
+                                </span>
+                              ))
+                            ) : (
+                              <span className="text-xs text-stone-400">Not available in this browser</span>
+                            )}
+                          </div>
+                        </div>
+                        <StatTile
+                          label="Uncaught JS Errors"
+                          value={String(data.clientErrors.count)}
+                          tone={data.clientErrors.count > 0 ? 'warn' : 'default'}
+                        />
+                      </div>
+                      <p className="text-[10px] text-stone-400 mt-1.5 px-0.5">{data.network.note}</p>
+                    </>
+                  )}
+
+                  {Object.keys(data.byItemType).length > 0 && (
+                    <>
+                      <SectionTitle icon={<TrendingUp className="w-3.5 h-3.5 text-red-600" />}>By Item Type</SectionTitle>
+                      <div className="overflow-x-auto rounded-2xl border border-stone-200">
+                        <table className="w-full text-xs">
+                          <thead className="bg-stone-50 text-stone-500">
+                            <tr>
+                              <th className="text-left px-3 py-2 font-bold uppercase tracking-wider text-[10px]">Item Type</th>
+                              <th className="text-right px-3 py-2 font-bold uppercase tracking-wider text-[10px]">Runs</th>
+                              <th className="text-right px-3 py-2 font-bold uppercase tracking-wider text-[10px]">Approval</th>
+                              <th className="text-right px-3 py-2 font-bold uppercase tracking-wider text-[10px]">Escalation</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-stone-100">
+                            {Object.entries(data.byItemType)
+                              .sort((a, b) => b[1].runs - a[1].runs)
+                              .map(([type, s]) => (
+                                <tr key={type}>
+                                  <td className="px-3 py-2 font-semibold text-stone-800 capitalize">{type}</td>
+                                  <td className="px-3 py-2 text-right text-stone-600">{s.runs}</td>
+                                  <td className="px-3 py-2 text-right text-stone-600">{fmtPct(s.approvalRate)}</td>
+                                  <td className="px-3 py-2 text-right text-stone-600">{fmtPct(s.escalationRate)}</td>
+                                </tr>
+                              ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
+                  )}
+
+                  {Object.keys(data.byStaff).length > 0 && (
+                    <>
+                      <SectionTitle icon={<Users className="w-3.5 h-3.5 text-red-600" />}>By Staff</SectionTitle>
+                      <div className="overflow-x-auto rounded-2xl border border-stone-200">
+                        <table className="w-full text-xs">
+                          <thead className="bg-stone-50 text-stone-500">
+                            <tr>
+                              <th className="text-left px-3 py-2 font-bold uppercase tracking-wider text-[10px]">Staff</th>
+                              <th className="text-right px-3 py-2 font-bold uppercase tracking-wider text-[10px]">Runs</th>
+                              <th className="text-right px-3 py-2 font-bold uppercase tracking-wider text-[10px]">Approval</th>
+                              <th className="text-right px-3 py-2 font-bold uppercase tracking-wider text-[10px]">Retakes</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-stone-100">
+                            {Object.entries(data.byStaff)
+                              .sort((a, b) => b[1].runs - a[1].runs)
+                              .map(([user, s]) => (
+                                <tr key={user}>
+                                  <td className="px-3 py-2 font-semibold text-stone-800">{user}</td>
+                                  <td className="px-3 py-2 text-right text-stone-600">{s.runs}</td>
+                                  <td className="px-3 py-2 text-right text-stone-600">{fmtPct(s.approvalRate)}</td>
+                                  <td className="px-3 py-2 text-right text-stone-600">{s.retakes}</td>
+                                </tr>
+                              ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
                   )}
 
                   {data.drive.attempts > 0 && (

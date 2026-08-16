@@ -1,0 +1,41 @@
+# External Log Sink Setup (Axiom)
+
+By default, every event the app logs (pipeline runs, AI call outcomes, tag scans, staff actions, errors) is written to local disk (`logs/` on the server). That's fast and needs zero setup, but if this server runs on a host with **ephemeral container storage** - recycled on every redeploy or after an idle period - local history disappears with it, and so would the Studio Insights dashboard's numbers.
+
+Setting `AXIOM_TOKEN` turns on a second, durable copy: every event is also forwarded to [Axiom](https://axiom.co), a free-tier log/analytics service built for exactly this kind of structured event data. Nothing else changes - local logging still happens the same way, and everything still works exactly as before if you never set this up.
+
+## Why Axiom (over Better Stack or Sentry)
+
+All three offer a free tier, but they're built for different jobs:
+- **Sentry** is an error/crash tracker - not a great fit for business events like "which audit check failed" or "which weight field got corrected."
+- **Better Stack** is strong for log tailing and incident alerting.
+- **Axiom** is built specifically for ingesting structured JSON events and querying them back programmatically (via its API and query language, APL) - which is exactly what the Studio Insights dashboard needs to pull real numbers back out, not just view logs in someone else's UI.
+
+## How it works here
+
+- Every `logEvent()` call writes to local disk **and** queues the same event for Axiom, sent in small batches (not one request per event).
+- `/api/analytics/summary` reads local disk first, and - if Axiom is configured - also queries Axiom and merges the two sets (de-duplicated by each event's ID), so the dashboard keeps working identically either way and only gets *more* durable once Axiom is on.
+- If Axiom is unreachable, misconfigured, or the token is wrong, everything degrades gracefully to local-only data - nothing breaks, no request ever fails because of this.
+
+## Setup steps
+
+1. Create a free account at [axiom.co](https://axiom.co).
+2. Create a **dataset** - name it `rl-jewels-events` (or pick your own name and set `AXIOM_DATASET` to match).
+3. Create an **API token** with ingest and query permissions for that dataset (Settings → API Tokens in the Axiom console).
+4. Set these environment variables on your hosting provider (same place you set `GEMINI_API_KEY`):
+   - `AXIOM_TOKEN` - the API token from step 3.
+   - `AXIOM_DATASET` - optional, defaults to `rl-jewels-events` if you used that name in step 2.
+5. Restart the server. The Studio Insights dashboard will show a green "Durable: local disk + Axiom" badge once events start flowing through; it shows an amber "Local disk only" badge until then.
+
+## What you get
+
+- **Durability**: history survives restarts/redeploys, no matter how your host manages disk.
+- **A second place to look**: you can also browse the raw event stream directly in the Axiom console (dataset: whatever you set `AXIOM_DATASET` to) for ad-hoc digging beyond what the built-in dashboard shows - useful if you ever want to slice the data in a way the dashboard doesn't offer yet.
+
+## Honest caveat
+
+The ingest side (sending events to Axiom) is a simple, stable POST request and is the lower-risk half of this integration. The query side (reading events back out to power the dashboard) depends on the exact shape of Axiom's API response, which could not be verified live against a real Axiom account/token in this environment. It's built defensively - any mismatch just means the dashboard silently falls back to local-only data rather than breaking - but it's worth checking once you've set up a real account: open Studio Insights, confirm the badge says "local disk + Axiom," and let your developer know if the numbers look off so the query parsing can be corrected.
+
+## Free tier note
+
+Axiom's free tier limits can change - check [axiom.co/pricing](https://axiom.co/pricing) for current numbers. For a single-store internal tool logging a few hundred events per product processed, usage should sit comfortably within any reasonable free tier.

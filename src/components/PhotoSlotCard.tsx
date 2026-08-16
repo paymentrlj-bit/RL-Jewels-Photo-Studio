@@ -26,10 +26,12 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
 
   const runPreflight = async (dataUrl: string, sourceFile?: File, method: 'in-app-camera' | 'gallery-upload' = 'in-app-camera') => {
     const isRetake = Boolean(photo.originalImage);
+    const originalBytesApprox = Math.round((dataUrl.length * 3) / 4);
     setIsChecking(true);
     try {
       const downscaled = await downscaleImage(dataUrl);
       onUpdateImage(downscaled);
+      const downscaledBytesApprox = Math.round((downscaled.length * 3) / 4);
 
       const [quality, flashFired] = await Promise.all([
         analyzeImageQuality(downscaled),
@@ -43,7 +45,13 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
         });
       }
       setPreflightIssues(issues);
-      logClientEvent('capture_completed', { method, isRetake, issueCodes: issues.map((i) => i.code) });
+      logClientEvent('capture_completed', {
+        method,
+        isRetake,
+        issueCodes: issues.map((i) => i.code),
+        originalBytesApprox,
+        downscaledBytesApprox,
+      });
       if (isRetake) logClientEvent('retake', { method });
     } finally {
       setIsChecking(false);

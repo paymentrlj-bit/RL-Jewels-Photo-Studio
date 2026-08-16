@@ -383,6 +383,13 @@ export function parseJewelryTagText(
   let grossWeight = existing?.grossWeight || '0.000';
   let otherWeight = existing?.otherWeight || '0.000';
   let netWeight = existing?.netWeight || '0.000';
+  // Tracks HOW the weights were actually derived - 'labeled' (an explicit
+  // GW/OW/NW tag was matched) is far more trustworthy than 'fallback' (guessed
+  // from an unlabeled array of decimals). Logged alongside every scan so
+  // /api/analytics/summary can show whether OCR is finding real labels or
+  // increasingly having to guess - an early-warning signal for tag print
+  // quality issues, well before it shows up as a staff correction.
+  let weightParseMethod: 'labeled' | 'table' | 'fallback' | 'none' = existing?.weightParseMethod || 'none';
 
   // Pass A: Explicit Label Matching with OCR repairs
   // GW: Gross Weight
@@ -390,7 +397,10 @@ export function parseJewelryTagText(
   const gwMatch = clean.match(gwRegex);
   if (gwMatch && gwMatch[1]) {
     const cleanedVal = cleanOcrNumber(gwMatch[1]);
-    if (cleanedVal) grossWeight = cleanedVal;
+    if (cleanedVal) {
+      grossWeight = cleanedVal;
+      weightParseMethod = 'labeled';
+    }
   }
 
   // OW: Other Weight (Stones, dori, enamel)
@@ -426,6 +436,7 @@ export function parseJewelryTagText(
       grossWeight = c1;
       otherWeight = c2;
       netWeight = c3;
+      weightParseMethod = 'table';
     }
   }
 
@@ -436,6 +447,10 @@ export function parseJewelryTagText(
     const validNums = allDecimals
       .map((d) => parseFloat(cleanOcrNumber(d)))
       .filter((n) => !isNaN(n) && n > 0 && n < 5000); // realistic jewelry gram weights
+
+    if (validNums.length >= 1) {
+      weightParseMethod = 'fallback';
+    }
 
     if (validNums.length >= 2) {
       // Find pair where A - B = C or max is GW and second is NW
@@ -581,6 +596,7 @@ export function parseJewelryTagText(
     otherWeight: otherWeight || '0.000',
     netWeight: netWeight || grossWeight || '0.000',
     size,
+    weightParseMethod,
   };
 }
 
@@ -601,12 +617,14 @@ export function mergeScannedTagData(
     otherWeight: '0.000',
     netWeight: '0.000',
     size: side1?.size && side1.size !== 'DEFAULT' ? side1.size : side2?.size || 'DEFAULT',
+    weightParseMethod: 'none',
   };
 
   // Determine best weights (prefer values > 0)
   const gw1 = parseFloat(side1?.grossWeight || '0');
   const gw2 = parseFloat(side2?.grossWeight || '0');
   const bestGw = gw2 > 0 ? side2!.grossWeight! : gw1 > 0 ? side1!.grossWeight! : '0.000';
+  base.weightParseMethod = gw2 > 0 ? side2?.weightParseMethod || 'none' : gw1 > 0 ? side1?.weightParseMethod || 'none' : 'none';
 
   const ow1 = parseFloat(side1?.otherWeight || '0');
   const ow2 = parseFloat(side2?.otherWeight || '0');

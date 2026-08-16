@@ -31,6 +31,10 @@ export interface ScannedProductData {
   netWeight: string;
   size?: string;
   label?: string;
+  // How the weights were actually derived - 'labeled' (explicit GW/OW/NW tag
+  // match) is far more trustworthy than 'fallback' (guessed from an
+  // unlabeled decimal array). Logged with every scan for accuracy tracking.
+  weightParseMethod?: 'labeled' | 'table' | 'fallback' | 'none';
 }
 
 interface BarcodeScannerModalProps {
@@ -470,6 +474,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
         itemType: finalData.itemType,
         purity: finalData.purity,
         capturedBothSides: Boolean(side1Data && side2Data),
+        weightParseMethod: finalData.weightParseMethod || 'none',
       });
       onScanSuccess(finalData);
       onClose();
