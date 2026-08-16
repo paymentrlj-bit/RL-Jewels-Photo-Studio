@@ -16,6 +16,7 @@ import { ExportStep } from './components/ExportStep';
 import { LoginModal, getStoredUserSession, saveStoredUserSession } from './components/LoginModal';
 import { useNetworkStatus } from './utils/useNetworkStatus';
 import { getStoredPromptConfig } from './utils/promptSettings';
+import { logClientEvent } from './utils/analytics';
 import { WifiOff } from 'lucide-react';
 
 function createInitialPhoto(): PhotoItem {
@@ -91,6 +92,14 @@ export default function App() {
       })
       .catch((err) => console.log('Health check note:', err));
   }, []);
+
+  // Records the staff funnel through the wizard - which steps get reached,
+  // and (via /api/analytics/summary) where people stall out. Fires on every
+  // step change, not just forward progress, since going back is signal too.
+  useEffect(() => {
+    logClientEvent('step_view', { step: currentStep, itemType, photoStatus: photo.status });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentStep]);
 
   const handleLoginSuccess = (session: UserSession) => {
     setCurrentUser(session);
@@ -260,6 +269,7 @@ export default function App() {
       applyPipelineResult(data);
     } catch (err: any) {
       console.error('Processing error:', err);
+      logClientEvent('pipeline_error', { context: 'submit', message: String(err?.message || err) });
       setPhoto((prev) => ({
         ...prev,
         status: 'failed',
@@ -285,8 +295,9 @@ export default function App() {
         setPhoto((prev) => ({ ...prev, processingStage: stage }));
       });
       applyPipelineResult(data);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Regenerate error:', err);
+      logClientEvent('pipeline_error', { context: 'regenerate', message: String(err?.message || err) });
       setPhoto((prev) => ({
         ...prev,
         status: 'failed',
@@ -316,6 +327,10 @@ export default function App() {
   const [productDescription, setProductDescription] = useState('');
   const [isGeneratingCopy, setIsGeneratingCopy] = useState(false);
   const [copyGeneratedForImage, setCopyGeneratedForImage] = useState<string | null>(null);
+  // Immutable snapshot of what the model generated, kept purely so a later
+  // edit can be measured against it - productName/productDescription
+  // themselves get overwritten the moment staff edit the fields.
+  const [generatedCopyBaseline, setGeneratedCopyBaseline] = useState<{ name: string; description: string } | null>(null);
 
   // Writes a customer-facing name + description once staff actually approve a
   // photo - not on every AI pass, since plenty of AI-approved photos get
@@ -348,9 +363,11 @@ export default function App() {
       if (data.success) {
         setProductName(data.name);
         setProductDescription(data.description);
+        setGeneratedCopyBaseline({ name: data.name, description: data.description });
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('generate-copy error:', err);
+      logClientEvent('copy_error', { message: String(err?.message || err) });
     } finally {
       setIsGeneratingCopy(false);
     }
@@ -358,12 +375,24 @@ export default function App() {
 
   const handleUpdateReviewDecision = (decision: ReviewDecision) => {
     setPhoto((prev) => ({ ...prev, reviewDecision: decision }));
+    logClientEvent('review_decision', {
+      decision,
+      auditModelUsed: photo.modelUsed,
+      auditAttemptCount: photo.attemptCount,
+      isSample: photo.isSample,
+    });
     if (decision === 'approved') {
       generateProductCopy();
     }
   };
 
   const handleProceedToExport = () => {
+    if (generatedCopyBaseline) {
+      logClientEvent('copy_edited', {
+        nameChanged: productName !== generatedCopyBaseline.name,
+        descriptionChanged: productDescription !== generatedCopyBaseline.description,
+      });
+    }
     setCurrentStep('export');
   };
 
@@ -380,6 +409,7 @@ export default function App() {
     setNetWeight('8.250');
     setProductDescription('');
     setCopyGeneratedForImage(null);
+    setGeneratedCopyBaseline(null);
     setPhoto(createInitialPhoto());
     setCurrentStep('capture');
   };
