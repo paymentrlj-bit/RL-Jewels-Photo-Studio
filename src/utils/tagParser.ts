@@ -495,6 +495,15 @@ export function parseJewelryTagText(
     }
   }
 
+  // Other Weight (stones/dori/enamel) is physically always less than Gross
+  // Weight - it's a component of it. A common OCR/label-matching failure is
+  // the two getting swapped (e.g. the GW/OW regex pair matching the wrong
+  // number for each label), which this would otherwise silently ship. Swap
+  // them back if that's clearly what happened.
+  if (parseFloat(otherWeight) > 0 && parseFloat(grossWeight) > 0 && parseFloat(otherWeight) > parseFloat(grossWeight)) {
+    [grossWeight, otherWeight] = [otherWeight, grossWeight];
+  }
+
   // Ensure mathematical integrity: Net = Gross - Other
   const parsedGw = parseFloat(grossWeight) || 0;
   const parsedOw = parseFloat(otherWeight) || 0;

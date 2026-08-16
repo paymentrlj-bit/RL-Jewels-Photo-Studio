@@ -495,7 +495,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
             <div>
               <h3 className="font-bold text-stone-900 text-base">Jewelry Tag Scanner</h3>
               <p className="text-xs text-stone-500 font-medium flex items-center gap-1">
-                <Zap className="w-3 h-3 text-amber-600 inline" /> Sub-Second AI Extraction
+                <Zap className="w-3 h-3 text-amber-600 inline" /> Sub-Second Extraction
               </p>
             </div>
           </div>
@@ -783,7 +783,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
             <div className="bg-stone-100 border border-stone-200 rounded-xl p-2.5 space-y-1">
               <span className="text-[10px] uppercase font-bold text-stone-500 flex items-center gap-1">
                 <FileText className="w-3 h-3" />
-                <span>AI Extracted Text:</span>
+                <span>Extracted Text:</span>
               </span>
               <p className="text-xs font-mono text-stone-700 bg-white p-2 rounded border border-stone-200 whitespace-pre-line break-words max-h-20 overflow-y-auto">
                 {rawExtractedText}

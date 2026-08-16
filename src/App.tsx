@@ -201,7 +201,7 @@ export default function App() {
         setPhoto((prev) => ({
           ...prev,
           status: 'failed',
-          failureReason: data.reason || 'AI enhancement failed. Please try again.',
+          failureReason: data.reason || 'Enhancement failed. Please try again.',
           debugDetail: data.debugDetail,
           reviewDecision: 'pending',
         }));
@@ -253,7 +253,7 @@ export default function App() {
         setPhoto((prev) => ({
           ...prev,
           status: 'failed',
-          failureReason: data.reason || 'AI enhancement failed. Please try again.',
+          failureReason: data.reason || 'Enhancement failed. Please try again.',
           debugDetail: data.debugDetail,
           reviewDecision: 'pending',
         }));
@@ -345,7 +345,7 @@ export default function App() {
             <div>
               <span className="font-bold text-sm text-amber-900 block">You're offline</span>
               <span className="text-amber-800 text-xs">
-                Photo capture works, but AI enhancement needs a connection. Reconnect before submitting.
+                Photo capture works, but enhancement needs a connection. Reconnect before submitting.
               </span>
             </div>
           </div>

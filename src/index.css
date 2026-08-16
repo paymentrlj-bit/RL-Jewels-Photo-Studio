@@ -1,5 +1,21 @@
 @import "tailwindcss";
 
+/* iOS Safari auto-zooms the whole page in when a focused form field's font
+ * is under 16px, and does not reliably zoom back out once the field is
+ * blurred - that's the "have to pinch out to see everything" bug on phones.
+ * Several inputs use smaller Tailwind text sizes for visual density; this
+ * rule is deliberately unlayered (outside @layer) so it beats the utility
+ * layer regardless of which text-size class an individual field also has,
+ * without having to hunt down and change every input's class individually.
+ */
+@media (max-width: 767px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
 @layer base {
   body {
     font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;

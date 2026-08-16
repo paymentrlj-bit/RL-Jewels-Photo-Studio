@@ -65,7 +65,7 @@ export const Header: React.FC<HeaderProps> = ({
               className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-red-50 border border-red-300 text-red-800 text-[11px] font-bold shadow-xs"
               title="Server has no GEMINI_API_KEY configured"
             >
-              <span>AI Offline</span>
+              <span>Studio Offline</span>
             </div>
           )}
 

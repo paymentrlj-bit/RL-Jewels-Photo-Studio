@@ -149,10 +149,10 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
             <WifiOff className="w-6 h-6 text-amber-600 shrink-0 mt-0.5" />
             <div>
               <h3 className="font-serif italic font-bold text-base sm:text-lg text-amber-900">
-                AI Enhancement Failed
+                Enhancement Failed
               </h3>
               <p className="text-xs sm:text-sm text-stone-700 mt-1 leading-relaxed">
-                <strong>Reason:</strong> {photo.failureReason || 'The AI service did not respond.'}
+                <strong>Reason:</strong> {photo.failureReason || 'The service did not respond.'}
               </p>
               <p className="text-[11px] text-stone-500 mt-1">
                 This is a service hiccup, not a problem with your photo - no need to retake, just try again.
@@ -187,7 +187,7 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
               <span className="font-serif italic font-bold text-lg text-stone-900">{photo.title}</span>
               {photo.isSample ? (
                 <span className="text-[10px] bg-amber-50 text-amber-800 px-2.5 py-0.5 rounded-full border border-amber-200 font-bold uppercase tracking-wider">
-                  Demo Sample - Not AI Enhanced
+                  Demo Sample - Not Enhanced
                 </span>
               ) : (
                 <span className="text-[10px] bg-emerald-50 text-emerald-700 px-2.5 py-0.5 rounded-full border border-emerald-200 font-bold uppercase tracking-wider">
@@ -202,7 +202,7 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
               <div className="flex items-center justify-between text-xs">
                 <span className="font-bold text-stone-800 flex items-center gap-1">
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
-                  <span>AI Enhanced</span>
+                  <span>Studio Enhanced</span>
                 </span>
               </div>
               <div className="aspect-square bg-stone-50 border border-stone-200 rounded-2xl overflow-hidden flex items-center justify-center p-3 relative shadow-xs">
