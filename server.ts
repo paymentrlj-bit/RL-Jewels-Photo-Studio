@@ -6,7 +6,7 @@ import { GoogleGenAI } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 import { DEFAULT_ENHANCE_PROMPT } from './src/utils/promptSettings';
 import { isDriveConfigured, exportProductToDrive } from './driveExport';
-import { logEvent, newRequestId, readEventsMerged, isAxiomConfigured, getAxiomDataset, LoggedSession } from './logging';
+import { logEvent, newRequestId, readEventsForAnalytics, isAxiomConfigured, getAxiomDataset, LoggedSession } from './logging';
 
 dotenv.config();
 
@@ -1097,8 +1097,25 @@ app.get('/api/analytics/summary', requireAuth, async (req, res) => {
   }
 
   const days = Math.min(90, Math.max(1, Number(req.query.days) || 30));
-  const { events, sources } = await readEventsMerged(days);
 
+  // When Axiom is configured, readEventsForAnalytics reads EXCLUSIVELY from
+  // it (no local fallback) - so a failure here is real and worth surfacing
+  // with detail, not swallowing into a generic error the admin can't act on.
+  let events: Awaited<ReturnType<typeof readEventsForAnalytics>>['events'];
+  let sources: string[];
+  try {
+    ({ events, sources } = await readEventsForAnalytics(days));
+  } catch (err: any) {
+    console.error('Failed to read analytics events:', err?.message || err);
+    return res.status(502).json({
+      error: isAxiomConfigured()
+        ? 'Could not load analytics from Axiom.'
+        : 'Could not load analytics from local logs.',
+      debugDetail: debugDetail(err),
+    });
+  }
+
+  try {
   const pipelineCompleted = events.filter((e) => e.type === 'pipeline.completed');
   const approved = pipelineCompleted.filter((e) => e.status === 'approved');
   const reshoot = pipelineCompleted.filter((e) => e.status === 'needs_reshoot');
@@ -1224,7 +1241,7 @@ app.get('/api/analytics/summary', requireAuth, async (req, res) => {
       axiomConfigured: isAxiomConfigured(),
       axiomDataset: isAxiomConfigured() ? getAxiomDataset() : null,
       note: isAxiomConfigured()
-        ? 'Events are written to local disk and forwarded to Axiom - this dashboard merges both, so history survives a restart.'
+        ? 'This dashboard reads exclusively from Axiom (durable, survives a restart). Events are still also written to local disk as a fast local buffer, but local disk is not used for these numbers.'
         : 'Events are only on local disk right now, which will not survive a restart on hosts with ephemeral storage. Set AXIOM_TOKEN (see LOGGING_SETUP.md) for a durable external copy.',
     },
     pipeline: {
@@ -1307,6 +1324,10 @@ app.get('/api/analytics/summary', requireAuth, async (req, res) => {
       note: 'Uncaught JS errors/promise rejections from the staff app, regardless of where they happened - a catch-all beyond the specific pipeline/copy error events above.',
     },
   });
+  } catch (err: any) {
+    console.error('Failed to compute analytics summary:', err?.message || err);
+    res.status(500).json({ error: 'Could not compute analytics summary.', debugDetail: debugDetail(err) });
+  }
 });
 
 // ---------------------------------------------------------------------------

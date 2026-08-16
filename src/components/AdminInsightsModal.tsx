@@ -131,8 +131,18 @@ export const AdminInsightsModal: React.FC<AdminInsightsModalProps> = ({ isOpen, 
     setLoading(true);
     setError('');
     fetch(`/api/analytics/summary?days=${windowDays}`)
-      .then((res) => {
-        if (!res.ok) throw new Error(res.status === 403 ? 'Admin access required.' : 'Could not load analytics.');
+      .then(async (res) => {
+        if (!res.ok) {
+          if (res.status === 403) throw new Error('Admin access required.');
+          let detail = '';
+          try {
+            const body = await res.json();
+            detail = body?.debugDetail ? ` - ${body.debugDetail}` : body?.error ? ` - ${body.error}` : '';
+          } catch {
+            // response wasn't JSON - fall through with no extra detail
+          }
+          throw new Error(`Could not load analytics.${detail}`);
+        }
         return res.json();
       })
       .then((d) => setData(d))
@@ -229,7 +239,7 @@ export const AdminInsightsModal: React.FC<AdminInsightsModalProps> = ({ isOpen, 
               <Database className="w-3.5 h-3.5 shrink-0" />
               <span>
                 {data.sinks.axiomConfigured
-                  ? `Durable: local disk + Axiom (${data.sinks.axiomDataset})`
+                  ? `Durable: reading exclusively from Axiom (${data.sinks.axiomDataset})`
                   : 'Local disk only - not durable across a restart. See LOGGING_SETUP.md.'}
               </span>
             </div>
