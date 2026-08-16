@@ -248,13 +248,19 @@ export async function queryAxiomEvents(days: number): Promise<LogEvent[]> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), AXIOM_QUERY_TIMEOUT_MS);
   try {
-    const res = await fetch('https://api.axiom.co/v1/datasets/_apl', {
+    // 'format' is required by Axiom's APL query API, but as a URL query
+    // parameter, NOT a JSON body field (confirmed against Axiom's official
+    // Go client, which hardcodes ?format=tabular) - sending it in the body
+    // still throws "format in query is required", since the API never reads
+    // it from there. 'tabular' returns the { tables: [...] } columnar shape,
+    // which parseAxiomEvents already handles.
+    const res = await fetch('https://api.axiom.co/v1/datasets/_apl?format=tabular', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${AXIOM_TOKEN}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ apl, format: 'legacy' }),
+      body: JSON.stringify({ apl }),
       signal: controller.signal,
     });
     if (!res.ok) {
