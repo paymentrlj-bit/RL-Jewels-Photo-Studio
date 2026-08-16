@@ -13,9 +13,10 @@ All three offer a free tier, but they're built for different jobs:
 
 ## How it works here
 
-- Every `logEvent()` call writes to local disk **and** queues the same event for Axiom, sent in small batches (not one request per event).
-- `/api/analytics/summary` reads local disk first, and - if Axiom is configured - also queries Axiom and merges the two sets (de-duplicated by each event's ID), so the dashboard keeps working identically either way and only gets *more* durable once Axiom is on.
-- If Axiom is unreachable, misconfigured, or the token is wrong, everything degrades gracefully to local-only data - nothing breaks, no request ever fails because of this.
+- Every `logEvent()` call writes to local disk **and** queues the same event for Axiom, sent in small batches (not one request per event). Local disk stays a fast write-side buffer even once Axiom is on.
+- `/api/analytics/summary` reads **exclusively from Axiom once it's configured** - not a merge with local disk. This is deliberate: the dashboard should reflect one single source of truth, not a mix of a durable store and a possibly-stale local buffer.
+- If Axiom is configured but the query itself fails (bad token, wrong dataset, network issue, unexpected response format), that failure is now surfaced directly in the dashboard as a real error message (with detail) instead of being silently hidden - so a misconfiguration is something you can see and fix, not something that just quietly shows incomplete numbers.
+- If `AXIOM_TOKEN` is never set at all, the dashboard reads local disk as before - nothing about that path changes.
 
 ## Setup steps
 
@@ -25,7 +26,7 @@ All three offer a free tier, but they're built for different jobs:
 4. Set these environment variables on your hosting provider (same place you set `GEMINI_API_KEY`):
    - `AXIOM_TOKEN` - the API token from step 3.
    - `AXIOM_DATASET` - optional, defaults to `rl-jewels-events` if you used that name in step 2.
-5. Restart the server. The Studio Insights dashboard will show a green "Durable: local disk + Axiom" badge once events start flowing through; it shows an amber "Local disk only" badge until then.
+5. Restart the server. The Studio Insights dashboard will show a green "Durable: reading exclusively from Axiom" badge; it shows an amber "Local disk only" badge until `AXIOM_TOKEN` is set.
 
 ## What you get
 
@@ -34,7 +35,11 @@ All three offer a free tier, but they're built for different jobs:
 
 ## Honest caveat
 
-The ingest side (sending events to Axiom) is a simple, stable POST request and is the lower-risk half of this integration. The query side (reading events back out to power the dashboard) depends on the exact shape of Axiom's API response, which could not be verified live against a real Axiom account/token in this environment. It's built defensively - any mismatch just means the dashboard silently falls back to local-only data rather than breaking - but it's worth checking once you've set up a real account: open Studio Insights, confirm the badge says "local disk + Axiom," and let your developer know if the numbers look off so the query parsing can be corrected.
+The ingest side (sending events to Axiom) is a simple, stable POST request and is the lower-risk half of this integration. The query side (reading events back out to power the dashboard) depends on the exact shape of Axiom's API response - it now handles the two response shapes Axiom's APL query API is documented to use, and reports a specific, readable error (shown right in the dashboard, e.g. "Axiom query failed with HTTP 401" or "Unrecognized Axiom query response shape") if something doesn't match, rather than failing silently or generically. If you see an error in Studio Insights after setup:
+- **HTTP 401/403** - the token is wrong or lacks query permission on the dataset. Re-check the token in the Axiom console.
+- **HTTP 404** - the dataset name doesn't match `AXIOM_DATASET` (or the default `rl-jewels-events`). Check the exact dataset name in the Axiom console.
+- **"Unrecognized Axiom query response shape"** - Axiom's API returned something the parser doesn't recognize yet. Please report this (with the error text shown) so the parser can be updated.
+- **Timeout** - a network issue between your host and Axiom; try again, and check your host's outbound network policy if it persists.
 
 ## Free tier note
 

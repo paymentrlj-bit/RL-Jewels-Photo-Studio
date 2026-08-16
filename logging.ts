@@ -14,12 +14,18 @@ import crypto from 'crypto';
 // future-proof as the process evolves.
 //
 // Local disk is always written to first (fast, zero setup, works out of the
-// box). If AXIOM_TOKEN is set (see LOGGING_SETUP.md), every event is ALSO
-// forwarded to Axiom - a durable, queryable external log sink - so history
-// survives a redeploy/idle-restart on a host with ephemeral container
-// storage. /api/analytics/summary reads from both and merges them (by each
-// event's `id`), so the dashboard keeps working identically whether or not
-// Axiom is configured, and automatically gets more durable once it is.
+// box) as a fast local buffer. If AXIOM_TOKEN is set (see LOGGING_SETUP.md),
+// every event is ALSO forwarded to Axiom - a durable, queryable external log
+// sink - so history survives a redeploy/idle-restart on a host with
+// ephemeral container storage.
+//
+// Once Axiom is configured, /api/analytics/summary reads EXCLUSIVELY from
+// Axiom, not local disk - by request, so the dashboard's numbers always
+// reflect one single source of truth rather than a merge of a durable store
+// and a possibly-stale local buffer. If the Axiom query itself fails, that
+// failure is surfaced as a real error (not silently papered over with local
+// data), so a misconfiguration is visible and diagnosable instead of just
+// quietly showing incomplete numbers.
 
 const LOG_DIR = path.join(process.cwd(), 'logs');
 let dirEnsured = false;
@@ -177,17 +183,70 @@ export function readEvents(days: number): LogEvent[] {
   return out;
 }
 
-// Queries Axiom for events in the last `days` days via APL (Axiom's
-// query language). Deliberately asks for raw rows, not a server-side
-// aggregation - the exact same JS aggregation code that already runs
-// against local JSONL runs against these rows too, so there's only one
-// aggregation code path to trust, not two. Defensive on every front: any
-// non-2xx response, network error, or unexpected response shape just
-// returns an empty array so the caller falls back to local-only data.
+const AXIOM_QUERY_TIMEOUT_MS = 15_000;
+
+// Axiom's APL query API has returned events under a couple of different
+// response shapes across API versions - this handles both defensively:
+//   1. { matches: [ { data: {...event fields...} }, ... ] }
+//   2. { tables: [ { fields: [{name}], columns: [[...],[...],...] } ] } (columnar)
+// Throws a descriptive error if neither shape is recognized, rather than
+// silently returning nothing - an unrecognized shape is a bug worth seeing,
+// not swallowing.
+function parseAxiomEvents(body: any): LogEvent[] {
+  if (Array.isArray(body?.matches)) {
+    return body.matches
+      .map((m: any) => (m && typeof m === 'object' && m.data && typeof m.data === 'object' ? m.data : m))
+      .filter((e: any) => e && typeof e === 'object' && typeof e.type === 'string');
+  }
+
+  if (Array.isArray(body?.tables) && body.tables.length > 0) {
+    const table = body.tables[0];
+    const fieldNames: string[] = Array.isArray(table?.fields)
+      ? table.fields.map((f: any) => f?.name).filter((n: any) => typeof n === 'string')
+      : [];
+    const columns: any[][] = Array.isArray(table?.columns) ? table.columns : [];
+    if (fieldNames.length > 0 && columns.length > 0) {
+      const rowCount = columns[0]?.length || 0;
+      const rows: LogEvent[] = [];
+      for (let i = 0; i < rowCount; i++) {
+        const row: any = {};
+        fieldNames.forEach((name, colIdx) => {
+          row[name] = columns[colIdx]?.[i];
+        });
+        const candidate = row.data && typeof row.data === 'object' ? row.data : row;
+        if (candidate && typeof candidate.type === 'string') rows.push(candidate);
+      }
+      return rows;
+    }
+    // A table with zero matching rows is a legitimate, valid result (e.g. a
+    // brand new dataset) - not a parse failure.
+    if (fieldNames.length === 0 && columns.length === 0) return [];
+  }
+
+  // An explicitly empty/absent result set (e.g. Axiom omits both keys when
+  // there's nothing to return) is also legitimate, not a parse failure.
+  if (body && typeof body === 'object' && !('matches' in body) && !('tables' in body)) {
+    if (body.status && typeof body.status === 'object') return [];
+  }
+
+  throw new Error(
+    `Unrecognized Axiom query response shape (keys: ${body && typeof body === 'object' ? Object.keys(body).join(', ') : typeof body}). ` +
+    'The query API response format may have changed - please report this so the parser can be updated.'
+  );
+}
+
+// Queries Axiom for events in the last `days` days via APL (Axiom's query
+// language). Asks for raw rows, not a server-side aggregation - the exact
+// same JS aggregation code that already runs against local JSONL runs
+// against these rows too, so there's only one aggregation code path to
+// trust, not two. Throws on any failure (network, non-2xx, unrecognized
+// response shape) - callers decide whether to surface or fall back.
 export async function queryAxiomEvents(days: number): Promise<LogEvent[]> {
   if (!isAxiomConfigured()) return [];
   const safeDataset = AXIOM_DATASET.replace(/'/g, "\\'");
   const apl = `['${safeDataset}'] | where _time > ago(${Math.max(1, Math.round(days))}d) | limit 50000`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), AXIOM_QUERY_TIMEOUT_MS);
   try {
     const res = await fetch('https://api.axiom.co/v1/datasets/_apl', {
       method: 'POST',
@@ -196,40 +255,34 @@ export async function queryAxiomEvents(days: number): Promise<LogEvent[]> {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ apl }),
+      signal: controller.signal,
     });
     if (!res.ok) {
-      console.warn(`Axiom query responded with ${res.status} - falling back to local-only data.`);
-      return [];
+      const errText = await res.text().catch(() => '');
+      throw new Error(`Axiom query failed with HTTP ${res.status}${errText ? `: ${errText.slice(0, 300)}` : ` (${res.statusText})`}`);
     }
     const body: any = await res.json();
-    const matches = Array.isArray(body?.matches) ? body.matches : [];
-    return matches
-      .map((m: any) => (m && typeof m === 'object' && m.data && typeof m.data === 'object' ? m.data : m))
-      .filter((e: any) => e && typeof e === 'object' && typeof e.type === 'string');
-  } catch (err) {
-    console.warn('Axiom query error (falling back to local-only data):', (err as any)?.message);
-    return [];
+    return parseAxiomEvents(body);
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      throw new Error(`Axiom query timed out after ${AXIOM_QUERY_TIMEOUT_MS / 1000}s.`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
-// The single entry point /api/analytics/summary should use: local disk is
-// always the baseline (fast, always available), and when Axiom is
-// configured its events are merged in by `id` so nothing is double-counted.
-// Axiom failing for any reason (misconfigured token, network hiccup, wrong
-// dataset) degrades to local-only data rather than breaking the dashboard.
-export async function readEventsMerged(days: number): Promise<{ events: LogEvent[]; sources: string[] }> {
-  const localEvents = readEvents(days);
-  if (!isAxiomConfigured()) {
-    return { events: localEvents, sources: ['local'] };
+// The single entry point /api/analytics/summary should use. When Axiom is
+// configured, it is the EXCLUSIVE source - no merge with local disk, and a
+// query failure propagates as a real error rather than silently degrading
+// to local data, so a misconfiguration is visible instead of just quietly
+// showing incomplete numbers. Local disk remains the source when Axiom
+// isn't configured at all.
+export async function readEventsForAnalytics(days: number): Promise<{ events: LogEvent[]; sources: string[] }> {
+  if (isAxiomConfigured()) {
+    const axiomEvents = await queryAxiomEvents(days);
+    return { events: axiomEvents, sources: ['axiom'] };
   }
-
-  const axiomEvents = await queryAxiomEvents(days);
-  if (axiomEvents.length === 0) {
-    return { events: localEvents, sources: ['local'] };
-  }
-
-  const byId = new Map<string, LogEvent>();
-  for (const e of localEvents) byId.set(String(e.id || `${e.ts}-${e.type}-${Math.random()}`), e);
-  for (const e of axiomEvents) byId.set(String(e.id || `${e.ts}-${e.type}-${Math.random()}`), e);
-  return { events: Array.from(byId.values()), sources: ['local', 'axiom'] };
+  return { events: readEvents(days), sources: ['local'] };
 }
