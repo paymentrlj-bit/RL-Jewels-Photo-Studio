@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Download, FileSpreadsheet, Archive, Copy, Check, PlusCircle, CheckCircle2 } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Download, FileSpreadsheet, Archive, Copy, Check, PlusCircle, CheckCircle2, CloudUpload, ExternalLink } from 'lucide-react';
 import { ProductRecord } from '../types';
 import { downloadProductZip, downloadCsvFile, generateErpCsv } from '../utils/exportUtils';
 
@@ -11,6 +11,45 @@ interface ExportStepProps {
 export const ExportStep: React.FC<ExportStepProps> = ({ product, onStartNewProduct }) => {
   const [isZipping, setIsZipping] = useState(false);
   const [copiedCsv, setCopiedCsv] = useState(false);
+  const [driveConfigured, setDriveConfigured] = useState(false);
+  const [driveStatus, setDriveStatus] = useState<'idle' | 'uploading' | 'done' | 'error'>('idle');
+  const [driveError, setDriveError] = useState('');
+  const [driveFolderLink, setDriveFolderLink] = useState('');
+
+  useEffect(() => {
+    fetch('/api/drive-status')
+      .then((res) => res.json())
+      .then((data) => setDriveConfigured(Boolean(data.configured)))
+      .catch(() => setDriveConfigured(false));
+  }, []);
+
+  const handleUploadToDrive = async () => {
+    setDriveStatus('uploading');
+    setDriveError('');
+    try {
+      const res = await fetch('/api/export-to-drive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cpc: displayCpc,
+          itemType: product.itemType,
+          photoBase64: product.photo.processedImage || product.photo.originalImage,
+          metadataCsv: csvString,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setDriveStatus('done');
+        setDriveFolderLink(data.folderLink);
+      } else {
+        setDriveStatus('error');
+        setDriveError(data.error || 'Upload failed.');
+      }
+    } catch (err: any) {
+      setDriveStatus('error');
+      setDriveError('Could not reach the server.');
+    }
+  };
 
   const displayCpc = product.cpc || product.sku;
 
@@ -169,6 +208,50 @@ export const ExportStep: React.FC<ExportStepProps> = ({ product, onStartNewProdu
           </div>
         </div>
       </div>
+
+      {driveConfigured && (
+        <div className="bg-white border border-stone-200 rounded-3xl p-6 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-xs hover:border-blue-400/40 transition-colors">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 rounded-2xl bg-blue-50 border border-blue-200 flex items-center justify-center text-blue-600 shrink-0">
+              <CloudUpload className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="font-serif italic font-bold text-lg text-stone-900">
+                Option C: Upload to Google Drive
+              </h3>
+              <p className="text-xs text-stone-500 mt-1">
+                Saves the photo + data file into a folder for "{product.itemType}" in your Drive.
+              </p>
+              {driveStatus === 'error' && (
+                <p className="text-xs text-red-600 mt-1 font-medium">{driveError}</p>
+              )}
+            </div>
+          </div>
+
+          {driveStatus === 'done' ? (
+            <a
+              href={driveFolderLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="shrink-0 py-3.5 px-5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 font-bold text-xs sm:text-sm uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors"
+            >
+              <CheckCircle2 className="w-4 h-4" />
+              <span>Uploaded - Open Folder</span>
+              <ExternalLink className="w-3.5 h-3.5" />
+            </a>
+          ) : (
+            <button
+              type="button"
+              onClick={handleUploadToDrive}
+              disabled={driveStatus === 'uploading'}
+              className="shrink-0 py-3.5 px-5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold text-xs sm:text-sm uppercase tracking-wider shadow-xs flex items-center justify-center gap-1.5 transition-colors"
+            >
+              <CloudUpload className="w-4 h-4" />
+              <span>{driveStatus === 'uploading' ? 'Uploading…' : driveStatus === 'error' ? 'Retry Upload' : 'Upload to Drive'}</span>
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="bg-white border border-stone-200 rounded-3xl p-5 sm:p-6 text-stone-900 space-y-3 shadow-xs">
         <div className="flex items-center justify-between">
