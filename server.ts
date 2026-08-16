@@ -783,6 +783,70 @@ Correct this specific issue while still following every rule above.`;
 });
 
 // ---------------------------------------------------------------------------
+// Product copy generation: a customer-facing name + description, written
+// once a staff member actually approves a photo (not on every AI pass -
+// plenty of AI-approved photos get regenerated or retaken before a human
+// signs off, and there's no reason to spend a call writing copy for a photo
+// that might not ship). Uses the small/cheap text-and-vision model, not an
+// image-generation model - this is a text response, not another image edit.
+// ---------------------------------------------------------------------------
+
+app.post('/api/generate-copy', requireAuth, async (req, res) => {
+  const { imageBase64, itemType, purity, gender, weight, size } = req.body;
+  if (!imageBase64) {
+    return res.status(400).json({ error: 'Missing imageBase64 data' });
+  }
+
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return res.json({ success: false, error: 'GEMINI_API_KEY is not configured on the server.' });
+  }
+
+  const match = imageBase64.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,(.+)$/);
+  const mimeType = match ? match[1] : 'image/jpeg';
+  const cleanBase64 = match ? match[2] : imageBase64;
+
+  const prompt = `You are writing catalogue copy for "RL Jewels", an Indian fine jewelry retailer, for the studio-finished product photo attached.
+Item: ${purity || '22kt'} gold ${itemType || 'jewellery'}, for ${gender || "women's"}${size && size !== 'DEFAULT' ? `, size ${size}` : ''}${weight ? `, ${weight}g` : ''}.
+
+Write:
+1. "name" - a short, specific, appealing product name (5-9 words) that names what's actually visible in the photo (its motif, style, or form) - not a generic label like "Gold Ring". Avoid superlatives that aren't visually earned ("stunning", "exquisite") - let the specific description do the selling.
+2. "description" - 2-3 sentences a customer would read right next to this photo. Describe only what is genuinely visible (the design, finish, setting style, any visible motifs or texture) - never invent stones, engravings, or features not shown. Mention the purity naturally. Write like a knowledgeable jeweler, not ad copy.
+
+Respond ONLY as JSON: {"name": string, "description": string}`;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), AUDIT_TIMEOUT_MS);
+  try {
+    const ai = getGeminiClient();
+    const response = await withTransientRetry(
+      () =>
+        ai.models.generateContent({
+          model: MODEL_AUDIT,
+          contents: {
+            parts: [{ inlineData: { mimeType, data: cleanBase64 } }, { text: prompt }],
+          },
+          config: {
+            responseMimeType: 'application/json',
+            abortSignal: controller.signal,
+          } as any,
+        }),
+      2
+    );
+    const parsed = JSON.parse(response.text?.trim() || '{}');
+    if (!parsed.name || !parsed.description) {
+      return res.json({ success: false, error: 'The model did not return usable copy.' });
+    }
+    return res.json({ success: true, name: String(parsed.name), description: String(parsed.description) });
+  } catch (err: any) {
+    console.error('generate-copy failed:', err?.message || err);
+    return res.json({ success: false, error: debugDetail(err) });
+  } finally {
+    clearTimeout(timeout);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Vite middleware / static production serving
 // ---------------------------------------------------------------------------
 

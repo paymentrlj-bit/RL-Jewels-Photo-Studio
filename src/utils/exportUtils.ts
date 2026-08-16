@@ -51,6 +51,7 @@ export function generateErpCsv(product: ProductRecord): string {
   const headers = [
     'CPC',
     'product_name',
+    'product_description',
     'item_type',
     'gold_purity',
     'gender_category',
@@ -74,6 +75,7 @@ export function generateErpCsv(product: ProductRecord): string {
   const row = [
     escapeCsv(cpc),
     escapeCsv(product.name || `${product.purity} ${product.itemType}`),
+    escapeCsv(product.description || ''),
     escapeCsv(product.itemType),
     escapeCsv(product.purity),
     escapeCsv(product.gender),

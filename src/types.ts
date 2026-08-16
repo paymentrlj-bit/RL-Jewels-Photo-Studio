@@ -51,6 +51,7 @@ export interface ProductRecord {
   sku: string; // CPC Number (e.g. RLJ-RN-8821)
   cpc: string; // Primary Counter Product Code
   name: string;
+  description?: string;
   itemType: string;
   purity: GoldPurity;
   gender: ProductGender;

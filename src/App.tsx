@@ -313,8 +313,54 @@ export default function App() {
     }, 100);
   };
 
+  const [productDescription, setProductDescription] = useState('');
+  const [isGeneratingCopy, setIsGeneratingCopy] = useState(false);
+  const [copyGeneratedForImage, setCopyGeneratedForImage] = useState<string | null>(null);
+
+  // Writes a customer-facing name + description once staff actually approve a
+  // photo - not on every AI pass, since plenty of AI-approved photos get
+  // regenerated or retaken before a human signs off, and there's no reason to
+  // spend a call writing copy for a photo that might not ship.
+  const generateProductCopy = async (force = false) => {
+    if (!photo.processedImage || photo.isSample) return;
+    if (!force && copyGeneratedForImage === photo.processedImage) return;
+
+    setIsGeneratingCopy(true);
+    setCopyGeneratedForImage(photo.processedImage);
+    try {
+      const res = await fetch('/api/generate-copy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          imageBase64: photo.processedImage,
+          itemType,
+          purity,
+          gender,
+          weight: netWeight || grossWeight,
+          size,
+        }),
+      });
+      if (res.status === 401) {
+        setIsLoginModalOpen(true);
+        return;
+      }
+      const data = await res.json();
+      if (data.success) {
+        setProductName(data.name);
+        setProductDescription(data.description);
+      }
+    } catch (err) {
+      console.error('generate-copy error:', err);
+    } finally {
+      setIsGeneratingCopy(false);
+    }
+  };
+
   const handleUpdateReviewDecision = (decision: ReviewDecision) => {
     setPhoto((prev) => ({ ...prev, reviewDecision: decision }));
+    if (decision === 'approved') {
+      generateProductCopy();
+    }
   };
 
   const handleProceedToExport = () => {
@@ -332,6 +378,8 @@ export default function App() {
     setGrossWeight('8.500');
     setOtherWeight('0.250');
     setNetWeight('8.250');
+    setProductDescription('');
+    setCopyGeneratedForImage(null);
     setPhoto(createInitialPhoto());
     setCurrentStep('capture');
   };
@@ -341,6 +389,7 @@ export default function App() {
     sku: cpc,
     cpc,
     name: productName,
+    description: productDescription,
     itemType,
     purity,
     gender,
@@ -461,6 +510,11 @@ export default function App() {
             sku={cpc}
             cpc={cpc}
             productName={productName}
+            setProductName={setProductName}
+            productDescription={productDescription}
+            setProductDescription={setProductDescription}
+            isGeneratingCopy={isGeneratingCopy}
+            onRegenerateCopy={() => generateProductCopy(true)}
             itemType={itemType}
             purity={purity}
             gender={gender}
