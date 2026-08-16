@@ -240,6 +240,7 @@ Compare IMAGE 2 against IMAGE 1 and grade it. Respond ONLY as JSON matching this
   "colorConsistentAcrossSurface": boolean, // is the color/white-balance correction UNIFORM across the entire piece? Look closely at motifs, engraved details, and recessed/shadowed areas - fail this if any sub-region of the piece (e.g. around a motif) has a visibly different color cast than the open/flat metal surfaces around it. This patchy, inconsistent correction is a common failure - check it carefully.
   "clearlyIdentifiableCategory": boolean, // is the item unmistakably recognizable as a "${context.itemType}" at a glance, with its defining structural features clearly visible (e.g. a ring/bangle's interior opening, a chain's link structure and clasp)?
   "matchesOriginalDesign": boolean, // CRITICAL: does image 2 show the exact same design as image 1, with no added, removed, or altered engravings, motifs, stones, proportions, or band/chain profile? (Note: a different camera angle/pose than image 1 is fine and expected - only judge the actual design, not the viewpoint.)
+  "naturalDropPhysics": boolean, // If this piece has hanging chains, mesh, tassels, or ball/bead drops (e.g. jhumka, chandbali, bali, layered haars, charm bracelets): do they fall in smooth, symmetric, gravity-consistent curves - NOT tangled, kinked, flattened, pinched, or bent at an implausible angle? Is the exact number of chain strands, links, balls, or beads the SAME as in image 1 (none added or dropped)? If the two earrings/sides of a pair are both visible, are their drops symmetric to each other? If the item has no hanging/repeated drop elements at all, this is automatically true.
   "overallPass": boolean,       // true only if ALL of the above are true
   "reason": string              // if overallPass is false, a short, specific, staff-facing reason naming which check failed and why (e.g. "The enhanced image added a decorative pattern to the band that isn't on the original piece."). If overallPass is true, a short confirmation.
 }`;
@@ -271,6 +272,7 @@ Compare IMAGE 2 against IMAGE 1 and grade it. Respond ONLY as JSON matching this
       colorConsistentAcrossSurface: Boolean(parsed.colorConsistentAcrossSurface),
       clearlyIdentifiableCategory: Boolean(parsed.clearlyIdentifiableCategory),
       matchesOriginalDesign: Boolean(parsed.matchesOriginalDesign),
+      naturalDropPhysics: Boolean(parsed.naturalDropPhysics),
     };
     const overallPass = typeof parsed.overallPass === 'boolean' ? parsed.overallPass : Object.values(checklist).every(Boolean);
     return {
