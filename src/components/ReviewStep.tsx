@@ -11,6 +11,8 @@ import {
   WifiOff,
 } from 'lucide-react';
 import { PhotoItem, GoldPurity, ProductGender, ReviewDecision } from '../types';
+import { ProcessingStatusCard } from './ProcessingStatusCard';
+import { Loader2 } from 'lucide-react';
 
 interface ReviewStepProps {
   sku: string;
@@ -55,6 +57,7 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
     reader.readAsDataURL(file);
   };
 
+  const isProcessing = photo.status === 'processing';
   const isReshoot = photo.status === 'needs_reshoot';
   const isFailed = photo.status === 'failed';
   const isApproved = photo.status === 'approved';
@@ -87,6 +90,12 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
         </div>
 
         <div className="flex items-center gap-2 text-xs">
+          {isProcessing && (
+            <span className="px-3 py-1 rounded-full bg-stone-100 border border-stone-200 text-stone-600 font-bold flex items-center gap-1.5 uppercase tracking-wider text-[11px]">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              <span>Processing</span>
+            </span>
+          )}
           {isApproved && (
             <span className="px-3 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 font-bold flex items-center gap-1.5 uppercase tracking-wider text-[11px]">
               <CheckCircle2 className="w-3.5 h-3.5" />
@@ -108,7 +117,14 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
         </div>
       </div>
 
-      {isReshoot ? (
+      {isProcessing ? (
+        <div className="space-y-4">
+          <ProcessingStatusCard photo={photo} />
+          <div className="max-w-md mx-auto aspect-square bg-stone-50 rounded-2xl overflow-hidden border border-stone-200 relative flex items-center justify-center">
+            <img src={photo.originalImage} alt="Raw Counter Photo" className="w-full h-full object-contain" />
+          </div>
+        </div>
+      ) : isReshoot ? (
         <div className="bg-white border-2 border-red-200 rounded-3xl p-5 sm:p-7 text-stone-900 space-y-4 shadow-xs">
           <div className="flex items-start gap-3 bg-red-50 border border-red-200 p-4 rounded-2xl">
             <AlertTriangle className="w-6 h-6 text-red-500 shrink-0 mt-0.5" />

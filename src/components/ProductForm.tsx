@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { Sparkles, Scan, ChevronRight, Scale, User, ShieldAlert, Calculator, CheckCircle2, Ruler } from 'lucide-react';
-import { GoldPurity, ProductGender, ITEM_TYPE_SUGGESTIONS } from '../types';
+import { GoldPurity, ProductGender, ITEM_TYPE_SUGGESTIONS, PhotoItem } from '../types';
 import { BarcodeScannerModal, ScannedProductData } from './BarcodeScannerModal';
+import { ProcessingStatusCard } from './ProcessingStatusCard';
 
 interface ProductFormProps {
   cpc: string;
@@ -24,6 +25,8 @@ interface ProductFormProps {
   setNetWeight: (val: string) => void;
   staffName: string;
   setStaffName: (val: string) => void;
+  photo: PhotoItem;
+  onRetryProcessing: () => void;
   onProceed: () => void;
 }
 
@@ -48,6 +51,8 @@ export const ProductForm: React.FC<ProductFormProps> = ({
   setNetWeight,
   staffName,
   setStaffName,
+  photo,
+  onRetryProcessing,
   onProceed,
 }) => {
   const [showTypeSuggestions, setShowTypeSuggestions] = useState(false);
@@ -129,13 +134,16 @@ export const ProductForm: React.FC<ProductFormProps> = ({
   );
 
   return (
+    <div className="space-y-4 sm:space-y-5">
+      <ProcessingStatusCard photo={photo} onRetry={onRetryProcessing} />
+
     <div className="bg-white border border-stone-200 rounded-3xl p-4 sm:p-7 text-stone-900 shadow-xs space-y-5 sm:space-y-6">
-      
+
       {/* Header title */}
       <div className="flex flex-wrap items-center justify-between border-b border-stone-100 pb-3 sm:pb-4 gap-2">
         <div>
           <span className="text-red-600 font-mono text-[11px] sm:text-xs uppercase tracking-widest font-bold">
-            Step 01 • Product Entry
+            Step 02 • Product Details
           </span>
           <h2 className="text-xl sm:text-2xl font-serif italic font-bold text-stone-900 mt-0.5">
             Jewelry Specification
@@ -272,9 +280,12 @@ export const ProductForm: React.FC<ProductFormProps> = ({
           )}
         </div>
 
-        {/* Quick Suggestion Chips */}
+        {/* Quick Suggestion Chips - curated common categories, not an
+            alphabetical slice of the 673-term taxonomy (that starts with
+            obscure entries like "Abhishekpatra"). Everything else is still
+            reachable via the search field above. */}
         <div className="mt-2.5 flex flex-wrap gap-2">
-          {ITEM_TYPE_SUGGESTIONS.slice(0, 8).map((suggestion) => {
+          {['Ring', 'Chain', 'Necklace', 'Bangle', 'Earrings', 'Pendant', 'Bracelet', 'Mangalsutra'].map((suggestion) => {
             const isSelected = itemType.toLowerCase() === suggestion.toLowerCase();
             return (
               <button
@@ -470,7 +481,7 @@ export const ProductForm: React.FC<ProductFormProps> = ({
           onClick={handleValidateAndProceed}
           className="min-h-[52px] w-full py-4 px-6 rounded-2xl bg-red-600 hover:bg-red-700 text-white font-bold text-sm uppercase tracking-wider shadow-md shadow-red-900/15 flex items-center justify-center gap-2 transition-all active:scale-[0.99]"
         >
-          <span>Next: Capture Photos ({itemType ? itemType.toUpperCase() : 'PIECE'})</span>
+          <span>Next: Review Photo</span>
           <ChevronRight className="w-4 h-4" />
         </button>
       </div>
@@ -482,6 +493,7 @@ export const ProductForm: React.FC<ProductFormProps> = ({
         onScanSuccess={handleScanSuccess}
       />
 
+    </div>
     </div>
   );
 };
