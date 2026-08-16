@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 import { DEFAULT_ENHANCE_PROMPT } from './src/utils/promptSettings';
+import { isDriveConfigured, exportProductToDrive } from './driveExport';
 
 dotenv.config();
 
@@ -843,6 +844,42 @@ Respond ONLY as JSON: {"name": string, "description": string}`;
     return res.json({ success: false, error: debugDetail(err) });
   } finally {
     clearTimeout(timeout);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Google Drive export: uploads the approved photo + a data CSV into a
+// category-organized folder structure in the store's own Drive. Uses a
+// service account with a folder shared to it (see DRIVE_SETUP.md) - no
+// Google Workspace required. Entirely optional: if the two env vars aren't
+// set, /api/drive-status reports it as unavailable and the UI hides the
+// option, exactly like the GEMINI_API_KEY-missing pattern elsewhere.
+// ---------------------------------------------------------------------------
+
+app.get('/api/drive-status', requireAuth, (req, res) => {
+  res.json({ configured: isDriveConfigured() });
+});
+
+app.post('/api/export-to-drive', requireAuth, async (req, res) => {
+  if (!isDriveConfigured()) {
+    return res.json({ success: false, error: 'Google Drive export is not configured on this server.' });
+  }
+  const { cpc, itemType, photoBase64, metadataCsv } = req.body;
+  if (!cpc || !photoBase64 || !metadataCsv) {
+    return res.status(400).json({ success: false, error: 'Missing cpc, photoBase64, or metadataCsv.' });
+  }
+  try {
+    const result = await exportProductToDrive({
+      cpc,
+      itemType: itemType || 'Uncategorized',
+      photoBase64,
+      photoMimeType: 'image/jpeg',
+      metadataCsv,
+    });
+    return res.json({ success: true, ...result });
+  } catch (err: any) {
+    console.error('export-to-drive failed:', err?.message || err);
+    return res.json({ success: false, error: debugDetail(err) });
   }
 });
 

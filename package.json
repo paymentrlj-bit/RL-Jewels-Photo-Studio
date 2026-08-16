@@ -20,6 +20,7 @@
     "@zxing/library": "^0.23.0",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
+    "google-auth-library": "^11.0.2",
     "jsqr": "^1.4.0",
     "jszip": "^3.10.1",
     "lucide-react": "^0.546.0",
