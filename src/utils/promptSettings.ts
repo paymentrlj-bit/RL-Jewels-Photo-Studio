@@ -27,6 +27,9 @@ export const DEFAULT_ENHANCE_PROMPT = `You are a professional jewelry product ph
 * Do NOT add any engraving, motif, pattern, gemstone, or decorative element that is not clearly visible in the original photo.
 * Do NOT remove or simplify any engraving, motif, pattern, or stone that IS visible in the original photo.
 * Do NOT change proportions, band/chain thickness, cross-section, stone count, stone cut, or setting style, even if they look informal or imperfect as photographed.
+* Do NOT "idealize" or "upgrade" the design by adding decorative complexity that isn't there - for example, never replace a single center/feature stone with a cluster of multiple smaller stones, and never add facets, motifs, or embellishments a jeweler would consider an enhancement. The design is finished and fixed exactly as photographed, not a draft to be improved.
+* Do NOT force symmetry onto a piece that is intentionally asymmetric in real life - e.g. a pair of earrings whose two sides genuinely end in different decorative elements, or a design with an intentionally off-center motif. Reproduce the exact asymmetry shown; do not "correct" it into a symmetric version that does not exist on the physical piece.
+* For chains, necklaces, and haars: preserve the EXACT number of visible strands. Never merge multiple strands into one, or split a single strand into several.
 
 ===== GEOMETRY: center and straighten, but you choose the best angle =====
 * The piece must be perfectly centered in the frame and not tilted or crooked.

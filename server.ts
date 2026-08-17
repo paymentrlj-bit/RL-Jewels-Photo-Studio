@@ -66,18 +66,23 @@ const COST_PER_CALL_USD: Record<string, number> = {
   [MODEL_SEGMENT]: Number(process.env.COST_SEGMENT_USD) || 0.001,
 };
 
-// Per-call-type timeouts. These used to share one 75s constant, including for
-// the audit call - but audit is a small JSON/vision call (observed 3-10s),
-// not an image-generation call, and its own default 3-attempt retry meant a
-// single audit could theoretically eat up to 225s if it kept stalling.
+// Per-call-type timeouts.
 //
-// ENHANCE_TIMEOUT_MS was previously 50s, which real-world usage showed is
-// routinely too tight for the image-generation call itself (staff reported
-// repeated "Enhancement service did not respond" failures whose technical
-// detail was literally our own AbortController firing at 50s, not a host/
-// proxy timeout - the SSE heartbeat every 8s rules that out). Raised to 90s
-// to match how long this call can legitimately take under real load.
-const ENHANCE_TIMEOUT_MS = 90_000;
+// ENHANCE_TIMEOUT_MS went 50s -> 90s in an earlier fix, but Axiom data from a
+// real failure batch (2026-08-16 ~20:00-21:42 UTC, well after the 90s fix
+// was live) showed that was solving the wrong problem: every single timeout
+// across all three models (enhance, audit, and the escalated tier) landed
+// within a few MILLISECONDS of the exact configured ceiling - 50001-50002ms
+// when the limit was 50s, 90000-90003ms once it was 90s. Genuine successful
+// enhance calls in the very same window averaged ~15-20s. That combination
+// (near-zero variance exactly at the ceiling, real successes nowhere close
+// to it) is the signature of a call that hangs and never returns - a stalled
+// connection, not a model that occasionally needs more time. A bigger
+// timeout doesn't fix a hang, it just makes staff wait longer for the same
+// eventual failure. Lowered back to 45s and paired with one more retry
+// attempt (2 -> 3) so a hung connection gets abandoned and retried with a
+// fresh one sooner, within a similar or lower worst-case total wait.
+const ENHANCE_TIMEOUT_MS = 45_000;
 const AUDIT_TIMEOUT_MS = 20_000;
 const SEGMENT_TIMEOUT_MS = 15_000;
 
@@ -85,11 +90,12 @@ const SEGMENT_TIMEOUT_MS = 15_000;
 // individual per-call timeouts and retries stack. Once this elapses, the
 // pipeline stops retrying and returns a clear, fast "failed, please retry"
 // response instead of silently running for minutes until some proxy or
-// hosting platform kills the connection out from under it. Raised alongside
-// ENHANCE_TIMEOUT_MS so a single slow-but-real enhance attempt (up to 90s)
-// still leaves room for its retry and the audit stage before the budget
-// cuts things off.
-const PIPELINE_BUDGET_MS = 220_000;
+// hosting platform kills the connection out from under it. A worst-case
+// first-pass cycle (enhance at 3 attempts + audit at 3 attempts) alone can
+// take up to ~215s, so this is sized with enough margin above that for the
+// escalated retry path to genuinely get a shot at running, not just start
+// and immediately hit the deadline.
+const PIPELINE_BUDGET_MS = 300_000;
 
 // A short, sanitized version of the real error for the response body - the
 // Gemini SDK's error messages are human-readable API errors, not secrets, and
@@ -798,13 +804,15 @@ Every point inside this outline is part of the SAME physical piece described abo
     let enhanced: EnhanceResult | null = null;
     try {
       sendEvent({ stage: 'enhancing', attempt: 1 });
-      // Only 2 attempts here (not the default 3) - each can take up to
-      // ENHANCE_TIMEOUT_MS, and staff are waiting at the counter for this.
+      // 3 attempts at ENHANCE_TIMEOUT_MS each - real timeouts turned out to be
+      // stalled connections, not genuine slowness (see ENHANCE_TIMEOUT_MS
+      // comment above), so an extra shot at a fresh connection matters more
+      // here than a longer per-attempt wait.
       enhanced = await withHeartbeat(
         'enhancing',
         withTransientRetry(
           () => enhanceImage(ai, MODEL_ENHANCE_DEFAULT, cleanBase64, mimeType, promptTemplate + contextBlock + segmentationBlock),
-          2,
+          3,
           deadline,
           recordAttempt('enhance', MODEL_ENHANCE_DEFAULT)
         )
@@ -840,7 +848,7 @@ Every point inside this outline is part of the SAME physical piece described abo
       'auditing',
       withTransientRetry(
         () => auditOutput(ai, cleanBase64, mimeType, enhanced!.imageBase64, enhanced!.mimeType, auditContext),
-        2,
+        3,
         deadline,
         recordAttempt('audit', MODEL_AUDIT)
       )
@@ -877,7 +885,7 @@ Correct this specific issue while still following every rule above.`;
           'escalating',
           withTransientRetry(
             () => enhanceImage(ai, MODEL_ENHANCE_ESCALATED, cleanBase64, mimeType, correctivePrompt),
-            2,
+            3,
             deadline,
             recordAttempt('enhance-escalated', MODEL_ENHANCE_ESCALATED)
           )
@@ -889,7 +897,7 @@ Correct this specific issue while still following every rule above.`;
             'auditing',
             withTransientRetry(
               () => auditOutput(ai, cleanBase64, mimeType, retryEnhanced.imageBase64, retryEnhanced.mimeType, auditContext),
-              2,
+              3,
               deadline,
               recordAttempt('audit', MODEL_AUDIT)
             )
