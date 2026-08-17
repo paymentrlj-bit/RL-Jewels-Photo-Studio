@@ -1,5 +1,5 @@
-import React, { useRef, useState } from 'react';
-import { Camera, Upload, Trash2, CheckCircle2, Eye, Sparkles, AlertTriangle } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Camera, Upload, Trash2, CheckCircle2, Eye, Sparkles, AlertTriangle, Aperture } from 'lucide-react';
 import { PhotoItem, PreflightIssue } from '../types';
 import { CameraModal } from './CameraModal';
 import { downscaleImage, analyzeImageQuality, checkFlashFired } from '../utils/imagePreflight';
@@ -23,8 +23,18 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
   const [showPreviewModal, setShowPreviewModal] = useState(false);
   const [preflightIssues, setPreflightIssues] = useState<PreflightIssue[]>([]);
   const [isChecking, setIsChecking] = useState(false);
+  const [dslrAvailable, setDslrAvailable] = useState(false);
+  const [isDslrCapturing, setIsDslrCapturing] = useState(false);
+  const [dslrError, setDslrError] = useState('');
 
-  const runPreflight = async (dataUrl: string, sourceFile?: File, method: 'in-app-camera' | 'gallery-upload' = 'in-app-camera') => {
+  useEffect(() => {
+    fetch('/api/dslr-capture/status')
+      .then((res) => res.json())
+      .then((d) => setDslrAvailable(Boolean(d?.available)))
+      .catch(() => setDslrAvailable(false));
+  }, []);
+
+  const runPreflight = async (dataUrl: string, sourceFile?: File, method: 'in-app-camera' | 'gallery-upload' | 'dslr-capture' = 'in-app-camera') => {
     const isRetake = Boolean(photo.originalImage);
     const originalBytesApprox = Math.round((dataUrl.length * 3) / 4);
     setIsChecking(true);
@@ -74,6 +84,23 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
 
   const handleCameraCapture = (dataUrl: string) => {
     runPreflight(dataUrl);
+  };
+
+  const handleDslrCapture = async () => {
+    setDslrError('');
+    setIsDslrCapturing(true);
+    try {
+      const res = await fetch('/api/dslr-capture', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data?.error || 'Studio camera capture failed.');
+      }
+      await runPreflight(data.imageBase64, undefined, 'dslr-capture');
+    } catch (err: any) {
+      setDslrError(err?.message || 'Studio camera capture failed. Check the camera is connected and try again.');
+    } finally {
+      setIsDslrCapturing(false);
+    }
   };
 
   const hasImage = Boolean(photo.originalImage);
@@ -143,8 +170,19 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
         )}
       </div>
 
+      {isDslrCapturing && (
+        <div className="text-[11px] text-stone-400 text-center py-1">Capturing from studio camera…</div>
+      )}
+
       {isChecking && (
         <div className="text-[11px] text-stone-400 text-center py-1">Checking photo quality…</div>
+      )}
+
+      {dslrError && (
+        <div className="mt-1 mb-1 bg-red-50 border border-red-200 text-red-800 text-[11px] px-3 py-2 rounded-xl flex items-start gap-2">
+          <AlertTriangle className="w-3.5 h-3.5 text-red-600 shrink-0 mt-0.5" />
+          <span>{dslrError}</span>
+        </div>
       )}
 
       {!isChecking && preflightIssues.length > 0 && (
@@ -164,19 +202,31 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
       <div className="mt-3 pt-2.5 border-t border-stone-100 flex items-center gap-2">
         {hasImage ? (
           <div className="w-full flex items-center gap-2">
+            {dslrAvailable && (
+              <button
+                type="button"
+                onClick={handleDslrCapture}
+                disabled={isDslrCapturing}
+                className="min-h-[44px] flex-1 py-2.5 px-4 rounded-xl bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white text-xs font-bold flex items-center justify-center gap-2 transition-colors uppercase tracking-wider"
+              >
+                <Aperture className="w-4 h-4" />
+                <span>Retake (Studio Camera)</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setShowCameraModal(true)}
-              className="min-h-[44px] flex-1 py-2.5 px-4 rounded-xl bg-stone-100 hover:bg-stone-200 text-stone-800 text-xs font-bold flex items-center justify-center gap-2 border border-stone-200 transition-colors uppercase tracking-wider"
+              className={`min-h-[44px] py-2.5 px-4 rounded-xl bg-stone-100 hover:bg-stone-200 text-stone-800 text-xs font-bold flex items-center justify-center gap-2 border border-stone-200 transition-colors uppercase tracking-wider ${dslrAvailable ? '' : 'flex-1'}`}
             >
               <Camera className="w-4 h-4 text-red-600" />
-              <span>Retake</span>
+              <span>{dslrAvailable ? 'Phone' : 'Retake'}</span>
             </button>
             <button
               type="button"
               onClick={() => {
                 onRemoveImage();
                 setPreflightIssues([]);
+                setDslrError('');
               }}
               className="min-h-[44px] min-w-[44px] py-2.5 px-3.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 text-xs font-semibold border border-red-200 transition-colors flex items-center justify-center"
               title="Delete Photo"
@@ -186,16 +236,40 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
           </div>
         ) : (
           <div className="w-full flex flex-col sm:flex-row items-stretch gap-2">
-            <button
-              type="button"
-              onClick={() => setShowCameraModal(true)}
-              className="min-h-[44px] flex-1 py-3 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-xs sm:text-sm uppercase tracking-wider flex items-center justify-center gap-2 shadow-xs active:scale-95 transition-all"
-            >
-              <Camera className="w-4 h-4 text-white" />
-              <span>Camera Capture</span>
-            </button>
+            {dslrAvailable ? (
+              <button
+                type="button"
+                onClick={handleDslrCapture}
+                disabled={isDslrCapturing}
+                className="min-h-[44px] flex-1 py-3 px-4 rounded-xl bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white font-bold text-xs sm:text-sm uppercase tracking-wider flex items-center justify-center gap-2 shadow-xs active:scale-95 transition-all"
+              >
+                <Aperture className="w-4 h-4 text-white" />
+                <span>{isDslrCapturing ? 'Capturing…' : 'Capture from Studio Camera'}</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setShowCameraModal(true)}
+                className="min-h-[44px] flex-1 py-3 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-xs sm:text-sm uppercase tracking-wider flex items-center justify-center gap-2 shadow-xs active:scale-95 transition-all"
+              >
+                <Camera className="w-4 h-4 text-white" />
+                <span>Camera Capture</span>
+              </button>
+            )}
 
             <div className="flex items-center gap-2 justify-center">
+              {dslrAvailable && (
+                <button
+                  type="button"
+                  onClick={() => setShowCameraModal(true)}
+                  className="min-h-[44px] px-3.5 rounded-xl bg-stone-100 hover:bg-stone-200 text-stone-700 border border-stone-200 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                  title="Use Phone Camera Instead"
+                >
+                  <Camera className="w-4 h-4" />
+                  <span className="hidden sm:inline">Phone</span>
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={() => {
