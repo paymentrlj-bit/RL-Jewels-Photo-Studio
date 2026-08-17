@@ -17,7 +17,7 @@ interface QueuedEvent {
 let queue: QueuedEvent[] = [];
 let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
-function isMobileUserAgent(): boolean {
+export function isMobileUserAgent(): boolean {
   try {
     return /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
   } catch {

@@ -3,7 +3,7 @@ import { Camera, Upload, Trash2, CheckCircle2, Eye, Sparkles, AlertTriangle, Ape
 import { PhotoItem, PreflightIssue } from '../types';
 import { CameraModal } from './CameraModal';
 import { downscaleImage, analyzeImageQuality, checkFlashFired } from '../utils/imagePreflight';
-import { logClientEvent } from '../utils/analytics';
+import { logClientEvent, isMobileUserAgent } from '../utils/analytics';
 
 interface PhotoSlotCardProps {
   photo: PhotoItem;
@@ -26,6 +26,7 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
   const [dslrAvailable, setDslrAvailable] = useState(false);
   const [isDslrCapturing, setIsDslrCapturing] = useState(false);
   const [dslrError, setDslrError] = useState('');
+  const [isMobile] = useState(() => isMobileUserAgent());
 
   useEffect(() => {
     fetch('/api/dslr-capture/status')
@@ -33,6 +34,16 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
       .then((d) => setDslrAvailable(Boolean(d?.available)))
       .catch(() => setDslrAvailable(false));
   }, []);
+
+  // Both capture methods are reachable from either device (the DSLR endpoint
+  // is just a normal API call, so a phone on the same network can trigger it
+  // too) - this only decides which one is FEATURED as the default per
+  // device. Someone on the station's laptop is standing at the lightbox, so
+  // the studio camera is the obvious default there. Someone on their phone
+  // is presumably not standing at the fixed station, so their own camera
+  // stays the default - the studio camera is still one tap away if they are.
+  const dslrIsPrimary = dslrAvailable && !isMobile;
+  const dslrIsSecondaryOption = dslrAvailable && isMobile;
 
   const runPreflight = async (dataUrl: string, sourceFile?: File, method: 'in-app-camera' | 'gallery-upload' | 'dslr-capture' = 'in-app-camera') => {
     const isRetake = Boolean(photo.originalImage);
@@ -202,7 +213,7 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
       <div className="mt-3 pt-2.5 border-t border-stone-100 flex items-center gap-2">
         {hasImage ? (
           <div className="w-full flex items-center gap-2">
-            {dslrAvailable && (
+            {dslrIsPrimary && (
               <button
                 type="button"
                 onClick={handleDslrCapture}
@@ -216,11 +227,27 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
             <button
               type="button"
               onClick={() => setShowCameraModal(true)}
-              className={`min-h-[44px] py-2.5 px-4 rounded-xl bg-stone-100 hover:bg-stone-200 text-stone-800 text-xs font-bold flex items-center justify-center gap-2 border border-stone-200 transition-colors uppercase tracking-wider ${dslrAvailable ? '' : 'flex-1'}`}
+              className={`min-h-[44px] py-2.5 px-4 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-colors uppercase tracking-wider ${
+                dslrIsPrimary
+                  ? 'bg-stone-100 hover:bg-stone-200 text-stone-800 border border-stone-200'
+                  : 'flex-1 bg-red-600 hover:bg-red-700 text-white'
+              }`}
             >
-              <Camera className="w-4 h-4 text-red-600" />
-              <span>{dslrAvailable ? 'Phone' : 'Retake'}</span>
+              <Camera className={`w-4 h-4 ${dslrIsPrimary ? 'text-red-600' : 'text-white'}`} />
+              <span>{dslrIsPrimary ? 'Phone' : 'Retake'}</span>
             </button>
+            {dslrIsSecondaryOption && (
+              <button
+                type="button"
+                onClick={handleDslrCapture}
+                disabled={isDslrCapturing}
+                className="min-h-[44px] px-3.5 rounded-xl bg-stone-100 hover:bg-stone-200 disabled:opacity-60 text-stone-700 border border-stone-200 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                title="Retake with Studio Camera"
+              >
+                <Aperture className="w-4 h-4" />
+                <span className="hidden sm:inline">Studio</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => {
@@ -236,7 +263,7 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
           </div>
         ) : (
           <div className="w-full flex flex-col sm:flex-row items-stretch gap-2">
-            {dslrAvailable ? (
+            {dslrIsPrimary ? (
               <button
                 type="button"
                 onClick={handleDslrCapture}
@@ -258,7 +285,7 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
             )}
 
             <div className="flex items-center gap-2 justify-center">
-              {dslrAvailable && (
+              {dslrIsPrimary && (
                 <button
                   type="button"
                   onClick={() => setShowCameraModal(true)}
@@ -267,6 +294,19 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
                 >
                   <Camera className="w-4 h-4" />
                   <span className="hidden sm:inline">Phone</span>
+                </button>
+              )}
+
+              {dslrIsSecondaryOption && (
+                <button
+                  type="button"
+                  onClick={handleDslrCapture}
+                  disabled={isDslrCapturing}
+                  className="min-h-[44px] px-3.5 rounded-xl bg-stone-100 hover:bg-stone-200 disabled:opacity-60 text-stone-700 border border-stone-200 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                  title="Use Studio Camera Instead"
+                >
+                  <Aperture className="w-4 h-4" />
+                  <span className="hidden sm:inline">Studio</span>
                 </button>
               )}
 
