@@ -1,0 +1,70 @@
+// Cloud-side client for the tethered studio camera. The actual camera
+// hardware is wired to the Lenovo at the fixed lightbox station, not to
+// this (cloud-hosted) server, so capture happens over the network: a small
+// bridge process running on the Lenovo (see dslr-bridge/) does the local
+// work and exposes it at DSLR_BRIDGE_URL, reachable via a Cloudflare
+// Tunnel. This module just calls that URL - see DSLR_CAPTURE_SETUP.md for
+// the full setup.
+//
+// Off unless both DSLR_BRIDGE_URL and DSLR_BRIDGE_SECRET are set, exactly
+// like the Drive export pattern elsewhere in this app.
+
+const DSLR_BRIDGE_URL = process.env.DSLR_BRIDGE_URL?.replace(/\/+$/, '');
+const DSLR_BRIDGE_SECRET = process.env.DSLR_BRIDGE_SECRET;
+const STATUS_TIMEOUT_MS = 4_000;
+const CAPTURE_TIMEOUT_MS = 25_000;
+
+export function isDslrCaptureConfigured(): boolean {
+  return Boolean(DSLR_BRIDGE_URL && DSLR_BRIDGE_SECRET);
+}
+
+// Whether the bridge is actually configured AND reachable right now - the
+// Lenovo may simply be powered off, which isn't an error, just "not
+// available at this moment." A short timeout keeps this from hanging the
+// status check if the machine is unreachable.
+export async function isDslrBridgeReachable(): Promise<boolean> {
+  if (!isDslrCaptureConfigured()) return false;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), STATUS_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${DSLR_BRIDGE_URL}/status`, { signal: controller.signal });
+    if (!response.ok) return false;
+    const data = await response.json();
+    return Boolean(data?.available);
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export interface DslrCaptureResult {
+  imageBase64: string; // data URL
+}
+
+export async function captureDslrPhoto(): Promise<DslrCaptureResult> {
+  if (!DSLR_BRIDGE_URL || !DSLR_BRIDGE_SECRET) {
+    throw new Error('Studio camera capture is not configured on this server (DSLR_BRIDGE_URL/DSLR_BRIDGE_SECRET are not set).');
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), CAPTURE_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${DSLR_BRIDGE_URL}/capture`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${DSLR_BRIDGE_SECRET}` },
+      signal: controller.signal,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data?.success) {
+      throw new Error(data?.error || `Studio camera bridge returned HTTP ${response.status}.`);
+    }
+    return { imageBase64: data.imageBase64 };
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      throw new Error('Studio camera capture timed out - the Lenovo bridge may be offline or the camera unresponsive.');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
+}

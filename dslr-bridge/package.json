@@ -1,0 +1,10 @@
+{
+  "name": "rlj-dslr-bridge",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Local tethered-camera bridge for the RL Jewels lightbox station - see ../DSLR_CAPTURE_SETUP.md",
+  "main": "bridge.js",
+  "scripts": {
+    "start": "node bridge.js"
+  }
+}
