@@ -6,6 +6,7 @@ import { GoogleGenAI } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 import { DEFAULT_ENHANCE_PROMPT } from './src/utils/promptSettings';
 import { isDriveConfigured, exportProductToDrive } from './driveExport';
+import { isDslrCaptureConfigured, captureDslrPhoto } from './dslrCapture';
 import { logEvent, newRequestId, readEventsForAnalytics, isAxiomConfigured, getAxiomDataset, LoggedSession } from './logging';
 
 dotenv.config();
@@ -1069,6 +1070,35 @@ app.post('/api/export-to-drive', requireAuth, async (req, res) => {
     console.error('export-to-drive failed:', err?.message || err);
     logEvent('drive.export', { cpc, itemType, success: false, latencyMs: Date.now() - startedAt, errorMessage: debugDetail(err) }, session);
     return res.json({ success: false, error: debugDetail(err) });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Tethered studio camera capture (fixed lightbox station): triggers the
+// Canon body via digiCamControl instead of a phone camera. Entirely
+// optional - off unless DIGICAMCONTROL_PATH is set on this host, exactly
+// like the Drive export pattern above. Only meaningful on the one Windows
+// machine actually wired to the studio camera.
+// ---------------------------------------------------------------------------
+
+app.get('/api/dslr-capture/status', requireAuth, (req, res) => {
+  res.json({ available: isDslrCaptureConfigured() });
+});
+
+app.post('/api/dslr-capture', requireAuth, async (req, res) => {
+  const startedAt = Date.now();
+  const session = (req as any).session as SessionInfo;
+  if (!isDslrCaptureConfigured()) {
+    return res.status(503).json({ error: 'Studio camera capture is not configured on this server.' });
+  }
+  try {
+    const result = await captureDslrPhoto();
+    logEvent('dslr.capture', { success: true, latencyMs: Date.now() - startedAt }, session);
+    res.json({ success: true, imageBase64: result.imageBase64 });
+  } catch (err: any) {
+    console.error('DSLR capture failed:', err?.message || err);
+    logEvent('dslr.capture', { success: false, latencyMs: Date.now() - startedAt, errorMessage: debugDetail(err) }, session);
+    res.status(502).json({ error: err?.message || 'Studio camera capture failed.', debugDetail: debugDetail(err) });
   }
 });
 
