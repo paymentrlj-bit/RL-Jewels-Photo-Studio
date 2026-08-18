@@ -50,6 +50,11 @@ function capturePhoto() {
     const captureDir = path.join(os.tmpdir(), 'rlj-dslr-capture');
     fs.mkdirSync(captureDir, { recursive: true });
     const filenameBase = `capture-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+    // digiCamControl doesn't always honor /filename exactly (some versions
+    // apply their own session naming template instead) - the reliable signal
+    // is "a new image file showed up in the folder after we asked for one",
+    // not "a file matching the exact name we requested".
+    const captureStartedAt = Date.now();
 
     const proc = spawn(DIGICAMCONTROL_PATH, ['/capture', '/folder', captureDir, '/filename', filenameBase]);
     let stderr = '';
@@ -72,7 +77,22 @@ function capturePhoto() {
         return;
       }
       try {
-        const files = fs.readdirSync(captureDir).filter((f) => f.startsWith(filenameBase));
+        const imageExts = new Set(['.jpg', '.jpeg', '.png']);
+        // Prefer an exact name match first (the common case), but fall back
+        // to "newest image file written to this folder since we started the
+        // capture" so a digiCamControl naming-template quirk doesn't sink an
+        // otherwise-successful shot.
+        let files = fs.readdirSync(captureDir).filter((f) => f.startsWith(filenameBase));
+        if (files.length === 0) {
+          files = fs
+            .readdirSync(captureDir)
+            .filter((f) => imageExts.has(path.extname(f).toLowerCase()))
+            .map((f) => ({ name: f, mtimeMs: fs.statSync(path.join(captureDir, f)).mtimeMs }))
+            // A couple seconds of slack for clock/filesystem timestamp granularity.
+            .filter((f) => f.mtimeMs >= captureStartedAt - 2000)
+            .sort((a, b) => b.mtimeMs - a.mtimeMs)
+            .map((f) => f.name);
+        }
         if (files.length === 0) {
           reject(new Error('digiCamControl reported success but no output file was found - check the camera is connected and has a memory card if required.'));
           return;
