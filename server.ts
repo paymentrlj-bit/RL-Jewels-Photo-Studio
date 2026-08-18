@@ -6,7 +6,7 @@ import { GoogleGenAI } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 import { DEFAULT_ENHANCE_PROMPT } from './src/utils/promptSettings';
 import { isDriveConfigured, exportProductToDrive } from './driveExport';
-import { isDslrCaptureConfigured, captureDslrPhoto } from './dslrCapture';
+import { isDslrCaptureConfigured, isDslrBridgeReachable, captureDslrPhoto } from './dslrBridge';
 import { logEvent, newRequestId, readEventsForAnalytics, isAxiomConfigured, getAxiomDataset, LoggedSession } from './logging';
 
 dotenv.config();
@@ -1075,14 +1075,20 @@ app.post('/api/export-to-drive', requireAuth, async (req, res) => {
 
 // ---------------------------------------------------------------------------
 // Tethered studio camera capture (fixed lightbox station): triggers the
-// Canon body via digiCamControl instead of a phone camera. Entirely
-// optional - off unless DIGICAMCONTROL_PATH is set on this host, exactly
-// like the Drive export pattern above. Only meaningful on the one Windows
-// machine actually wired to the studio camera.
+// Canon body via a small bridge process running on the Lenovo wired to the
+// camera (see dslr-bridge/ and DSLR_CAPTURE_SETUP.md) instead of a phone
+// camera. Entirely optional - off unless DSLR_BRIDGE_URL/DSLR_BRIDGE_SECRET
+// are set on this host, exactly like the Drive export pattern above.
 // ---------------------------------------------------------------------------
 
-app.get('/api/dslr-capture/status', requireAuth, (req, res) => {
-  res.json({ available: isDslrCaptureConfigured() });
+app.get('/api/dslr-capture/status', requireAuth, async (req, res) => {
+  if (!isDslrCaptureConfigured()) {
+    return res.json({ available: false });
+  }
+  // Configured isn't the same as reachable right now - the Lenovo/camera may
+  // simply be powered off, which the UI should show as "not available"
+  // rather than a broken button.
+  res.json({ available: await isDslrBridgeReachable() });
 });
 
 app.post('/api/dslr-capture', requireAuth, async (req, res) => {
