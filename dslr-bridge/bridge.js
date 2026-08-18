@@ -24,7 +24,13 @@ const { spawn } = require('child_process');
 const PORT = Number(process.env.PORT) || 3001;
 const DIGICAMCONTROL_PATH = process.env.DIGICAMCONTROL_PATH;
 const BRIDGE_SECRET = process.env.BRIDGE_SECRET;
-const CAPTURE_TIMEOUT_MS = 20_000;
+// 45s, not 20s - CameraControlCmd.exe has to launch, connect over USB,
+// autofocus, fire the shutter, and transfer the file back, and on a low-power
+// laptop (dual-core, 4GB RAM) that pipeline can genuinely take longer than a
+// desktop-class machine would need. Cutting the process off mid-transfer
+// early was also leaving the camera itself stuck showing "buSY" until
+// power-cycled, which this headroom avoids in the common case.
+const CAPTURE_TIMEOUT_MS = 45_000;
 
 if (!DIGICAMCONTROL_PATH) {
   console.warn('WARNING: DIGICAMCONTROL_PATH is not set - /capture will always fail until it is.');

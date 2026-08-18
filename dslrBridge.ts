@@ -12,7 +12,10 @@
 const DSLR_BRIDGE_URL = process.env.DSLR_BRIDGE_URL?.replace(/\/+$/, '');
 const DSLR_BRIDGE_SECRET = process.env.DSLR_BRIDGE_SECRET;
 const STATUS_TIMEOUT_MS = 4_000;
-const CAPTURE_TIMEOUT_MS = 25_000;
+// Must stay comfortably above the bridge's own CAPTURE_TIMEOUT_MS (45s) so
+// the bridge's own clean JSON error (if it times out) has time to travel
+// back through the tunnel before this side gives up first.
+const CAPTURE_TIMEOUT_MS = 55_000;
 
 export function isDslrCaptureConfigured(): boolean {
   return Boolean(DSLR_BRIDGE_URL && DSLR_BRIDGE_SECRET);
