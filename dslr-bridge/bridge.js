@@ -24,7 +24,13 @@ const { spawn } = require('child_process');
 const PORT = Number(process.env.PORT) || 3001;
 const DIGICAMCONTROL_PATH = process.env.DIGICAMCONTROL_PATH;
 const BRIDGE_SECRET = process.env.BRIDGE_SECRET;
-const CAPTURE_TIMEOUT_MS = 20_000;
+// 45s, not 20s - CameraControlCmd.exe has to launch, connect over USB,
+// autofocus, fire the shutter, and transfer the file back, and on a low-power
+// laptop (dual-core, 4GB RAM) that pipeline can genuinely take longer than a
+// desktop-class machine would need. Cutting the process off mid-transfer
+// early was also leaving the camera itself stuck showing "buSY" until
+// power-cycled, which this headroom avoids in the common case.
+const CAPTURE_TIMEOUT_MS = 45_000;
 
 if (!DIGICAMCONTROL_PATH) {
   console.warn('WARNING: DIGICAMCONTROL_PATH is not set - /capture will always fail until it is.');
@@ -43,9 +49,15 @@ function capturePhoto() {
     }
     const captureDir = path.join(os.tmpdir(), 'rlj-dslr-capture');
     fs.mkdirSync(captureDir, { recursive: true });
-    const filenameBase = `capture-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+    // Real hardware test: passing /filename to CameraControlCmd.exe throws
+    // "Transfer error! Path cannot be the empty string or all whitespace"
+    // on this digiCamControl build - it never successfully saves a file.
+    // Omitting it and letting the camera use its own sequential naming
+    // (DSC_0001.JPG, DSC_0002.JPG, ...) works reliably, so we just find
+    // whichever image file is newest in the folder after capture instead.
+    const captureStartedAt = Date.now();
 
-    const proc = spawn(DIGICAMCONTROL_PATH, ['/capture', '/folder', captureDir, '/filename', filenameBase]);
+    const proc = spawn(DIGICAMCONTROL_PATH, ['/capture', '/folder', captureDir]);
     let stderr = '';
     proc.stderr?.on('data', (d) => { stderr += d.toString(); });
 
@@ -66,7 +78,18 @@ function capturePhoto() {
         return;
       }
       try {
-        const files = fs.readdirSync(captureDir).filter((f) => f.startsWith(filenameBase));
+        const imageExts = new Set(['.jpg', '.jpeg', '.png']);
+        // Find the newest image file written to this folder since capture
+        // started - digiCamControl names files with its own sequential
+        // counter (DSC_0001.JPG, ...), not anything we control.
+        const files = fs
+          .readdirSync(captureDir)
+          .filter((f) => imageExts.has(path.extname(f).toLowerCase()))
+          .map((f) => ({ name: f, mtimeMs: fs.statSync(path.join(captureDir, f)).mtimeMs }))
+          // A couple seconds of slack for clock/filesystem timestamp granularity.
+          .filter((f) => f.mtimeMs >= captureStartedAt - 2000)
+          .sort((a, b) => b.mtimeMs - a.mtimeMs)
+          .map((f) => f.name);
         if (files.length === 0) {
           reject(new Error('digiCamControl reported success but no output file was found - check the camera is connected and has a memory card if required.'));
           return;

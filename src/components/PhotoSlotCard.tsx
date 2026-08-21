@@ -25,6 +25,7 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
   const [isChecking, setIsChecking] = useState(false);
   const [dslrAvailable, setDslrAvailable] = useState(false);
   const [isDslrCapturing, setIsDslrCapturing] = useState(false);
+  const [dslrStage, setDslrStage] = useState('');
   const [dslrError, setDslrError] = useState('');
   const [isMobile] = useState(() => isMobileUserAgent());
 
@@ -100,6 +101,15 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
   const handleDslrCapture = async () => {
     setDslrError('');
     setIsDslrCapturing(true);
+    setDslrStage('Firing shutter…');
+    // The bridge/camera round trip is a single blocking request with no
+    // real intermediate progress signal from the hardware, so these stage
+    // labels are timed estimates (calibrated against real captures), not
+    // live status - good enough to keep the wait from feeling frozen.
+    const stageTimers = [
+      setTimeout(() => setDslrStage('Transferring from camera…'), 2500),
+      setTimeout(() => setDslrStage('Uploading to studio…'), 8000),
+    ];
     try {
       const res = await fetch('/api/dslr-capture', { method: 'POST' });
       const data = await res.json();
@@ -110,6 +120,8 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
     } catch (err: any) {
       setDslrError(err?.message || 'Studio camera capture failed. Check the camera is connected and try again.');
     } finally {
+      stageTimers.forEach(clearTimeout);
+      setDslrStage('');
       setIsDslrCapturing(false);
     }
   };
@@ -182,7 +194,7 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
       </div>
 
       {isDslrCapturing && (
-        <div className="text-[11px] text-stone-400 text-center py-1">Capturing from studio camera…</div>
+        <div className="text-[11px] text-stone-400 text-center py-1">{dslrStage || 'Capturing from studio camera…'}</div>
       )}
 
       {isChecking && (
