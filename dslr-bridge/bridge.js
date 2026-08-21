@@ -21,6 +21,16 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 
+// Task Scheduler runs this with no visible console window, so console.log
+// alone disappears - mirror everything to a log file next to bridge.js too,
+// so timing breakdowns are checkable after the fact either way.
+const LOG_FILE = path.join(__dirname, 'bridge.log');
+function log(line) {
+  const stamped = `[${new Date().toISOString()}] ${line}`;
+  console.log(stamped);
+  try { fs.appendFileSync(LOG_FILE, stamped + '\n'); } catch {}
+}
+
 const PORT = Number(process.env.PORT) || 3001;
 const DIGICAMCONTROL_PATH = process.env.DIGICAMCONTROL_PATH;
 const BRIDGE_SECRET = process.env.BRIDGE_SECRET;
@@ -33,11 +43,11 @@ const BRIDGE_SECRET = process.env.BRIDGE_SECRET;
 const CAPTURE_TIMEOUT_MS = 45_000;
 
 if (!DIGICAMCONTROL_PATH) {
-  console.warn('WARNING: DIGICAMCONTROL_PATH is not set - /capture will always fail until it is.');
+  log('WARNING: DIGICAMCONTROL_PATH is not set - /capture will always fail until it is.');
 }
 if (!BRIDGE_SECRET) {
-  console.warn('WARNING: BRIDGE_SECRET is not set - refusing to start, since this bridge will be reachable from the internet.');
-  console.warn('Set BRIDGE_SECRET to a long random value (matching DSLR_BRIDGE_SECRET on the cloud server) and restart.');
+  log('WARNING: BRIDGE_SECRET is not set - refusing to start, since this bridge will be reachable from the internet.');
+  log('Set BRIDGE_SECRET to a long random value (matching DSLR_BRIDGE_SECRET on the cloud server) and restart.');
   process.exit(1);
 }
 
@@ -73,11 +83,13 @@ function capturePhoto() {
 
     proc.on('exit', (code) => {
       clearTimeout(timeout);
+      const captureMs = Date.now() - captureStartedAt;
       if (code !== 0) {
         reject(new Error(`digiCamControl exited with code ${code}${stderr ? `: ${stderr.trim().slice(0, 300)}` : ' - check the camera is connected.'}`));
         return;
       }
       try {
+        const readStartedAt = Date.now();
         const imageExts = new Set(['.jpg', '.jpeg', '.png']);
         // Find the newest image file written to this folder since capture
         // started - digiCamControl names files with its own sequential
@@ -101,6 +113,8 @@ function capturePhoto() {
         for (const f of files) {
           try { fs.unlinkSync(path.join(captureDir, f)); } catch {}
         }
+        const readMs = Date.now() - readStartedAt;
+        log(`timing: digiCamControl(shutter+USB transfer)=${captureMs}ms, file read+encode=${readMs}ms, total=${captureMs + readMs}ms`);
         resolve({ imageBase64: `data:${mimeType};base64,${buffer.toString('base64')}` });
       } catch (err) {
         reject(err);
@@ -137,10 +151,10 @@ const server = http.createServer(async (req, res) => {
     }
     try {
       const result = await capturePhoto();
-      console.log(`[${new Date().toISOString()}] capture ok`);
+      log('capture ok');
       send(res, 200, { success: true, imageBase64: result.imageBase64 });
     } catch (err) {
-      console.error(`[${new Date().toISOString()}] capture failed:`, err.message);
+      log(`capture failed: ${err.message}`);
       send(res, 502, { error: err.message || 'Studio camera capture failed.' });
     }
     return;
@@ -150,6 +164,6 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`DSLR bridge listening on http://localhost:${PORT}`);
-  console.log(`DIGICAMCONTROL_PATH: ${DIGICAMCONTROL_PATH || '(not set)'}`);
+  log(`DSLR bridge listening on http://localhost:${PORT}`);
+  log(`DIGICAMCONTROL_PATH: ${DIGICAMCONTROL_PATH || '(not set)'}`);
 });
