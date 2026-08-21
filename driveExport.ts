@@ -1,14 +1,14 @@
-import { JWT } from 'google-auth-library';
+import { OAuth2Client } from 'google-auth-library';
 
 // Uploads approved product photos + metadata into the store's own Google
-// Drive via a service account - no Google Workspace required. The service
-// account itself has almost no storage of its own; instead, share a regular
-// Drive folder with the service account's email (like sharing with a
-// colleague) and grant it Editor access. Everything the service account
-// creates inside that shared folder counts against the real Drive owner's
-// storage and appears in their Drive immediately - this is what makes it
-// work on a plain personal/business Gmail account. See DRIVE_SETUP.md for
-// the exact console steps.
+// Drive, authenticated as a real Google account via OAuth (not a service
+// account) - no Google Workspace required. Service accounts have no Drive
+// storage quota of their own, and Google only offers two ways around that
+// (Shared Drives, domain-wide delegation) - both of which require a paid
+// Workspace subscription. Authenticating as a real personal/business Gmail
+// account sidesteps that entirely: uploads count against that account's
+// normal Drive storage, same as if you'd dragged the file in yourself. See
+// DRIVE_SETUP.md for the one-time authorization steps.
 //
 // Scoped to drive.file (not full drive access) - this app can only see and
 // manage files it creates itself, nothing else in the connected Drive.
@@ -16,34 +16,27 @@ import { JWT } from 'google-auth-library';
 const DRIVE_UPLOAD_URL = 'https://www.googleapis.com/upload/drive/v3/files';
 const DRIVE_FILES_URL = 'https://www.googleapis.com/drive/v3/files';
 
-let cachedClient: JWT | null = null;
+let cachedClient: OAuth2Client | null = null;
 
-function getServiceAccountCredentials(): { client_email: string; private_key: string } | null {
-  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw);
-    if (!parsed.client_email || !parsed.private_key) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
+function getOAuthCredentials(): { clientId: string; clientSecret: string; refreshToken: string } | null {
+  const clientId = process.env.GOOGLE_DRIVE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_DRIVE_CLIENT_SECRET;
+  const refreshToken = process.env.GOOGLE_DRIVE_REFRESH_TOKEN;
+  if (!clientId || !clientSecret || !refreshToken) return null;
+  return { clientId, clientSecret, refreshToken };
 }
 
 export function isDriveConfigured(): boolean {
-  return Boolean(getServiceAccountCredentials() && process.env.GOOGLE_DRIVE_ROOT_FOLDER_ID);
+  return Boolean(getOAuthCredentials() && process.env.GOOGLE_DRIVE_ROOT_FOLDER_ID);
 }
 
 async function getAccessToken(): Promise<string> {
-  const creds = getServiceAccountCredentials();
-  if (!creds) throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON is not configured.');
+  const creds = getOAuthCredentials();
+  if (!creds) throw new Error('Google Drive OAuth credentials are not configured.');
 
   if (!cachedClient) {
-    cachedClient = new JWT({
-      email: creds.client_email,
-      key: creds.private_key,
-      scopes: ['https://www.googleapis.com/auth/drive.file'],
-    });
+    cachedClient = new OAuth2Client(creds.clientId, creds.clientSecret);
+    cachedClient.setCredentials({ refresh_token: creds.refreshToken });
   }
   const { token } = await cachedClient.getAccessToken();
   if (!token) throw new Error('Could not obtain a Google Drive access token.');
