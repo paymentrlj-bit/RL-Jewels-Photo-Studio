@@ -325,6 +325,11 @@ export default function App() {
   };
 
   const [productDescription, setProductDescription] = useState('');
+  const [seoMetaTitle, setSeoMetaTitle] = useState('');
+  const [seoMetaDescription, setSeoMetaDescription] = useState('');
+  const [seoKeywords, setSeoKeywords] = useState('');
+  const [imageAltText, setImageAltText] = useState('');
+  const [urlSlug, setUrlSlug] = useState('');
   const [isGeneratingCopy, setIsGeneratingCopy] = useState(false);
   const [copyGeneratedForImage, setCopyGeneratedForImage] = useState<string | null>(null);
   // Immutable snapshot of what the model generated, kept purely so a later
@@ -363,6 +368,11 @@ export default function App() {
       if (data.success) {
         setProductName(data.name);
         setProductDescription(data.description);
+        setSeoMetaTitle(data.metaTitle || '');
+        setSeoMetaDescription(data.metaDescription || '');
+        setSeoKeywords(data.searchKeywords || '');
+        setImageAltText(data.imageAltText || '');
+        setUrlSlug(data.urlSlug || '');
         setGeneratedCopyBaseline({ name: data.name, description: data.description });
       }
     } catch (err: any) {
@@ -408,6 +418,11 @@ export default function App() {
     setOtherWeight('0.250');
     setNetWeight('8.250');
     setProductDescription('');
+    setSeoMetaTitle('');
+    setSeoMetaDescription('');
+    setSeoKeywords('');
+    setImageAltText('');
+    setUrlSlug('');
     setCopyGeneratedForImage(null);
     setGeneratedCopyBaseline(null);
     setPhoto(createInitialPhoto());
@@ -420,6 +435,11 @@ export default function App() {
     cpc,
     name: productName,
     description: productDescription,
+    seoMetaTitle,
+    seoMetaDescription,
+    seoKeywords,
+    imageAltText,
+    urlSlug,
     itemType,
     purity,
     gender,

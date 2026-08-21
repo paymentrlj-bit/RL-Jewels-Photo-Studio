@@ -115,7 +115,7 @@ function capturePhoto() {
         }
         const readMs = Date.now() - readStartedAt;
         log(`timing: digiCamControl(shutter+USB transfer)=${captureMs}ms, file read+encode=${readMs}ms, total=${captureMs + readMs}ms`);
-        resolve({ imageBase64: `data:${mimeType};base64,${buffer.toString('base64')}` });
+        resolve({ imageBase64: `data:${mimeType};base64,${buffer.toString('base64')}`, captureMs, readMs });
       } catch (err) {
         reject(err);
       }
@@ -152,7 +152,7 @@ const server = http.createServer(async (req, res) => {
     try {
       const result = await capturePhoto();
       log('capture ok');
-      send(res, 200, { success: true, imageBase64: result.imageBase64 });
+      send(res, 200, { success: true, imageBase64: result.imageBase64, captureMs: result.captureMs, readMs: result.readMs });
     } catch (err) {
       log(`capture failed: ${err.message}`);
       send(res, 502, { error: err.message || 'Studio camera capture failed.' });

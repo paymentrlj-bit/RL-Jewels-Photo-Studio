@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Download, FileSpreadsheet, Archive, Copy, Check, PlusCircle, CheckCircle2, CloudUpload, ExternalLink } from 'lucide-react';
+import { Download, FileSpreadsheet, Archive, Copy, Check, PlusCircle, CheckCircle2, CloudUpload, ExternalLink, Code2 } from 'lucide-react';
 import { ProductRecord } from '../types';
-import { downloadProductZip, downloadCsvFile, generateErpCsv } from '../utils/exportUtils';
+import { downloadProductZip, downloadCsvFile, generateErpCsv, generateProductJsonLd } from '../utils/exportUtils';
 import { logClientEvent } from '../utils/analytics';
 
 interface ExportStepProps {
@@ -16,6 +16,8 @@ export const ExportStep: React.FC<ExportStepProps> = ({ product, onStartNewProdu
   const [driveStatus, setDriveStatus] = useState<'idle' | 'uploading' | 'done' | 'error'>('idle');
   const [driveError, setDriveError] = useState('');
   const [driveFolderLink, setDriveFolderLink] = useState('');
+  const [drivePhotoLink, setDrivePhotoLink] = useState('');
+  const [copiedJsonLd, setCopiedJsonLd] = useState(false);
 
   useEffect(() => {
     fetch('/api/drive-status')
@@ -42,6 +44,7 @@ export const ExportStep: React.FC<ExportStepProps> = ({ product, onStartNewProdu
       if (data.success) {
         setDriveStatus('done');
         setDriveFolderLink(data.folderLink);
+        setDrivePhotoLink(data.photoLink || '');
       } else {
         setDriveStatus('error');
         setDriveError(data.error || 'Upload failed.');
@@ -88,6 +91,14 @@ export const ExportStep: React.FC<ExportStepProps> = ({ product, onStartNewProdu
   const csvLines = csvString.split('\n');
   const csvHeaders = csvLines[0] ? parseCsvLine(csvLines[0]) : [];
   const csvValues = csvLines[1] ? parseCsvLine(csvLines[1]) : [];
+  const jsonLdString = generateProductJsonLd(product, drivePhotoLink || undefined);
+
+  const handleCopyJsonLd = () => {
+    navigator.clipboard.writeText(jsonLdString);
+    setCopiedJsonLd(true);
+    logClientEvent('export_action', { method: 'jsonld_copy', success: true, itemType: product.itemType });
+    setTimeout(() => setCopiedJsonLd(false), 2500);
+  };
 
   const handleDownloadZip = async () => {
     setIsZipping(true);
@@ -293,6 +304,32 @@ export const ExportStep: React.FC<ExportStepProps> = ({ product, onStartNewProdu
             </tbody>
           </table>
         </div>
+      </div>
+
+      <div className="bg-white border border-stone-200 rounded-3xl p-5 sm:p-6 text-stone-900 space-y-3 shadow-xs">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-bold uppercase tracking-wider text-stone-900 flex items-center gap-1.5">
+            <Code2 className="w-4 h-4 text-red-600" />
+            <span>Structured Data (schema.org Product / JSON-LD)</span>
+          </span>
+          <button
+            type="button"
+            onClick={handleCopyJsonLd}
+            className="py-2 px-3.5 rounded-xl bg-stone-100 hover:bg-stone-200 text-stone-700 text-xs font-bold uppercase tracking-wider border border-stone-200 flex items-center justify-center gap-1.5 transition-colors"
+            title="Copy JSON-LD to Clipboard"
+          >
+            {copiedJsonLd ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5 text-stone-600" />}
+            <span>{copiedJsonLd ? 'Copied' : 'Copy'}</span>
+          </button>
+        </div>
+        <p className="text-xs text-stone-500">
+          Paste this into a <code className="font-mono text-[11px] bg-stone-100 px-1 py-0.5 rounded">&lt;script type="application/ld+json"&gt;</code> tag on the live product page - this is what Google actually reads for rich search results, separate from the meta tags in the CSV above.
+          {!drivePhotoLink && ' Upload to Drive first (Option C) to auto-fill a real image URL, or replace the placeholder manually.'}
+          {' '}Add real pricing ("offers") before publishing - deliberately left out here since this tool doesn't track live pricing, and a placeholder price would be worse than none.
+        </p>
+        <pre className="overflow-x-auto rounded-xl border border-stone-200 bg-stone-50 p-3.5 text-[11px] font-mono text-stone-700 whitespace-pre">
+          {jsonLdString}
+        </pre>
       </div>
 
       <div className="bg-white border border-stone-200 rounded-3xl p-5 flex items-center justify-end gap-3 shadow-xs">
