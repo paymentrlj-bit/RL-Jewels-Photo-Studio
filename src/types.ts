@@ -52,6 +52,11 @@ export interface ProductRecord {
   cpc: string; // Primary Counter Product Code
   name: string;
   description?: string;
+  seoMetaTitle?: string;
+  seoMetaDescription?: string;
+  seoKeywords?: string;
+  imageAltText?: string;
+  urlSlug?: string;
   itemType: string;
   purity: GoldPurity;
   gender: ProductGender;

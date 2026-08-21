@@ -52,6 +52,14 @@ export function generateErpCsv(product: ProductRecord): string {
     'CPC',
     'product_name',
     'product_description',
+    // Named to match Odoo's website_sale SEO fields (website_meta_title,
+    // website_meta_description, website_meta_keywords) so these columns can
+    // be mapped directly on import instead of needing manual re-entry.
+    'website_meta_title',
+    'website_meta_description',
+    'website_meta_keywords',
+    'image_alt_text',
+    'suggested_url_slug',
     'item_type',
     'gold_purity',
     'gender_category',
@@ -76,6 +84,11 @@ export function generateErpCsv(product: ProductRecord): string {
     escapeCsv(cpc),
     escapeCsv(product.name || `${product.purity} ${product.itemType}`),
     escapeCsv(product.description || ''),
+    escapeCsv(product.seoMetaTitle || ''),
+    escapeCsv(product.seoMetaDescription || ''),
+    escapeCsv(product.seoKeywords || ''),
+    escapeCsv(product.imageAltText || ''),
+    escapeCsv(product.urlSlug || ''),
     escapeCsv(product.itemType),
     escapeCsv(product.purity),
     escapeCsv(product.gender),
@@ -90,6 +103,37 @@ export function generateErpCsv(product: ProductRecord): string {
   ];
 
   return `${headers.join(',')}\n${row.join(',')}`;
+}
+
+/**
+ * Generates a schema.org Product JSON-LD snippet - the actual structured
+ * data format Google reads for rich search results, distinct from the plain
+ * SEO metadata columns in the CSV. Deliberately omits "offers" (price):
+ * this app doesn't track live pricing, and Google's own guidance is to omit
+ * incomplete offer data rather than publish a placeholder/fake price -
+ * whoever adds this to the live product page needs to fill that in from the
+ * real price at publish time.
+ */
+export function generateProductJsonLd(product: ProductRecord, imageUrl?: string): string {
+  const purityLabel = product.purity ? `${product.purity} Gold` : 'Gold';
+  const jsonLd: Record<string, unknown> = {
+    '@context': 'https://schema.org/',
+    '@type': 'Product',
+    name: product.seoMetaTitle || product.name,
+    description: product.seoMetaDescription || product.description || undefined,
+    image: imageUrl || 'REPLACE_WITH_HOSTED_PRODUCT_PHOTO_URL',
+    sku: product.cpc || product.sku,
+    category: product.itemType,
+    material: purityLabel,
+    brand: { '@type': 'Brand', name: 'RL Jewels' },
+    additionalProperty: [
+      { '@type': 'PropertyValue', name: 'Purity', value: product.purity },
+      { '@type': 'PropertyValue', name: 'Gross Weight', value: `${product.grossWeightGrams || product.weightGrams || '0'}g` },
+      { '@type': 'PropertyValue', name: 'Net Gold Weight', value: `${product.netWeightGrams || product.grossWeightGrams || '0'}g` },
+      { '@type': 'PropertyValue', name: 'Gender', value: product.gender },
+    ].filter((p) => p.value),
+  };
+  return JSON.stringify(jsonLd, null, 2);
 }
 
 export function downloadCsvFile(product: ProductRecord): void {

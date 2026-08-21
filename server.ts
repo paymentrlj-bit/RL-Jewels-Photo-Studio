@@ -1001,8 +1001,13 @@ First, look closely and identify the specific visible motif, setting style, or t
 Write:
 1. "name" - a specific, keyword-rich product title (6-10 words) that a real shopper would type into a search bar: lead with the distinctive visible motif or style, then material, purity, and item type - e.g. "Peacock Motif 22kt Gold Jhumka Earrings," not "Gold Earrings." No generic labels, no unearned superlatives ("stunning," "exquisite," "beautiful").
 2. "description" - 2-3 sentences, written for a shopper first and search engines second. Open with the standout visible feature named specifically (not "the design"). Describe only what is genuinely visible - never invent stones, engravings, or features not shown. Mention the purity and item type naturally (these are exactly what customers search by). Write like a knowledgeable jeweler who is genuinely proud to be showing this piece - confident and specific, not generic ad copy, but not a dry inventory listing either.
+3. "metaTitle" - a search-engine page title, 50-60 characters MAX. Lead with the same distinctive motif/style keyword as "name," but tightened to fit the limit - this is what shows as the blue clickable link in Google search results, so every character should be a real keyword, not filler.
+4. "metaDescription" - a search-engine snippet, 150-160 characters MAX. Written to earn the click: state what it is and its standout visible feature, in complete sentences, using the same grounding rules as "description" - never invent anything not visible.
+5. "imageAltText" - 8-12 words plainly describing what's literally visible in the photo, for screen readers and image search - not a sales pitch, a factual visual description (e.g. "22kt gold jhumka earrings with peacock motif and antique finish").
+6. "searchKeywords" - 5-8 comma-separated phrases real customers would search for this exact piece, grounded only in what's visible/known (item type, purity, gender category, the specific motif/style you identified, and general non-invented category terms like "traditional" or "daily wear" ONLY if genuinely evident from the design - never claim an occasion like "bridal" or "wedding" unless the piece's scale/ornamentation actually supports it).
+7. "urlSlug" - a short, lowercase, hyphen-separated URL slug built from the same keywords as "name" (e.g. "peacock-motif-22kt-gold-jhumka-earrings").
 
-Respond ONLY as JSON: {"name": string, "description": string}`;
+Respond ONLY as JSON: {"name": string, "description": string, "metaTitle": string, "metaDescription": string, "imageAltText": string, "searchKeywords": string, "urlSlug": string}`;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), AUDIT_TIMEOUT_MS);
@@ -1030,9 +1035,19 @@ Respond ONLY as JSON: {"name": string, "description": string}`;
     logEvent('copy.generated', {
       itemType, purity, success: true, latencyMs: Date.now() - startedAt,
       nameLength: String(parsed.name).length, descriptionLength: String(parsed.description).length,
+      hasSeoFields: Boolean(parsed.metaTitle && parsed.metaDescription),
       estimatedCostUsd: COST_PER_CALL_USD[MODEL_COPY] || 0,
     }, session);
-    return res.json({ success: true, name: String(parsed.name), description: String(parsed.description) });
+    return res.json({
+      success: true,
+      name: String(parsed.name),
+      description: String(parsed.description),
+      metaTitle: parsed.metaTitle ? String(parsed.metaTitle) : '',
+      metaDescription: parsed.metaDescription ? String(parsed.metaDescription) : '',
+      imageAltText: parsed.imageAltText ? String(parsed.imageAltText) : '',
+      searchKeywords: parsed.searchKeywords ? String(parsed.searchKeywords) : '',
+      urlSlug: parsed.urlSlug ? String(parsed.urlSlug) : '',
+    });
   } catch (err: any) {
     console.error('generate-copy failed:', err?.message || err);
     logEvent('copy.generated', { itemType, purity, success: false, latencyMs: Date.now() - startedAt, errorMessage: debugDetail(err) }, session);
