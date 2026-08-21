@@ -27,6 +27,7 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
   const [isDslrCapturing, setIsDslrCapturing] = useState(false);
   const [dslrStage, setDslrStage] = useState('');
   const [dslrError, setDslrError] = useState('');
+  const [liveViewFailed, setLiveViewFailed] = useState(false);
   const [isMobile] = useState(() => isMobileUserAgent());
 
   useEffect(() => {
@@ -187,12 +188,28 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
               </button>
             </div>
           </>
+        ) : dslrIsPrimary && !liveViewFailed ? (
+          <>
+            <img
+              key={isDslrCapturing ? 'capturing' : 'live'}
+              src="/api/dslr-capture/live"
+              alt="Studio camera live view"
+              className="w-full h-full object-contain bg-stone-900"
+              onError={() => setLiveViewFailed(true)}
+            />
+            <div className="absolute top-2 left-2 flex items-center gap-1.5 bg-black/60 text-white text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-full">
+              <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+              <span>Live</span>
+            </div>
+          </>
         ) : (
           <div className="text-center p-4 flex flex-col items-center justify-center space-y-2">
             <div className="w-11 h-11 rounded-full bg-white border border-stone-200 flex items-center justify-center text-stone-500 shadow-xs">
               <Camera className="w-5 h-5 text-red-600" />
             </div>
-            <span className="text-xs text-stone-500 font-medium">Ready for Counter Camera</span>
+            <span className="text-xs text-stone-500 font-medium">
+              {dslrIsPrimary && liveViewFailed ? 'Studio camera live view unavailable' : 'Ready for Counter Camera'}
+            </span>
           </div>
         )}
       </div>

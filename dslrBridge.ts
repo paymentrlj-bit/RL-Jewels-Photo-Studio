@@ -51,6 +51,24 @@ export interface DslrCaptureResult {
   readMs?: number;
 }
 
+// Proxies the bridge's live-view MJPEG feed. No AbortController/timeout
+// here on purpose - this is meant to stay open for as long as the browser
+// keeps the stream open, not bounded like the other short request/response
+// calls above. The caller (server.ts) is responsible for tearing this down
+// when the browser disconnects.
+export async function getDslrLiveViewStream(): Promise<Response> {
+  if (!DSLR_BRIDGE_URL || !DSLR_BRIDGE_SECRET) {
+    throw new Error('Studio camera capture is not configured on this server (DSLR_BRIDGE_URL/DSLR_BRIDGE_SECRET are not set).');
+  }
+  const response = await fetch(`${DSLR_BRIDGE_URL}/live`, {
+    headers: { Authorization: `Bearer ${DSLR_BRIDGE_SECRET}` },
+  });
+  if (!response.ok || !response.body) {
+    throw new Error(`Studio camera live view is not available (HTTP ${response.status}).`);
+  }
+  return response;
+}
+
 export async function captureDslrPhoto(): Promise<DslrCaptureResult> {
   if (!DSLR_BRIDGE_URL || !DSLR_BRIDGE_SECRET) {
     throw new Error('Studio camera capture is not configured on this server (DSLR_BRIDGE_URL/DSLR_BRIDGE_SECRET are not set).');
