@@ -106,9 +106,13 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
     // real intermediate progress signal from the hardware, so these stage
     // labels are timed estimates (calibrated against real captures), not
     // live status - good enough to keep the wait from feeling frozen.
+    // Recalibrated against real bridge.log data from the studio rig (Canon
+    // 7D + Lenovo, USB 2.0): digiCamControl's own shutter+transfer step
+    // alone consistently runs 8.7-9.9s, so "Uploading" shouldn't claim to
+    // start until that's essentially done.
     const stageTimers = [
-      setTimeout(() => setDslrStage('Transferring from camera…'), 2500),
-      setTimeout(() => setDslrStage('Uploading to studio…'), 8000),
+      setTimeout(() => setDslrStage('Transferring from camera…'), 1200),
+      setTimeout(() => setDslrStage('Uploading to studio…'), 9200),
     ];
     try {
       const res = await fetch('/api/dslr-capture', { method: 'POST' });
