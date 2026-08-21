@@ -643,9 +643,20 @@ app.get('/api/prompt-config', requireAuth, (req, res) => {
 });
 
 app.post('/api/prompt-config', requireAuth, (req, res) => {
+  const session = (req as any).session as SessionInfo;
   const { enhancePrompt } = req.body;
   if (enhancePrompt && typeof enhancePrompt === 'string') {
+    const previousPrompt = serverCustomPrompt || DEFAULT_ENHANCE_PROMPT;
     serverCustomPrompt = enhancePrompt.trim();
+    // This value drives every enhance call app-wide, so a silent edit here
+    // (deliberate or accidental) with no record of who/when/what-changed
+    // would make a quality regression impossible to trace or roll back with
+    // confidence - log the full before/after, not just that a change happened.
+    logEvent('admin.prompt_config_changed', {
+      previousPrompt,
+      newPrompt: serverCustomPrompt,
+      isDefault: serverCustomPrompt === DEFAULT_ENHANCE_PROMPT,
+    }, session);
   }
   res.json({
     success: true,
@@ -993,19 +1004,24 @@ app.post('/api/generate-copy', requireAuth, async (req, res) => {
   const mimeType = match ? match[1] : 'image/jpeg';
   const cleanBase64 = match ? match[2] : imageBase64;
 
-  const prompt = `You are writing catalogue copy for "RL Jewels", an Indian fine jewelry retailer, for the studio-finished product photo attached.
+  const prompt = `You are writing catalogue copy for "RL Jewels", an Indian fine jewelry retailer, for the studio-finished product photo attached. This copy has to work at real catalogue scale (2,000+ SKUs and growing), most of which are everyday, non-ornate designs - so the specificity has to come from precisely observing THIS piece, not from hoping for an elaborate motif that usually isn't there.
 Item: ${purity || '22kt'} gold ${itemType || 'jewellery'}, for ${gender || "women's"}${size && size !== 'DEFAULT' ? `, size ${size}` : ''}${weight ? `, ${weight}g` : ''}.
 
-First, look closely and identify the specific visible motif, setting style, or technique by its real jewelry-trade name - e.g. peacock, floral, temple, kundan, polki, meenakari, filigree, cutwork, jali/lattice, antique or oxidized finish, geometric. Do not fall back to vague words like "design," "style," or "pattern" - name the actual thing you see.
+Look closely and identify what's genuinely true of THIS piece, in this order:
+1. An ornamental motif or technique, if one is actually present, by its real jewelry-trade name - e.g. peacock, floral, temple, kundan, polki, meenakari, filigree, cutwork, jali/lattice, antique or oxidized finish, geometric.
+2. If there is no ornamental motif - true of most pieces in this catalogue - it still has a real, specific silhouette and finish. Describe THAT instead of defaulting to "plain" or "solid" as the whole identity. Use real jewelry-trade terms for what you actually see: tapered, domed, knife-edge, flat-top, beaded-edge, twisted, fluted, ribbed, milgrain-edged, high-polish, brushed/satin, hammered.
+3. Pick exactly ONE style-character word that's genuinely true of the piece, from this list: Classic, Contemporary, Minimalist, Statement, Traditional, Ornate. This is a real descriptive category to select honestly, not marketing filler to insert everywhere.
+
+The way leading jewelry retailers handle this: they never let a plain gold band read as just "a gold ring" - they name its actual finish and profile, use accurate-but-elevated material language ("handcrafted," "expertly finished," not just "gold"), and give even simple pieces a confident, specific identity built from real visual facts. That precision is what has to carry 2,000+ SKUs of mostly-simple designs - never invented ornamentation standing in for it.
 
 Write:
-1. "name" - a specific, keyword-rich product title (6-10 words) that a real shopper would type into a search bar: lead with the distinctive visible motif or style, then material, purity, and item type - e.g. "Peacock Motif 22kt Gold Jhumka Earrings," not "Gold Earrings." No generic labels, no unearned superlatives ("stunning," "exquisite," "beautiful").
-2. "description" - 2-3 sentences, written for a shopper first and search engines second. Open with the standout visible feature named specifically (not "the design"). Describe only what is genuinely visible - never invent stones, engravings, or features not shown. Mention the purity and item type naturally (these are exactly what customers search by). Write like a knowledgeable jeweler who is genuinely proud to be showing this piece - confident and specific, not generic ad copy, but not a dry inventory listing either.
-3. "metaTitle" - a search-engine page title, 50-60 characters MAX. Lead with the same distinctive motif/style keyword as "name," but tightened to fit the limit - this is what shows as the blue clickable link in Google search results, so every character should be a real keyword, not filler.
-4. "metaDescription" - a search-engine snippet, 150-160 characters MAX. Written to earn the click: state what it is and its standout visible feature, in complete sentences, using the same grounding rules as "description" - never invent anything not visible.
-5. "imageAltText" - 8-12 words plainly describing what's literally visible in the photo, for screen readers and image search - not a sales pitch, a factual visual description (e.g. "22kt gold jhumka earrings with peacock motif and antique finish").
-6. "searchKeywords" - 5-8 comma-separated phrases real customers would search for this exact piece, grounded only in what's visible/known (item type, purity, gender category, the specific motif/style you identified, and general non-invented category terms like "traditional" or "daily wear" ONLY if genuinely evident from the design - never claim an occasion like "bridal" or "wedding" unless the piece's scale/ornamentation actually supports it).
-7. "urlSlug" - a short, lowercase, hyphen-separated URL slug built from the same keywords as "name" (e.g. "peacock-motif-22kt-gold-jhumka-earrings").
+1. "name" (6-10 words): [style-character word] + [specific finish/profile OR motif] + material + purity + item type. E.g. "Classic High-Polish 22kt Gold Tapered Band Ring" or "Contemporary Peacock Motif 22kt Gold Jhumka Earrings." Never just "[Purity] Gold [Item Type]" alone - there is always a real finish/profile/style word to add even on the plainest piece.
+2. "description" (3-4 sentences): open by naming the real finish/silhouette/motif specifically, not generically. Describe the craftsmanship using accurate-but-elevated language. Mention purity and item type naturally (customers search by these). Close with one sentence on wearability (daily wear, layering, gifting) ONLY if genuinely supported by the piece's actual scale and style - never claim an occasion like "bridal" that doesn't fit. Never invent stones, engravings, or features not visible. Write like a knowledgeable jeweler proud of this specific piece, not generic ad copy and not a dry inventory listing.
+3. "metaTitle" - a search-engine page title, 50-60 characters MAX, built from the same style-word + finish/motif + material + item type as "name," tightened to fit.
+4. "metaDescription" - a search-engine snippet, 150-160 characters MAX, stating what it is and its real standout feature in complete sentences, same grounding rules as "description."
+5. "imageAltText" - 8-12 words plainly describing what's literally visible, for screen readers and image search - a factual visual description, not a sales pitch (e.g. "22kt gold tapered band ring with high-polish finish").
+6. "searchKeywords" - 5-8 comma-separated phrases real customers would search for this exact piece, grounded only in what's visible/known (item type, purity, gender, the finish/profile/motif you identified, and general non-invented category terms like "everyday wear" ONLY if genuinely evident - never claim an occasion the piece doesn't support).
+7. "urlSlug" - a short, lowercase, hyphen-separated URL slug built from the same keywords as "name."
 
 Respond ONLY as JSON: {"name": string, "description": string, "metaTitle": string, "metaDescription": string, "imageAltText": string, "searchKeywords": string, "urlSlug": string}`;
 
@@ -1035,7 +1051,12 @@ Respond ONLY as JSON: {"name": string, "description": string, "metaTitle": strin
     logEvent('copy.generated', {
       itemType, purity, success: true, latencyMs: Date.now() - startedAt,
       nameLength: String(parsed.name).length, descriptionLength: String(parsed.description).length,
+      // Tracked so drift off the SEO character limits (metaTitle > 60,
+      // metaDescription > 160) shows up as a trend over time instead of
+      // only being caught by someone manually eyeballing one product.
       hasSeoFields: Boolean(parsed.metaTitle && parsed.metaDescription),
+      metaTitleLength: parsed.metaTitle ? String(parsed.metaTitle).length : null,
+      metaDescriptionLength: parsed.metaDescription ? String(parsed.metaDescription).length : null,
       estimatedCostUsd: COST_PER_CALL_USD[MODEL_COPY] || 0,
     }, session);
     return res.json({
@@ -1106,13 +1127,20 @@ app.post('/api/export-to-drive', requireAuth, async (req, res) => {
 // ---------------------------------------------------------------------------
 
 app.get('/api/dslr-capture/status', requireAuth, async (req, res) => {
+  const session = (req as any).session as SessionInfo;
   if (!isDslrCaptureConfigured()) {
     return res.json({ available: false });
   }
   // Configured isn't the same as reachable right now - the Lenovo/camera may
   // simply be powered off, which the UI should show as "not available"
-  // rather than a broken button.
-  res.json({ available: await isDslrBridgeReachable() });
+  // rather than a broken button. Only actual capture attempts were logged
+  // before this - meaning there was no way to tell "the bridge/tunnel was
+  // silently down X% of the time staff opened this screen" apart from a
+  // capture actually being attempted. Logged once per PhotoSlotCard mount
+  // (roughly once per product), not a tight poll loop, so volume is fine.
+  const available = await isDslrBridgeReachable();
+  logEvent('dslr.status_check', { available }, session);
+  res.json({ available });
 });
 
 app.post('/api/dslr-capture', requireAuth, async (req, res) => {
@@ -1123,7 +1151,13 @@ app.post('/api/dslr-capture', requireAuth, async (req, res) => {
   }
   try {
     const result = await captureDslrPhoto();
-    logEvent('dslr.capture', { success: true, latencyMs: Date.now() - startedAt }, session);
+    // captureMs/readMs come from the bridge itself (camera+USB transfer vs
+    // local file read+encode) - without this, that breakdown only exists in
+    // bridge.log on the Lenovo, invisible to the durable cloud analytics.
+    logEvent('dslr.capture', {
+      success: true, latencyMs: Date.now() - startedAt,
+      cameraTransferMs: result.captureMs ?? null, fileReadEncodeMs: result.readMs ?? null,
+    }, session);
     res.json({ success: true, imageBase64: result.imageBase64 });
   } catch (err: any) {
     console.error('DSLR capture failed:', err?.message || err);
@@ -1249,6 +1283,18 @@ app.get('/api/analytics/summary', requireAuth, async (req, res) => {
   const driveExports = events.filter((e) => e.type === 'drive.export');
   const driveSuccesses = driveExports.filter((e) => e.success).length;
 
+  // Distinguishes "the Studio Camera button was silently unavailable
+  // because the Lenovo/tunnel was down" from "it was available but the
+  // capture itself failed" - previously only actual capture attempts were
+  // logged, which couldn't tell those two apart.
+  const dslrStatusChecks = events.filter((e) => e.type === 'dslr.status_check');
+  const dslrAvailableChecks = dslrStatusChecks.filter((e) => e.available).length;
+  const dslrCaptures = events.filter((e) => e.type === 'dslr.capture');
+  const dslrCaptureSuccesses = dslrCaptures.filter((e) => e.success).length;
+  const cameraTransferMsValues = dslrCaptures
+    .map((e) => Number(e.cameraTransferMs))
+    .filter((n) => Number.isFinite(n) && n > 0);
+
   const loginFailures = events.filter((e) => e.type === 'auth.login_failure').length;
   const loginSuccesses = events.filter((e) => e.type === 'auth.login_success').length;
 
@@ -1373,6 +1419,16 @@ app.get('/api/analytics/summary', requireAuth, async (req, res) => {
       attempts: driveExports.length,
       successes: driveSuccesses,
       successRate: driveExports.length ? driveSuccesses / driveExports.length : null,
+    },
+    dslr: {
+      statusChecks: dslrStatusChecks.length,
+      availabilityRate: dslrStatusChecks.length ? dslrAvailableChecks / dslrStatusChecks.length : null,
+      captureAttempts: dslrCaptures.length,
+      captureSuccessRate: dslrCaptures.length ? dslrCaptureSuccesses / dslrCaptures.length : null,
+      avgCameraTransferMs: cameraTransferMsValues.length
+        ? Math.round(cameraTransferMsValues.reduce((a, b) => a + b, 0) / cameraTransferMsValues.length)
+        : null,
+      note: 'availabilityRate is how often the bridge/tunnel was actually reachable when staff opened a photo slot, distinct from captureSuccessRate (whether an attempted capture succeeded) - a low availabilityRate with a high captureSuccessRate points at the Lenovo/tunnel being offline sometimes, not the camera itself failing.',
     },
     auth: {
       loginSuccesses,

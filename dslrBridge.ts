@@ -43,6 +43,12 @@ export async function isDslrBridgeReachable(): Promise<boolean> {
 
 export interface DslrCaptureResult {
   imageBase64: string; // data URL
+  // Bridge-reported stage timing (shutter+USB transfer vs local file
+  // read+encode) - lets the cloud-side log distinguish camera/USB latency
+  // from network/tunnel latency without needing to check bridge.log on the
+  // Lenovo itself, which is invisible to the durable analytics otherwise.
+  captureMs?: number;
+  readMs?: number;
 }
 
 export async function captureDslrPhoto(): Promise<DslrCaptureResult> {
@@ -61,7 +67,7 @@ export async function captureDslrPhoto(): Promise<DslrCaptureResult> {
     if (!response.ok || !data?.success) {
       throw new Error(data?.error || `Studio camera bridge returned HTTP ${response.status}.`);
     }
-    return { imageBase64: data.imageBase64 };
+    return { imageBase64: data.imageBase64, captureMs: data.captureMs, readMs: data.readMs };
   } catch (err: any) {
     if (err?.name === 'AbortError') {
       throw new Error('Studio camera capture timed out - the Lenovo bridge may be offline or the camera unresponsive.');
