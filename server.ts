@@ -41,6 +41,12 @@ function getGeminiClient(): GoogleGenAI {
 const MODEL_ENHANCE_DEFAULT = 'gemini-3.1-flash-image';
 const MODEL_ENHANCE_ESCALATED = 'nano-banana-pro-preview';
 const MODEL_AUDIT = 'gemini-3.1-flash-lite';
+// Product copy (name + description) only runs once per staff-approved photo,
+// not on every pipeline attempt, so it can afford a stronger model than the
+// audit's flash-lite tier - bland, generic copy was traced to that model
+// being too weak for genuinely specific, sellable writing, not just a prompt
+// problem. Verified against this account's real /v1beta/models list.
+const MODEL_COPY = 'gemini-3.1-pro-preview';
 
 // Segmentation grounding (experimental): a small vision call that traces the
 // real jewelry's exact silhouette in the ORIGINAL photo, so the enhance call
@@ -65,6 +71,7 @@ const COST_PER_CALL_USD: Record<string, number> = {
   [MODEL_ENHANCE_ESCALATED]: Number(process.env.COST_ENHANCE_ESCALATED_USD) || 0.13,
   [MODEL_AUDIT]: Number(process.env.COST_AUDIT_USD) || 0.001,
   [MODEL_SEGMENT]: Number(process.env.COST_SEGMENT_USD) || 0.001,
+  [MODEL_COPY]: Number(process.env.COST_COPY_USD) || 0.01,
 };
 
 // Per-call-type timeouts.
@@ -989,9 +996,11 @@ app.post('/api/generate-copy', requireAuth, async (req, res) => {
   const prompt = `You are writing catalogue copy for "RL Jewels", an Indian fine jewelry retailer, for the studio-finished product photo attached.
 Item: ${purity || '22kt'} gold ${itemType || 'jewellery'}, for ${gender || "women's"}${size && size !== 'DEFAULT' ? `, size ${size}` : ''}${weight ? `, ${weight}g` : ''}.
 
+First, look closely and identify the specific visible motif, setting style, or technique by its real jewelry-trade name - e.g. peacock, floral, temple, kundan, polki, meenakari, filigree, cutwork, jali/lattice, antique or oxidized finish, geometric. Do not fall back to vague words like "design," "style," or "pattern" - name the actual thing you see.
+
 Write:
-1. "name" - a short, specific, appealing product name (5-9 words) that names what's actually visible in the photo (its motif, style, or form) - not a generic label like "Gold Ring". Avoid superlatives that aren't visually earned ("stunning", "exquisite") - let the specific description do the selling.
-2. "description" - 2-3 sentences a customer would read right next to this photo. Describe only what is genuinely visible (the design, finish, setting style, any visible motifs or texture) - never invent stones, engravings, or features not shown. Mention the purity naturally. Write like a knowledgeable jeweler, not ad copy.
+1. "name" - a specific, keyword-rich product title (6-10 words) that a real shopper would type into a search bar: lead with the distinctive visible motif or style, then material, purity, and item type - e.g. "Peacock Motif 22kt Gold Jhumka Earrings," not "Gold Earrings." No generic labels, no unearned superlatives ("stunning," "exquisite," "beautiful").
+2. "description" - 2-3 sentences, written for a shopper first and search engines second. Open with the standout visible feature named specifically (not "the design"). Describe only what is genuinely visible - never invent stones, engravings, or features not shown. Mention the purity and item type naturally (these are exactly what customers search by). Write like a knowledgeable jeweler who is genuinely proud to be showing this piece - confident and specific, not generic ad copy, but not a dry inventory listing either.
 
 Respond ONLY as JSON: {"name": string, "description": string}`;
 
@@ -1002,7 +1011,7 @@ Respond ONLY as JSON: {"name": string, "description": string}`;
     const response = await withTransientRetry(
       () =>
         ai.models.generateContent({
-          model: MODEL_AUDIT,
+          model: MODEL_COPY,
           contents: {
             parts: [{ inlineData: { mimeType, data: cleanBase64 } }, { text: prompt }],
           },
@@ -1021,7 +1030,7 @@ Respond ONLY as JSON: {"name": string, "description": string}`;
     logEvent('copy.generated', {
       itemType, purity, success: true, latencyMs: Date.now() - startedAt,
       nameLength: String(parsed.name).length, descriptionLength: String(parsed.description).length,
-      estimatedCostUsd: COST_PER_CALL_USD[MODEL_AUDIT] || 0,
+      estimatedCostUsd: COST_PER_CALL_USD[MODEL_COPY] || 0,
     }, session);
     return res.json({ success: true, name: String(parsed.name), description: String(parsed.description) });
   } catch (err: any) {
