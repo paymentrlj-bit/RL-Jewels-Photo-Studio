@@ -1,12 +1,13 @@
 import express from 'express';
 import path from 'path';
 import crypto from 'crypto';
+import { Readable } from 'stream';
 import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 import { DEFAULT_ENHANCE_PROMPT } from './src/utils/promptSettings';
 import { isDriveConfigured, exportProductToDrive } from './driveExport';
-import { isDslrCaptureConfigured, isDslrBridgeReachable, captureDslrPhoto } from './dslrBridge';
+import { isDslrCaptureConfigured, isDslrBridgeReachable, captureDslrPhoto, getDslrLiveViewStream } from './dslrBridge';
 import { logEvent, newRequestId, readEventsForAnalytics, isAxiomConfigured, getAxiomDataset, LoggedSession } from './logging';
 
 dotenv.config();
@@ -1141,6 +1142,33 @@ app.get('/api/dslr-capture/status', requireAuth, async (req, res) => {
   const available = await isDslrBridgeReachable();
   logEvent('dslr.status_check', { available }, session);
   res.json({ available });
+});
+
+// Proxies the bridge's live-view feed so staff can frame/focus a shot before
+// pressing capture. Routed through here (rather than the browser hitting the
+// bridge's tunnel URL directly) for two reasons: it reuses this app's normal
+// staff-login auth instead of needing a new public/unauthenticated camera
+// feed, and it lets the bridge's BRIDGE_SECRET stay server-side only - a
+// plain <img src> can't send a custom Authorization header itself.
+app.get('/api/dslr-capture/live', requireAuth, async (req, res) => {
+  if (!isDslrCaptureConfigured()) {
+    return res.status(503).json({ error: 'Studio camera capture is not configured on this server.' });
+  }
+  try {
+    const upstream = await getDslrLiveViewStream();
+    res.writeHead(200, {
+      'Content-Type': upstream.headers.get('content-type') || 'multipart/x-mixed-replace',
+      'Cache-Control': 'no-cache, no-transform',
+    });
+    const nodeStream = Readable.fromWeb(upstream.body as any);
+    nodeStream.pipe(res);
+    // If the browser navigates away or closes the tab, stop pulling frames
+    // from the bridge instead of leaking an open connection indefinitely.
+    req.on('close', () => nodeStream.destroy());
+  } catch (err: any) {
+    console.error('dslr live view proxy failed:', err?.message || err);
+    if (!res.headersSent) res.status(502).json({ error: debugDetail(err) });
+  }
 });
 
 app.post('/api/dslr-capture', requireAuth, async (req, res) => {
