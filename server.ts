@@ -1242,6 +1242,22 @@ app.get('/api/analytics/summary', requireAuth, async (req, res) => {
   const failedCalls = apiCalls.filter((e) => e.success === false).length;
   const timedOutCalls = apiCalls.filter((e) => e.timedOut).length;
 
+  // Every api_call already carries `stage` (enhance/audit/segment) and
+  // `model` - a combined timeout rate hides which one is actually hanging.
+  // Real data (2026-08-21, 19 runs): 37% overall timeout rate with no way
+  // to tell whether that's the enhance call, the audit call, or
+  // segmentation grounding - this is what actually answers that.
+  const apiCallStageStats: Record<string, { calls: number; failed: number; timedOut: number; latencies: number[] }> = {};
+  for (const c of apiCalls) {
+    const key = `${c.stage || 'unknown'} (${c.model || 'unknown'})`;
+    if (!apiCallStageStats[key]) apiCallStageStats[key] = { calls: 0, failed: 0, timedOut: 0, latencies: [] };
+    apiCallStageStats[key].calls++;
+    if (c.success === false) apiCallStageStats[key].failed++;
+    if (c.timedOut) apiCallStageStats[key].timedOut++;
+    const lat = Number(c.latencyMs);
+    if (Number.isFinite(lat) && lat > 0) apiCallStageStats[key].latencies.push(lat);
+  }
+
   const auditVerdicts = events.filter((e) => e.type === 'pipeline.audit_verdict');
   const checklistFailCounts: Record<string, number> = {};
   for (const v of auditVerdicts) {
@@ -1385,6 +1401,18 @@ app.get('/api/analytics/summary', requireAuth, async (req, res) => {
       timedOut: timedOutCalls,
       failureRate: apiCalls.length ? failedCalls / apiCalls.length : null,
       timeoutRate: apiCalls.length ? timedOutCalls / apiCalls.length : null,
+      byStage: Object.fromEntries(
+        Object.entries(apiCallStageStats).map(([key, s]) => [
+          key,
+          {
+            calls: s.calls,
+            failureRate: s.calls ? s.failed / s.calls : null,
+            timeoutRate: s.calls ? s.timedOut / s.calls : null,
+            avgLatencyMs: s.latencies.length ? Math.round(s.latencies.reduce((a, b) => a + b, 0) / s.latencies.length) : null,
+          },
+        ])
+      ),
+      note: 'byStage breaks the overall timeout/failure rate down by which call actually stalled (enhance vs audit vs segmentation, per model) - the combined rate above can look bad from just one stage misbehaving.',
     },
     cost: {
       estimatedTotalUsd: Number(totalCostUsd.toFixed(2)),

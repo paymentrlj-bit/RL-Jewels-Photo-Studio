@@ -30,6 +30,8 @@ interface AnalyticsSummary {
     timedOut: number;
     failureRate: number | null;
     timeoutRate: number | null;
+    byStage: Record<string, { calls: number; failureRate: number | null; timeoutRate: number | null; avgLatencyMs: number | null }>;
+    note: string;
   };
   cost: {
     estimatedTotalUsd: number;
@@ -64,6 +66,14 @@ interface AnalyticsSummary {
     attempts: number;
     successes: number;
     successRate: number | null;
+  };
+  dslr: {
+    statusChecks: number;
+    availabilityRate: number | null;
+    captureAttempts: number;
+    captureSuccessRate: number | null;
+    avgCameraTransferMs: number | null;
+    note: string;
   };
   auth: {
     loginSuccesses: number;
@@ -280,6 +290,35 @@ export const AdminInsightsModal: React.FC<AdminInsightsModalProps> = ({ isOpen, 
                     <StatTile label="Escalation Rate" value={fmtPct(data.pipeline.escalationRate)} sub="needed the premium retry" />
                     <StatTile label="API Timeout Rate" value={fmtPct(data.apiCalls.timeoutRate)} tone={data.apiCalls.timeoutRate && data.apiCalls.timeoutRate > 0.05 ? 'warn' : 'default'} />
                   </div>
+                  {Object.keys(data.apiCalls.byStage).length > 0 && (
+                    <div className="overflow-x-auto rounded-2xl border border-stone-200 mt-2.5">
+                      <table className="w-full text-xs">
+                        <thead className="bg-stone-50 text-stone-500">
+                          <tr>
+                            <th className="text-left px-3 py-2 font-bold uppercase tracking-wider text-[10px]">Stage (Model)</th>
+                            <th className="text-right px-3 py-2 font-bold uppercase tracking-wider text-[10px]">Calls</th>
+                            <th className="text-right px-3 py-2 font-bold uppercase tracking-wider text-[10px]">Timeout Rate</th>
+                            <th className="text-right px-3 py-2 font-bold uppercase tracking-wider text-[10px]">Avg Latency</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-stone-100">
+                          {Object.entries(data.apiCalls.byStage)
+                            .sort((a, b) => (b[1].timeoutRate || 0) - (a[1].timeoutRate || 0))
+                            .map(([stage, s]) => (
+                              <tr key={stage}>
+                                <td className="px-3 py-2 font-semibold text-stone-800">{stage}</td>
+                                <td className="px-3 py-2 text-right text-stone-600">{s.calls}</td>
+                                <td className={`px-3 py-2 text-right font-bold ${s.timeoutRate && s.timeoutRate > 0.1 ? 'text-red-600' : 'text-stone-600'}`}>
+                                  {fmtPct(s.timeoutRate)}
+                                </td>
+                                <td className="px-3 py-2 text-right text-stone-600">{fmtMs(s.avgLatencyMs)}</td>
+                              </tr>
+                            ))}
+                        </tbody>
+                      </table>
+                      <p className="text-[10px] text-stone-400 px-3 py-2 border-t border-stone-100">{data.apiCalls.note}</p>
+                    </div>
+                  )}
 
                   <SectionTitle icon={<DollarSign className="w-3.5 h-3.5 text-red-600" />}>Estimated Cost</SectionTitle>
                   <div className="grid grid-cols-2 gap-2.5">
@@ -476,6 +515,24 @@ export const AdminInsightsModal: React.FC<AdminInsightsModalProps> = ({ isOpen, 
                         <StatTile label="Attempts" value={String(data.drive.attempts)} />
                         <StatTile label="Success Rate" value={fmtPct(data.drive.successRate)} />
                       </div>
+                    </>
+                  )}
+
+                  {data.dslr.statusChecks > 0 && (
+                    <>
+                      <SectionTitle icon={<TrendingUp className="w-3.5 h-3.5 text-red-600" />}>Studio Camera (DSLR)</SectionTitle>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                        <StatTile
+                          label="Bridge Availability"
+                          value={fmtPct(data.dslr.availabilityRate)}
+                          sub={`${data.dslr.statusChecks} checks`}
+                          tone={data.dslr.availabilityRate !== null && data.dslr.availabilityRate < 0.8 ? 'warn' : 'default'}
+                        />
+                        <StatTile label="Capture Attempts" value={String(data.dslr.captureAttempts)} />
+                        <StatTile label="Capture Success Rate" value={fmtPct(data.dslr.captureSuccessRate)} />
+                        <StatTile label="Avg Camera+USB Time" value={fmtMs(data.dslr.avgCameraTransferMs)} />
+                      </div>
+                      <p className="text-[10px] text-stone-400 mt-1.5 px-0.5">{data.dslr.note}</p>
                     </>
                   )}
 
