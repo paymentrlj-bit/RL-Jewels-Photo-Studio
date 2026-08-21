@@ -16,7 +16,7 @@ You only need to do the authorization step once — it produces a long-lived **r
 
 3. **Configure the OAuth consent screen**: *APIs & Services → OAuth consent screen*. Choose **External**, fill in the required app name/support email fields (anything reasonable), and save. You do not need to submit it for Google verification — it's fine to stay in "Testing" mode as long as you add your own Google account under **Test users** on that same screen.
 
-4. **Create an OAuth Client ID**: *APIs & Services → Credentials → Create Credentials → OAuth client ID*. Application type: **Desktop app**. Give it any name, e.g. "RL Jewels Drive Uploader". After creating it, copy the **Client ID** and **Client Secret** shown — you'll need both.
+4. **Create an OAuth Client ID**: *APIs & Services → Credentials → Create Credentials → OAuth client ID*. Application type: **Web application** (not "Desktop app" — that type has fixed redirect URIs you can't edit, which breaks the next step). Give it any name, e.g. "RL Jewels Drive Uploader". Under **Authorized redirect URIs**, click **Add URI** and enter exactly `https://developers.google.com/oauthplayground`. Create it, then copy the **Client ID** and **Client Secret** shown — you'll need both.
 
 5. **Get a refresh token** using Google's OAuth Playground:
    - Go to [developers.google.com/oauthplayground](https://developers.google.com/oauthplayground/).
