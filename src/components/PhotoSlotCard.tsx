@@ -38,6 +38,16 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
       .catch(() => setDslrAvailable(false));
   }, []);
 
+  // Both capture methods are reachable from either device (the DSLR endpoint
+  // is just a normal API call, so a phone on the same network can trigger it
+  // too) - this only decides which one is FEATURED as the default per
+  // device. Someone on the station's laptop is standing at the lightbox, so
+  // the studio camera is the obvious default there. Someone on their phone
+  // is presumably not standing at the fixed station, so their own camera
+  // stays the default - the studio camera is still one tap away if they are.
+  const dslrIsPrimary = dslrAvailable && !isMobile;
+  const dslrIsSecondaryOption = dslrAvailable && isMobile;
+
   // Fetch individual frames from the live-view stream and draw them on canvas.
   // Modern browsers dropped support for MJPEG in img tags, so we need to
   // parse the multipart stream manually and update canvas continuously.
@@ -123,16 +133,6 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
       controller?.abort();
     };
   }, [dslrIsPrimary, liveViewFailed, isDslrCapturing]);
-
-  // Both capture methods are reachable from either device (the DSLR endpoint
-  // is just a normal API call, so a phone on the same network can trigger it
-  // too) - this only decides which one is FEATURED as the default per
-  // device. Someone on the station's laptop is standing at the lightbox, so
-  // the studio camera is the obvious default there. Someone on their phone
-  // is presumably not standing at the fixed station, so their own camera
-  // stays the default - the studio camera is still one tap away if they are.
-  const dslrIsPrimary = dslrAvailable && !isMobile;
-  const dslrIsSecondaryOption = dslrAvailable && isMobile;
 
   const runPreflight = async (dataUrl: string, sourceFile?: File, method: 'in-app-camera' | 'gallery-upload' | 'dslr-capture' = 'in-app-camera') => {
     const isRetake = Boolean(photo.originalImage);
