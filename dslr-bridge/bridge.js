@@ -87,6 +87,18 @@ if (!BRIDGE_SECRET) {
 // localhost, so hand-rolling the request/response here entirely
 // sidesteps Node's HTTP parser (and its opinions about what a "valid"
 // response looks like) rather than depending on it being lenient enough.
+//
+// Second real hardware finding: digiCamControl's web server does NOT
+// honor the "Connection: close" header - it keeps the socket open after
+// sending its response instead of closing it. The first version of this
+// function only resolved on the socket's 'end' event (i.e. waited for the
+// server to close the connection), which meant every call just hung until
+// timeoutMs and then failed - "/status" reporting available:false even
+// though digiCamControl was up and live view was working fine. Fixed by
+// parsing Content-Length out of the (duplicated, but consistent) headers
+// and resolving as soon as that many body bytes have arrived, without
+// waiting for the socket to close. 'end' is kept only as a fallback for
+// the rare response with no Content-Length at all.
 function httpGetText(url, timeoutMs) {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
@@ -108,7 +120,34 @@ function httpGetText(url, timeoutMs) {
       const requestPath = parsed.pathname + parsed.search;
       socket.write(`GET ${requestPath} HTTP/1.1\r\nHost: ${parsed.hostname}\r\nConnection: close\r\n\r\n`);
     });
-    socket.on('data', (chunk) => { raw = Buffer.concat([raw, chunk]); });
+
+    const tryParse = () => {
+      const text = raw.toString('utf8');
+      const headerEnd = text.indexOf('\r\n\r\n');
+      if (headerEnd === -1) return; // headers not fully received yet
+
+      const headerText = text.slice(0, headerEnd);
+      const statusLine = headerText.split('\r\n')[0];
+      const statusMatch = statusLine.match(/HTTP\/\d\.\d\s+(\d+)/);
+      const statusCode = statusMatch ? Number(statusMatch[1]) : 0;
+
+      // Duplicated across multiple headers in practice, but the values
+      // agree - just take whichever comes first.
+      const lengthMatch = headerText.match(/Content-Length:\s*(\d+)/i);
+      if (!lengthMatch) return; // no Content-Length - fall back to waiting for 'end'
+
+      const expectedBodyLength = Number(lengthMatch[1]);
+      const bodyBytesSoFar = raw.length - (headerEnd + 4);
+      if (bodyBytesSoFar < expectedBodyLength) return; // body still arriving
+
+      const body = text.slice(headerEnd + 4, headerEnd + 4 + expectedBodyLength);
+      finish(resolve, { statusCode, body });
+    };
+
+    socket.on('data', (chunk) => {
+      raw = Buffer.concat([raw, chunk]);
+      tryParse();
+    });
     socket.on('end', () => {
       const text = raw.toString('utf8');
       const headerEnd = text.indexOf('\r\n\r\n');
