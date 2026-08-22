@@ -29,6 +29,7 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
   const [dslrError, setDslrError] = useState('');
   const [liveViewFailed, setLiveViewFailed] = useState(false);
   const [isMobile] = useState(() => isMobileUserAgent());
+  const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
     fetch('/api/dslr-capture/status')
@@ -36,6 +37,92 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
       .then((d) => setDslrAvailable(Boolean(d?.available)))
       .catch(() => setDslrAvailable(false));
   }, []);
+
+  // Fetch individual frames from the live-view stream and draw them on canvas.
+  // Modern browsers dropped support for MJPEG in img tags, so we need to
+  // parse the multipart stream manually and update canvas continuously.
+  useEffect(() => {
+    if (!dslrIsPrimary || liveViewFailed || isDslrCapturing) return;
+
+    let controller: AbortController | null = null;
+    let isActive = true;
+
+    const startStream = async () => {
+      try {
+        controller = new AbortController();
+        const res = await fetch('/api/dslr-capture/live', { signal: controller.signal });
+        if (!res.ok || !res.body) {
+          setLiveViewFailed(true);
+          return;
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = new Uint8Array(0);
+
+        while (isActive) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer = new Uint8Array([...buffer, ...value]);
+
+          // Look for JPEG frame boundaries in the multipart stream
+          const startMarker = new Uint8Array([0xff, 0xd8]); // JPEG SOI
+          const endMarker = new Uint8Array([0xff, 0xd9]); // JPEG EOI
+
+          let startIdx = -1;
+          for (let i = 0; i < buffer.length - 1; i++) {
+            if (buffer[i] === startMarker[0] && buffer[i + 1] === startMarker[1]) {
+              startIdx = i;
+              break;
+            }
+          }
+
+          if (startIdx === -1) continue;
+
+          let endIdx = -1;
+          for (let i = startIdx + 2; i < buffer.length - 1; i++) {
+            if (buffer[i] === endMarker[0] && buffer[i + 1] === endMarker[1]) {
+              endIdx = i + 2;
+              break;
+            }
+          }
+
+          if (endIdx === -1) continue;
+
+          const jpegData = buffer.slice(startIdx, endIdx);
+          const blob = new Blob([jpegData], { type: 'image/jpeg' });
+          const url = URL.createObjectURL(blob);
+
+          // Draw on canvas
+          const canvas = canvasRef.current;
+          if (canvas) {
+            const ctx = canvas.getContext('2d');
+            const img = new Image();
+            img.onload = () => {
+              ctx?.drawImage(img, 0, 0, canvas.width, canvas.height);
+              URL.revokeObjectURL(url);
+            };
+            img.src = url;
+          }
+
+          // Remove processed bytes
+          buffer = buffer.slice(endIdx);
+        }
+      } catch (err: any) {
+        if (err.name !== 'AbortError') {
+          console.error('Live view stream error:', err);
+          setLiveViewFailed(true);
+        }
+      }
+    };
+
+    startStream();
+    return () => {
+      isActive = false;
+      controller?.abort();
+    };
+  }, [dslrIsPrimary, liveViewFailed, isDslrCapturing]);
 
   // Both capture methods are reachable from either device (the DSLR endpoint
   // is just a normal API call, so a phone on the same network can trigger it
@@ -190,12 +277,11 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
           </>
         ) : dslrIsPrimary && !liveViewFailed ? (
           <>
-            <img
-              key={isDslrCapturing ? 'capturing' : 'live'}
-              src="/api/dslr-capture/live"
-              alt="Studio camera live view"
+            <canvas
+              ref={canvasRef}
+              width={640}
+              height={480}
               className="w-full h-full object-contain bg-stone-900"
-              onError={() => setLiveViewFailed(true)}
             />
             <div className="absolute top-2 left-2 flex items-center gap-1.5 bg-black/60 text-white text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-full">
               <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
