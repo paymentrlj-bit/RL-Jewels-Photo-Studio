@@ -64,6 +64,10 @@ const CAPTURE_TIMEOUT_MS = 45_000;
 // and the file actually finishing its write to disk.
 const FILE_POLL_TIMEOUT_MS = 8_000;
 const FILE_POLL_INTERVAL_MS = 300;
+// Autofocus alone (no shutter, no file transfer) should be much quicker than
+// a full capture - this is generous headroom for a camera that has to hunt
+// on a reflective/polished surface, not a normal-case estimate.
+const FOCUS_TIMEOUT_MS = 12_000;
 
 if (!BRIDGE_SECRET) {
   log('WARNING: BRIDGE_SECRET is not set - refusing to start, since this bridge will be reachable from the internet.');
@@ -173,6 +177,22 @@ function resumeLiveView() {
   httpGetText(`${WEBSERVER_BASE}/?CMD=LiveViewWnd_Show`, 5_000)
     .then(() => log('live view resumed'))
     .catch((err) => log(`live view resume failed (non-fatal): ${err.message}`));
+}
+
+// Triggers the camera's own autofocus while live view is active - lets
+// staff rack focus before pressing capture instead of relying on whatever
+// the camera last focused on. CMD=DoAutoFocus is the command name reported
+// in use for this in digiCamControl's own community/forum documentation -
+// NOT independently verified against this specific digiCamControl build,
+// since it's not one of the endpoints already confirmed working in
+// DSLR_CAPTURE_SETUP.md step 6. Logs the raw response either way so a
+// wrong command name is easy to spot and correct from bridge.log.
+async function autofocus() {
+  const { statusCode, body } = await httpGetText(`${WEBSERVER_BASE}/?CMD=DoAutoFocus`, FOCUS_TIMEOUT_MS);
+  log(`autofocus response (HTTP ${statusCode}): ${body.slice(0, 200)}`);
+  if (statusCode !== 200) {
+    throw new Error(`digiCamControl autofocus command failed (HTTP ${statusCode}): ${body.slice(0, 300) || 'no response body'}`);
+  }
 }
 
 function waitForCapturedFile(captureDir, capturedAfter) {
@@ -346,6 +366,22 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       log(`capture failed: ${err.message}`);
       send(res, 502, { error: err.message || 'Studio camera capture failed.' });
+    }
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/focus') {
+    if (!isAuthorized(req)) {
+      send(res, 401, { error: 'Unauthorized.' });
+      return;
+    }
+    try {
+      await autofocus();
+      log('autofocus ok');
+      send(res, 200, { success: true });
+    } catch (err) {
+      log(`autofocus failed: ${err.message}`);
+      send(res, 502, { error: err.message || 'Studio camera autofocus failed.' });
     }
     return;
   }

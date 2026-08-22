@@ -7,7 +7,7 @@ import { GoogleGenAI } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 import { DEFAULT_ENHANCE_PROMPT } from './src/utils/promptSettings';
 import { isDriveConfigured, exportProductToDrive } from './driveExport';
-import { isDslrCaptureConfigured, isDslrBridgeReachable, captureDslrPhoto, getDslrLiveViewStream } from './dslrBridge';
+import { isDslrCaptureConfigured, isDslrBridgeReachable, captureDslrPhoto, getDslrLiveViewStream, autofocusDslr } from './dslrBridge';
 import { logEvent, newRequestId, readEventsForAnalytics, isAxiomConfigured, getAxiomDataset, LoggedSession } from './logging';
 
 dotenv.config();
@@ -1191,6 +1191,26 @@ app.post('/api/dslr-capture', requireAuth, async (req, res) => {
     console.error('DSLR capture failed:', err?.message || err);
     logEvent('dslr.capture', { success: false, latencyMs: Date.now() - startedAt, errorMessage: debugDetail(err) }, session);
     res.status(502).json({ error: err?.message || 'Studio camera capture failed.', debugDetail: debugDetail(err) });
+  }
+});
+
+// Triggers the camera's own autofocus while live view is active, so staff
+// can rack focus before pressing capture instead of relying on whatever the
+// camera last focused on.
+app.post('/api/dslr-capture/focus', requireAuth, async (req, res) => {
+  const startedAt = Date.now();
+  const session = (req as any).session as SessionInfo;
+  if (!isDslrCaptureConfigured()) {
+    return res.status(503).json({ error: 'Studio camera capture is not configured on this server.' });
+  }
+  try {
+    await autofocusDslr();
+    logEvent('dslr.autofocus', { success: true, latencyMs: Date.now() - startedAt }, session);
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error('DSLR autofocus failed:', err?.message || err);
+    logEvent('dslr.autofocus', { success: false, latencyMs: Date.now() - startedAt, errorMessage: debugDetail(err) }, session);
+    res.status(502).json({ error: err?.message || 'Studio camera autofocus failed.', debugDetail: debugDetail(err) });
   }
 });
 

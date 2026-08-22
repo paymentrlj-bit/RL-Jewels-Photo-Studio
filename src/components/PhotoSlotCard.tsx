@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Camera, Upload, Trash2, CheckCircle2, Eye, Sparkles, AlertTriangle, Aperture } from 'lucide-react';
+import { Camera, Upload, Trash2, CheckCircle2, Eye, Sparkles, AlertTriangle, Aperture, Focus } from 'lucide-react';
 import { PhotoItem, PreflightIssue } from '../types';
 import { CameraModal } from './CameraModal';
 import { downscaleImage, analyzeImageQuality, checkFlashFired } from '../utils/imagePreflight';
@@ -28,6 +28,8 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
   const [dslrStage, setDslrStage] = useState('');
   const [dslrError, setDslrError] = useState('');
   const [liveViewFailed, setLiveViewFailed] = useState(false);
+  const [isFocusing, setIsFocusing] = useState(false);
+  const [focusError, setFocusError] = useState('');
   const [isMobile] = useState(() => isMobileUserAgent());
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -218,6 +220,22 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
     }
   };
 
+  const handleAutofocus = async () => {
+    setFocusError('');
+    setIsFocusing(true);
+    try {
+      const res = await fetch('/api/dslr-capture/focus', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data?.error || 'Studio camera autofocus failed.');
+      }
+    } catch (err: any) {
+      setFocusError(err?.message || 'Studio camera autofocus failed.');
+    } finally {
+      setIsFocusing(false);
+    }
+  };
+
   const hasImage = Boolean(photo.originalImage);
 
   return (
@@ -287,6 +305,16 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
               <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
               <span>Live</span>
             </div>
+            <button
+              type="button"
+              onClick={handleAutofocus}
+              disabled={isFocusing || isDslrCapturing}
+              className="absolute bottom-2 right-2 flex items-center gap-1.5 bg-black/60 hover:bg-black/75 disabled:opacity-60 text-white text-[10px] font-bold uppercase tracking-wider px-2.5 py-1.5 rounded-full transition-colors"
+              title="Autofocus"
+            >
+              <Focus className={`w-3.5 h-3.5 ${isFocusing ? 'animate-spin' : ''}`} />
+              <span>{isFocusing ? 'Focusing…' : 'Focus'}</span>
+            </button>
           </>
         ) : (
           <div className="text-center p-4 flex flex-col items-center justify-center space-y-2">
@@ -312,6 +340,13 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
         <div className="mt-1 mb-1 bg-red-50 border border-red-200 text-red-800 text-[11px] px-3 py-2 rounded-xl flex items-start gap-2">
           <AlertTriangle className="w-3.5 h-3.5 text-red-600 shrink-0 mt-0.5" />
           <span>{dslrError}</span>
+        </div>
+      )}
+
+      {focusError && (
+        <div className="mt-1 mb-1 bg-red-50 border border-red-200 text-red-800 text-[11px] px-3 py-2 rounded-xl flex items-start gap-2">
+          <AlertTriangle className="w-3.5 h-3.5 text-red-600 shrink-0 mt-0.5" />
+          <span>{focusError}</span>
         </div>
       )}
 

@@ -95,6 +95,7 @@ If you're using a free quick tunnel (a new URL every restart, no Cloudflare acco
 - **"Studio camera capture timed out"** — the camera likely isn't responding (asleep, USB cable issue), or the bridge/tunnel isn't actually running. Check the physical connection and that all three daily-startup components are up.
 - **"digiCamControl reported success but no output file appeared"** — the save folder in step 5 doesn't match `C:\Users\admin\AppData\Local\Temp\rlj-dslr-capture` exactly. Re-check that setting.
 - **Live view shows in digiCamControl's own GUI but not in the app** — confirm live view was actually *started* in the GUI (enabling the web server alone isn't enough), and that `http://127.0.0.1:5514/live` shows a feed in a browser on the Lenovo itself before assuming it's a bridge/tunnel problem.
+- **"Studio camera autofocus failed"** — the Focus button (shown over the live view) sends `CMD=DoAutoFocus` to digiCamControl's web server. That command name is the one reported in use by digiCamControl's own community documentation, but it has **not** been confirmed against this specific installation the way the step 6 endpoints have. If the button errors, test `http://localhost:5513/?CMD=DoAutoFocus` directly in a browser on the Lenovo while live view is running and see what comes back (and whether the camera actually racks focus) — `bridge.log` also logs the raw response either way, which is the fastest way to spot a wrong command name and get it corrected.
 
 ## What this does *not* do (yet)
 
