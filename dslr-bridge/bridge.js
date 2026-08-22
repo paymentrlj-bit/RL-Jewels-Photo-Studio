@@ -179,19 +179,46 @@ function resumeLiveView() {
     .catch((err) => log(`live view resume failed (non-fatal): ${err.message}`));
 }
 
+// Convention: any digiCamControl web server command called from this file
+// whose exact behavior has NOT been confirmed against this studio's real
+// hardware (unlike /?slc=capture, /?CMD=LiveViewWnd_Show, and
+// /session.json, all manually verified per DSLR_CAPTURE_SETUP.md step 6
+// before being wired up) logs its raw response prefixed with
+// "UNVERIFIED COMMAND" - makes it a one-line grep of bridge.log to find
+// every camera command still waiting on a real confirmation, instead of
+// having to remember which comment block mentioned it.
+
 // Triggers the camera's own autofocus while live view is active - lets
 // staff rack focus before pressing capture instead of relying on whatever
 // the camera last focused on. CMD=DoAutoFocus is the command name reported
-// in use for this in digiCamControl's own community/forum documentation -
-// NOT independently verified against this specific digiCamControl build,
-// since it's not one of the endpoints already confirmed working in
-// DSLR_CAPTURE_SETUP.md step 6. Logs the raw response either way so a
-// wrong command name is easy to spot and correct from bridge.log.
+// in use for this in digiCamControl's own community/forum documentation.
 async function autofocus() {
   const { statusCode, body } = await httpGetText(`${WEBSERVER_BASE}/?CMD=DoAutoFocus`, FOCUS_TIMEOUT_MS);
-  log(`autofocus response (HTTP ${statusCode}): ${body.slice(0, 200)}`);
+  log(`UNVERIFIED COMMAND autofocus response (HTTP ${statusCode}): ${body.slice(0, 200)}`);
   if (statusCode !== 200) {
     throw new Error(`digiCamControl autofocus command failed (HTTP ${statusCode}): ${body.slice(0, 300) || 'no response body'}`);
+  }
+}
+
+// Manually nudges focus a small step near/far, for fine-tuning after
+// autofocus gets close - useful on reflective/polished jewelry surfaces
+// where AF often hunts or locks onto the wrong point. CMD=LiveView_Focus
+// with a signed "value" step is the mechanism digiCamControl exposes for
+// its own focus-stacking feature, reused here for manual nudging. The step
+// magnitudes (1 for a small nudge, 5 for a large one) and the sign
+// convention (negative = near, positive = far) are both starting guesses,
+// not calibrated against this camera - watch bridge.log the first few
+// times this is used and adjust NUDGE_STEP_SMALL/LARGE, or flip the sign,
+// based on what the camera actually does.
+const NUDGE_STEP_SMALL = 1;
+const NUDGE_STEP_LARGE = 5;
+async function focusNudge(direction, amount) {
+  const magnitude = amount === 'large' ? NUDGE_STEP_LARGE : NUDGE_STEP_SMALL;
+  const value = direction === 'near' ? -magnitude : magnitude;
+  const { statusCode, body } = await httpGetText(`${WEBSERVER_BASE}/?CMD=LiveView_Focus&value=${value}`, FOCUS_TIMEOUT_MS);
+  log(`UNVERIFIED COMMAND focus nudge (direction=${direction}, amount=${amount}, value=${value}) response (HTTP ${statusCode}): ${body.slice(0, 200)}`);
+  if (statusCode !== 200) {
+    throw new Error(`digiCamControl focus nudge command failed (HTTP ${statusCode}): ${body.slice(0, 300) || 'no response body'}`);
   }
 }
 
@@ -316,7 +343,13 @@ function isAuthorized(req) {
 }
 
 const server = http.createServer(async (req, res) => {
-  if (req.method === 'GET' && req.url === '/status') {
+  // Parsed once so routes with query params (like /focus/nudge below) can
+  // match on pathname alone, same as the query-string-free routes always
+  // have via req.url.
+  const requestUrl = new URL(req.url, 'http://localhost');
+  const pathname = requestUrl.pathname;
+
+  if (req.method === 'GET' && pathname === '/status') {
     // Live check, not a static config boolean - this now depends on the
     // full digiCamControl GUI app actually running with its web server on,
     // not just a file path being set, so ping it for real.
@@ -329,7 +362,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === 'GET' && req.url === '/live') {
+  if (req.method === 'GET' && pathname === '/live') {
     // Same auth as /capture - this is a real (if unexciting) camera feed of
     // the studio, not something to leave open to anyone who finds the
     // tunnel hostname.
@@ -354,7 +387,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === 'POST' && req.url === '/capture') {
+  if (req.method === 'POST' && pathname === '/capture') {
     if (!isAuthorized(req)) {
       send(res, 401, { error: 'Unauthorized.' });
       return;
@@ -370,7 +403,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === 'POST' && req.url === '/focus') {
+  if (req.method === 'POST' && pathname === '/focus') {
     if (!isAuthorized(req)) {
       send(res, 401, { error: 'Unauthorized.' });
       return;
@@ -382,6 +415,32 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       log(`autofocus failed: ${err.message}`);
       send(res, 502, { error: err.message || 'Studio camera autofocus failed.' });
+    }
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/focus/nudge') {
+    if (!isAuthorized(req)) {
+      send(res, 401, { error: 'Unauthorized.' });
+      return;
+    }
+    const direction = requestUrl.searchParams.get('direction');
+    const amount = requestUrl.searchParams.get('amount');
+    if (direction !== 'near' && direction !== 'far') {
+      send(res, 400, { error: 'direction must be "near" or "far".' });
+      return;
+    }
+    if (amount !== 'small' && amount !== 'large') {
+      send(res, 400, { error: 'amount must be "small" or "large".' });
+      return;
+    }
+    try {
+      await focusNudge(direction, amount);
+      log('focus nudge ok');
+      send(res, 200, { success: true });
+    } catch (err) {
+      log(`focus nudge failed: ${err.message}`);
+      send(res, 502, { error: err.message || 'Studio camera focus nudge failed.' });
     }
     return;
   }

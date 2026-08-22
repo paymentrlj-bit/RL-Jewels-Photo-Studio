@@ -7,7 +7,7 @@ import { GoogleGenAI } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 import { DEFAULT_ENHANCE_PROMPT } from './src/utils/promptSettings';
 import { isDriveConfigured, exportProductToDrive } from './driveExport';
-import { isDslrCaptureConfigured, isDslrBridgeReachable, captureDslrPhoto, getDslrLiveViewStream, autofocusDslr } from './dslrBridge';
+import { isDslrCaptureConfigured, isDslrBridgeReachable, captureDslrPhoto, getDslrLiveViewStream, autofocusDslr, focusNudgeDslr } from './dslrBridge';
 import { logEvent, newRequestId, readEventsForAnalytics, isAxiomConfigured, getAxiomDataset, LoggedSession } from './logging';
 
 dotenv.config();
@@ -1211,6 +1211,32 @@ app.post('/api/dslr-capture/focus', requireAuth, async (req, res) => {
     console.error('DSLR autofocus failed:', err?.message || err);
     logEvent('dslr.autofocus', { success: false, latencyMs: Date.now() - startedAt, errorMessage: debugDetail(err) }, session);
     res.status(502).json({ error: err?.message || 'Studio camera autofocus failed.', debugDetail: debugDetail(err) });
+  }
+});
+
+// Fine-tunes focus a small step near/far - for touching up after autofocus
+// gets close on a reflective/polished surface, not a replacement for it.
+app.post('/api/dslr-capture/focus/nudge', requireAuth, async (req, res) => {
+  const startedAt = Date.now();
+  const session = (req as any).session as SessionInfo;
+  if (!isDslrCaptureConfigured()) {
+    return res.status(503).json({ error: 'Studio camera capture is not configured on this server.' });
+  }
+  const { direction, amount } = req.body || {};
+  if (direction !== 'near' && direction !== 'far') {
+    return res.status(400).json({ error: 'direction must be "near" or "far".' });
+  }
+  if (amount !== 'small' && amount !== 'large') {
+    return res.status(400).json({ error: 'amount must be "small" or "large".' });
+  }
+  try {
+    await focusNudgeDslr(direction, amount);
+    logEvent('dslr.focus_nudge', { success: true, direction, amount, latencyMs: Date.now() - startedAt }, session);
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error('DSLR focus nudge failed:', err?.message || err);
+    logEvent('dslr.focus_nudge', { success: false, direction, amount, latencyMs: Date.now() - startedAt, errorMessage: debugDetail(err) }, session);
+    res.status(502).json({ error: err?.message || 'Studio camera focus nudge failed.', debugDetail: debugDetail(err) });
   }
 });
 

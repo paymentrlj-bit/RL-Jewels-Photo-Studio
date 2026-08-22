@@ -1,9 +1,16 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Camera, Upload, Trash2, CheckCircle2, Eye, Sparkles, AlertTriangle, Aperture, Focus } from 'lucide-react';
+import { Camera, Upload, Trash2, CheckCircle2, Eye, Sparkles, AlertTriangle, Aperture, Focus, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ZoomOut } from 'lucide-react';
 import { PhotoItem, PreflightIssue } from '../types';
 import { CameraModal } from './CameraModal';
 import { downscaleImage, analyzeImageQuality, checkFlashFired } from '../utils/imagePreflight';
 import { logClientEvent, isMobileUserAgent } from '../utils/analytics';
+
+// How much tap-to-zoom magnifies the live view for a focus check - a fixed
+// value rather than user-adjustable, since this is a quick "is it sharp"
+// check, not a general zoom/pan tool.
+const ZOOM_FACTOR = 2.5;
+
+type FocusAction = 'af' | 'near-small' | 'near-large' | 'far-small' | 'far-large';
 
 interface PhotoSlotCardProps {
   photo: PhotoItem;
@@ -28,10 +35,16 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
   const [dslrStage, setDslrStage] = useState('');
   const [dslrError, setDslrError] = useState('');
   const [liveViewFailed, setLiveViewFailed] = useState(false);
-  const [isFocusing, setIsFocusing] = useState(false);
+  const [focusAction, setFocusAction] = useState<FocusAction | null>(null);
   const [focusError, setFocusError] = useState('');
+  const [zoom, setZoom] = useState<{ cx: number; cy: number } | null>(null);
   const [isMobile] = useState(() => isMobileUserAgent());
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  // Read inside the persistent live-stream effect below so toggling zoom
+  // doesn't tear down and reconnect the stream (zoom isn't in that effect's
+  // dependency array on purpose).
+  const zoomRef = useRef<typeof zoom>(null);
+  useEffect(() => { zoomRef.current = zoom; }, [zoom]);
 
   useEffect(() => {
     fetch('/api/dslr-capture/status')
@@ -106,13 +119,25 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
           const blob = new Blob([jpegData], { type: 'image/jpeg' });
           const url = URL.createObjectURL(blob);
 
-          // Draw on canvas
+          // Draw on canvas - cropped to the zoomed region if tap-to-zoom is
+          // active, full frame otherwise.
           const canvas = canvasRef.current;
           if (canvas) {
             const ctx = canvas.getContext('2d');
             const img = new Image();
             img.onload = () => {
-              ctx?.drawImage(img, 0, 0, canvas.width, canvas.height);
+              if (ctx) {
+                const z = zoomRef.current;
+                if (z) {
+                  const sw = img.naturalWidth / ZOOM_FACTOR;
+                  const sh = img.naturalHeight / ZOOM_FACTOR;
+                  const sx = Math.min(Math.max(z.cx * img.naturalWidth - sw / 2, 0), img.naturalWidth - sw);
+                  const sy = Math.min(Math.max(z.cy * img.naturalHeight - sh / 2, 0), img.naturalHeight - sh);
+                  ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+                } else {
+                  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                }
+              }
               URL.revokeObjectURL(url);
             };
             img.src = url;
@@ -190,6 +215,7 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
 
   const handleDslrCapture = async () => {
     setDslrError('');
+    setZoom(null); // back to full frame once a real capture is taken
     setIsDslrCapturing(true);
     setDslrStage('Firing shutter…');
     // The bridge/camera round trip is a single blocking request with no
@@ -222,7 +248,7 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
 
   const handleAutofocus = async () => {
     setFocusError('');
-    setIsFocusing(true);
+    setFocusAction('af');
     try {
       const res = await fetch('/api/dslr-capture/focus', { method: 'POST' });
       const data = await res.json();
@@ -232,8 +258,56 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
     } catch (err: any) {
       setFocusError(err?.message || 'Studio camera autofocus failed.');
     } finally {
-      setIsFocusing(false);
+      setFocusAction(null);
     }
+  };
+
+  const handleFocusNudge = async (direction: 'near' | 'far', amount: 'small' | 'large') => {
+    setFocusError('');
+    setFocusAction(`${direction}-${amount}` as FocusAction);
+    try {
+      const res = await fetch('/api/dslr-capture/focus/nudge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ direction, amount }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data?.error || 'Studio camera focus nudge failed.');
+      }
+    } catch (err: any) {
+      setFocusError(err?.message || 'Studio camera focus nudge failed.');
+    } finally {
+      setFocusAction(null);
+    }
+  };
+
+  // Tap-to-zoom on the live view for a quick "is it actually sharp" check.
+  // Tapping again (or the reset badge) zooms back out. Accounts for
+  // object-contain letterboxing so the zoomed region is centered on where
+  // staff actually tapped, not a naive fraction of the element's box.
+  const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    const canvasAspect = canvas.width / canvas.height;
+    const rectAspect = rect.width / rect.height;
+    let contentWidth = rect.width;
+    let contentHeight = rect.height;
+    let offsetX = 0;
+    let offsetY = 0;
+    if (rectAspect > canvasAspect) {
+      contentWidth = rect.height * canvasAspect;
+      offsetX = (rect.width - contentWidth) / 2;
+    } else {
+      contentHeight = rect.width / canvasAspect;
+      offsetY = (rect.height - contentHeight) / 2;
+    }
+    const clickX = e.clientX - rect.left - offsetX;
+    const clickY = e.clientY - rect.top - offsetY;
+    if (clickX < 0 || clickY < 0 || clickX > contentWidth || clickY > contentHeight) return;
+    setZoom((prev) => (prev ? null : { cx: clickX / contentWidth, cy: clickY / contentHeight }));
   };
 
   const hasImage = Boolean(photo.originalImage);
@@ -299,22 +373,72 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
               ref={canvasRef}
               width={640}
               height={480}
-              className="w-full h-full object-contain bg-stone-900"
+              onClick={handleCanvasClick}
+              className="w-full h-full object-contain bg-stone-900 cursor-zoom-in"
             />
-            <div className="absolute top-2 left-2 flex items-center gap-1.5 bg-black/60 text-white text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-full">
+            <div className="absolute top-2 left-2 flex items-center gap-1.5 bg-black/60 text-white text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-full pointer-events-none">
               <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
               <span>Live</span>
             </div>
-            <button
-              type="button"
-              onClick={handleAutofocus}
-              disabled={isFocusing || isDslrCapturing}
-              className="absolute bottom-2 right-2 flex items-center gap-1.5 bg-black/60 hover:bg-black/75 disabled:opacity-60 text-white text-[10px] font-bold uppercase tracking-wider px-2.5 py-1.5 rounded-full transition-colors"
-              title="Autofocus"
-            >
-              <Focus className={`w-3.5 h-3.5 ${isFocusing ? 'animate-spin' : ''}`} />
-              <span>{isFocusing ? 'Focusing…' : 'Focus'}</span>
-            </button>
+            {zoom && (
+              <button
+                type="button"
+                onClick={() => setZoom(null)}
+                className="absolute top-2 right-2 flex items-center gap-1 bg-black/60 hover:bg-black/75 text-white text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-full transition-colors"
+                title="Reset Zoom"
+              >
+                <ZoomOut className="w-3 h-3" />
+                <span>{ZOOM_FACTOR}× — tap to reset</span>
+              </button>
+            )}
+            <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-1 bg-black/60 rounded-full px-1.5 py-1.5">
+              <button
+                type="button"
+                onClick={() => handleFocusNudge('near', 'large')}
+                disabled={focusAction !== null || isDslrCapturing}
+                className="p-1.5 rounded-full hover:bg-white/15 disabled:opacity-60 text-white transition-colors"
+                title="Focus Near (Large Step)"
+              >
+                <ChevronsLeft className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => handleFocusNudge('near', 'small')}
+                disabled={focusAction !== null || isDslrCapturing}
+                className="p-1.5 rounded-full hover:bg-white/15 disabled:opacity-60 text-white transition-colors"
+                title="Focus Near (Small Step)"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={handleAutofocus}
+                disabled={focusAction !== null || isDslrCapturing}
+                className="flex items-center gap-1 bg-white/10 hover:bg-white/20 disabled:opacity-60 text-white text-[10px] font-bold uppercase tracking-wider px-2.5 py-1.5 rounded-full transition-colors"
+                title="Autofocus"
+              >
+                <Focus className={`w-3.5 h-3.5 ${focusAction === 'af' ? 'animate-spin' : ''}`} />
+                <span>{focusAction === 'af' ? 'Focusing…' : 'Focus'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleFocusNudge('far', 'small')}
+                disabled={focusAction !== null || isDslrCapturing}
+                className="p-1.5 rounded-full hover:bg-white/15 disabled:opacity-60 text-white transition-colors"
+                title="Focus Far (Small Step)"
+              >
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => handleFocusNudge('far', 'large')}
+                disabled={focusAction !== null || isDslrCapturing}
+                className="p-1.5 rounded-full hover:bg-white/15 disabled:opacity-60 text-white transition-colors"
+                title="Focus Far (Large Step)"
+              >
+                <ChevronsRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </>
         ) : (
           <div className="text-center p-4 flex flex-col items-center justify-center space-y-2">
