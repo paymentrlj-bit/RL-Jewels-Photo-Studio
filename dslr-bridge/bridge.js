@@ -64,6 +64,10 @@ const CAPTURE_TIMEOUT_MS = 45_000;
 // and the file actually finishing its write to disk.
 const FILE_POLL_TIMEOUT_MS = 8_000;
 const FILE_POLL_INTERVAL_MS = 300;
+// Autofocus alone (no shutter, no file transfer) should be much quicker than
+// a full capture - this is generous headroom for a camera that has to hunt
+// on a reflective/polished surface, not a normal-case estimate.
+const FOCUS_TIMEOUT_MS = 12_000;
 
 if (!BRIDGE_SECRET) {
   log('WARNING: BRIDGE_SECRET is not set - refusing to start, since this bridge will be reachable from the internet.');
@@ -175,6 +179,49 @@ function resumeLiveView() {
     .catch((err) => log(`live view resume failed (non-fatal): ${err.message}`));
 }
 
+// Convention: any digiCamControl web server command called from this file
+// whose exact behavior has NOT been confirmed against this studio's real
+// hardware (unlike /?slc=capture, /?CMD=LiveViewWnd_Show, and
+// /session.json, all manually verified per DSLR_CAPTURE_SETUP.md step 6
+// before being wired up) logs its raw response prefixed with
+// "UNVERIFIED COMMAND" - makes it a one-line grep of bridge.log to find
+// every camera command still waiting on a real confirmation, instead of
+// having to remember which comment block mentioned it.
+
+// Triggers the camera's own autofocus while live view is active - lets
+// staff rack focus before pressing capture instead of relying on whatever
+// the camera last focused on. CMD=DoAutoFocus is the command name reported
+// in use for this in digiCamControl's own community/forum documentation.
+async function autofocus() {
+  const { statusCode, body } = await httpGetText(`${WEBSERVER_BASE}/?CMD=DoAutoFocus`, FOCUS_TIMEOUT_MS);
+  log(`UNVERIFIED COMMAND autofocus response (HTTP ${statusCode}): ${body.slice(0, 200)}`);
+  if (statusCode !== 200) {
+    throw new Error(`digiCamControl autofocus command failed (HTTP ${statusCode}): ${body.slice(0, 300) || 'no response body'}`);
+  }
+}
+
+// Manually nudges focus a small step near/far, for fine-tuning after
+// autofocus gets close - useful on reflective/polished jewelry surfaces
+// where AF often hunts or locks onto the wrong point. CMD=LiveView_Focus
+// with a signed "value" step is the mechanism digiCamControl exposes for
+// its own focus-stacking feature, reused here for manual nudging. The step
+// magnitudes (1 for a small nudge, 5 for a large one) and the sign
+// convention (negative = near, positive = far) are both starting guesses,
+// not calibrated against this camera - watch bridge.log the first few
+// times this is used and adjust NUDGE_STEP_SMALL/LARGE, or flip the sign,
+// based on what the camera actually does.
+const NUDGE_STEP_SMALL = 1;
+const NUDGE_STEP_LARGE = 5;
+async function focusNudge(direction, amount) {
+  const magnitude = amount === 'large' ? NUDGE_STEP_LARGE : NUDGE_STEP_SMALL;
+  const value = direction === 'near' ? -magnitude : magnitude;
+  const { statusCode, body } = await httpGetText(`${WEBSERVER_BASE}/?CMD=LiveView_Focus&value=${value}`, FOCUS_TIMEOUT_MS);
+  log(`UNVERIFIED COMMAND focus nudge (direction=${direction}, amount=${amount}, value=${value}) response (HTTP ${statusCode}): ${body.slice(0, 200)}`);
+  if (statusCode !== 200) {
+    throw new Error(`digiCamControl focus nudge command failed (HTTP ${statusCode}): ${body.slice(0, 300) || 'no response body'}`);
+  }
+}
+
 function waitForCapturedFile(captureDir, capturedAfter) {
   const imageExts = new Set(['.jpg', '.jpeg', '.png']);
   const deadline = Date.now() + FILE_POLL_TIMEOUT_MS;
@@ -208,41 +255,72 @@ function waitForCapturedFile(captureDir, capturedAfter) {
   });
 }
 
+// digiCamControl still holds an exclusive lock on the file for a moment
+// after it appears in the directory listing - the write/transfer isn't
+// necessarily flushed and closed yet just because the file is visible.
+// Real hardware finding: reading it too early throws EBUSY on Windows
+// ("resource busy or locked"), which previously crashed the whole capture
+// (and, since that happened before the resumeLiveView() call below, left
+// live view stuck paused too - the bridge's /live proxy then saw
+// digiCamControl's stream socket go away with "socket hang up"). Retries
+// the read with backoff instead of failing on the first attempt.
+function readFileWithRetry(filePath, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  return new Promise((resolve, reject) => {
+    const tick = () => {
+      try {
+        resolve(fs.readFileSync(filePath));
+      } catch (err) {
+        const retryable = err.code === 'EBUSY' || err.code === 'EPERM' || err.code === 'ENOENT';
+        if (!retryable || Date.now() >= deadline) {
+          reject(err);
+          return;
+        }
+        setTimeout(tick, FILE_POLL_INTERVAL_MS);
+      }
+    };
+    tick();
+  });
+}
+
 async function capturePhoto() {
   const captureDir = path.join(os.tmpdir(), 'rlj-dslr-capture');
   fs.mkdirSync(captureDir, { recursive: true });
   const captureStartedAt = Date.now();
 
-  // camera= is left empty deliberately - real hardware test confirmed
-  // digiCamControl defaults to whatever's currently connected, which avoids
-  // hardcoding this camera's name/serial (and breaking if the body is ever
-  // swapped).
-  const { statusCode, body } = await httpGetText(`${WEBSERVER_BASE}/?slc=capture&camera=`, CAPTURE_TIMEOUT_MS);
-  if (statusCode !== 200 || !/ok/i.test(body)) {
-    throw new Error(`digiCamControl capture command failed (HTTP ${statusCode}): ${body.slice(0, 300) || 'no response body'}`);
+  try {
+    // camera= is left empty deliberately - real hardware test confirmed
+    // digiCamControl defaults to whatever's currently connected, which avoids
+    // hardcoding this camera's name/serial (and breaking if the body is ever
+    // swapped).
+    const { statusCode, body } = await httpGetText(`${WEBSERVER_BASE}/?slc=capture&camera=`, CAPTURE_TIMEOUT_MS);
+    if (statusCode !== 200 || !/ok/i.test(body)) {
+      throw new Error(`digiCamControl capture command failed (HTTP ${statusCode}): ${body.slice(0, 300) || 'no response body'}`);
+    }
+    const captureMs = Date.now() - captureStartedAt;
+
+    const readStartedAt = Date.now();
+    const files = await waitForCapturedFile(captureDir, captureStartedAt);
+    const capturedPath = path.join(captureDir, files[0]);
+    const buffer = await readFileWithRetry(capturedPath, FILE_POLL_TIMEOUT_MS);
+    const ext = path.extname(capturedPath).toLowerCase();
+    const mimeType = ext === '.png' ? 'image/png' : 'image/jpeg';
+    for (const f of files) {
+      try { fs.unlinkSync(path.join(captureDir, f)); } catch {}
+    }
+    const readMs = Date.now() - readStartedAt;
+    log(`timing: digiCamControl(shutter+USB transfer)=${captureMs}ms, file read+encode=${readMs}ms, total=${captureMs + readMs}ms`);
+
+    return { imageBase64: `data:${mimeType};base64,${buffer.toString('base64')}`, captureMs, readMs };
+  } finally {
+    // Live view stops the moment a real capture fires (expected DSLR
+    // behavior - the mirror has to physically flip for an actual exposure,
+    // which can't happen while live view is reading the sensor continuously)
+    // - bring it back now so the feed is ready again without staff needing
+    // to do anything. In a finally block so a failed capture (e.g. the file
+    // read above still timing out) doesn't leave live view stuck paused too.
+    resumeLiveView();
   }
-  const captureMs = Date.now() - captureStartedAt;
-
-  const readStartedAt = Date.now();
-  const files = await waitForCapturedFile(captureDir, captureStartedAt);
-  const capturedPath = path.join(captureDir, files[0]);
-  const buffer = fs.readFileSync(capturedPath);
-  const ext = path.extname(capturedPath).toLowerCase();
-  const mimeType = ext === '.png' ? 'image/png' : 'image/jpeg';
-  for (const f of files) {
-    try { fs.unlinkSync(path.join(captureDir, f)); } catch {}
-  }
-  const readMs = Date.now() - readStartedAt;
-  log(`timing: digiCamControl(shutter+USB transfer)=${captureMs}ms, file read+encode=${readMs}ms, total=${captureMs + readMs}ms`);
-
-  // Live view stops the moment a real capture fires (expected DSLR
-  // behavior - the mirror has to physically flip for an actual exposure,
-  // which can't happen while live view is reading the sensor continuously)
-  // - bring it back now so the feed is ready again without staff needing to
-  // do anything.
-  resumeLiveView();
-
-  return { imageBase64: `data:${mimeType};base64,${buffer.toString('base64')}`, captureMs, readMs };
 }
 
 function send(res, status, body) {
@@ -265,7 +343,13 @@ function isAuthorized(req) {
 }
 
 const server = http.createServer(async (req, res) => {
-  if (req.method === 'GET' && req.url === '/status') {
+  // Parsed once so routes with query params (like /focus/nudge below) can
+  // match on pathname alone, same as the query-string-free routes always
+  // have via req.url.
+  const requestUrl = new URL(req.url, 'http://localhost');
+  const pathname = requestUrl.pathname;
+
+  if (req.method === 'GET' && pathname === '/status') {
     // Live check, not a static config boolean - this now depends on the
     // full digiCamControl GUI app actually running with its web server on,
     // not just a file path being set, so ping it for real.
@@ -278,7 +362,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === 'GET' && req.url === '/live') {
+  if (req.method === 'GET' && pathname === '/live') {
     // Same auth as /capture - this is a real (if unexciting) camera feed of
     // the studio, not something to leave open to anyone who finds the
     // tunnel hostname.
@@ -303,7 +387,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === 'POST' && req.url === '/capture') {
+  if (req.method === 'POST' && pathname === '/capture') {
     if (!isAuthorized(req)) {
       send(res, 401, { error: 'Unauthorized.' });
       return;
@@ -315,6 +399,48 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       log(`capture failed: ${err.message}`);
       send(res, 502, { error: err.message || 'Studio camera capture failed.' });
+    }
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/focus') {
+    if (!isAuthorized(req)) {
+      send(res, 401, { error: 'Unauthorized.' });
+      return;
+    }
+    try {
+      await autofocus();
+      log('autofocus ok');
+      send(res, 200, { success: true });
+    } catch (err) {
+      log(`autofocus failed: ${err.message}`);
+      send(res, 502, { error: err.message || 'Studio camera autofocus failed.' });
+    }
+    return;
+  }
+
+  if (req.method === 'POST' && pathname === '/focus/nudge') {
+    if (!isAuthorized(req)) {
+      send(res, 401, { error: 'Unauthorized.' });
+      return;
+    }
+    const direction = requestUrl.searchParams.get('direction');
+    const amount = requestUrl.searchParams.get('amount');
+    if (direction !== 'near' && direction !== 'far') {
+      send(res, 400, { error: 'direction must be "near" or "far".' });
+      return;
+    }
+    if (amount !== 'small' && amount !== 'large') {
+      send(res, 400, { error: 'amount must be "small" or "large".' });
+      return;
+    }
+    try {
+      await focusNudge(direction, amount);
+      log('focus nudge ok');
+      send(res, 200, { success: true });
+    } catch (err) {
+      log(`focus nudge failed: ${err.message}`);
+      send(res, 502, { error: err.message || 'Studio camera focus nudge failed.' });
     }
     return;
   }

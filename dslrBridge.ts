@@ -69,6 +69,69 @@ export async function getDslrLiveViewStream(): Promise<Response> {
   return response;
 }
 
+// 12s to match the bridge's own FOCUS_TIMEOUT_MS, plus a little slack for
+// the tunnel round trip - same headroom pattern as CAPTURE_TIMEOUT_MS above.
+const FOCUS_TIMEOUT_MS = 15_000;
+
+export async function autofocusDslr(): Promise<void> {
+  if (!DSLR_BRIDGE_URL || !DSLR_BRIDGE_SECRET) {
+    throw new Error('Studio camera capture is not configured on this server (DSLR_BRIDGE_URL/DSLR_BRIDGE_SECRET are not set).');
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), FOCUS_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${DSLR_BRIDGE_URL}/focus`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${DSLR_BRIDGE_SECRET}` },
+      signal: controller.signal,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data?.success) {
+      throw new Error(data?.error || `Studio camera bridge returned HTTP ${response.status}.`);
+    }
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      throw new Error('Studio camera autofocus timed out - the Lenovo bridge may be offline or the camera unresponsive.');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export type FocusNudgeDirection = 'near' | 'far';
+export type FocusNudgeAmount = 'small' | 'large';
+
+// Fine-tunes focus after autofocus gets close - useful on reflective/
+// polished jewelry surfaces where AF often hunts or locks onto the wrong
+// point. See bridge.js's focusNudge() for the "UNVERIFIED COMMAND" caveat
+// on the exact digiCamControl step mechanism this drives.
+export async function focusNudgeDslr(direction: FocusNudgeDirection, amount: FocusNudgeAmount): Promise<void> {
+  if (!DSLR_BRIDGE_URL || !DSLR_BRIDGE_SECRET) {
+    throw new Error('Studio camera capture is not configured on this server (DSLR_BRIDGE_URL/DSLR_BRIDGE_SECRET are not set).');
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), FOCUS_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${DSLR_BRIDGE_URL}/focus/nudge?direction=${direction}&amount=${amount}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${DSLR_BRIDGE_SECRET}` },
+      signal: controller.signal,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data?.success) {
+      throw new Error(data?.error || `Studio camera bridge returned HTTP ${response.status}.`);
+    }
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      throw new Error('Studio camera focus nudge timed out - the Lenovo bridge may be offline or the camera unresponsive.');
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export async function captureDslrPhoto(): Promise<DslrCaptureResult> {
   if (!DSLR_BRIDGE_URL || !DSLR_BRIDGE_SECRET) {
     throw new Error('Studio camera capture is not configured on this server (DSLR_BRIDGE_URL/DSLR_BRIDGE_SECRET are not set).');
