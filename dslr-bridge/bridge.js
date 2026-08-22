@@ -74,9 +74,17 @@ if (!BRIDGE_SECRET) {
 // text, or rejects on network error / timeout. Used for the small, fast
 // webserver calls (capture trigger, live-view resume, status ping) - not
 // for the live-view stream itself, which is proxied by piping instead.
+//
+// insecureHTTPParser: real hardware finding - digiCamControl's own web
+// server sends a malformed response with a duplicate Content-Length header
+// on these endpoints. Node's default (strict, llhttp-based) parser rejects
+// that outright with "Parse Error: Duplicate Content-Length", which broke
+// every capture and live-view-resume call even though digiCamControl itself
+// was working fine. This tells Node's client to tolerate that specific
+// malformed-but-harmless response instead of erroring on it.
 function httpGetText(url, timeoutMs) {
   return new Promise((resolve, reject) => {
-    const req = http.get(url, { timeout: timeoutMs }, (res) => {
+    const req = http.get(url, { timeout: timeoutMs, insecureHTTPParser: true }, (res) => {
       let body = '';
       res.on('data', (chunk) => { body += chunk; });
       res.on('end', () => resolve({ statusCode: res.statusCode, body }));
