@@ -24,6 +24,7 @@
 
 const http = require('http');
 const https = require('https');
+const net = require('net');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -75,22 +76,53 @@ if (!BRIDGE_SECRET) {
 // webserver calls (capture trigger, live-view resume, status ping) - not
 // for the live-view stream itself, which is proxied by piping instead.
 //
-// insecureHTTPParser: real hardware finding - digiCamControl's own web
-// server sends a malformed response with a duplicate Content-Length header
-// on these endpoints. Node's default (strict, llhttp-based) parser rejects
-// that outright with "Parse Error: Duplicate Content-Length", which broke
-// every capture and live-view-resume call even though digiCamControl itself
-// was working fine. This tells Node's client to tolerate that specific
-// malformed-but-harmless response instead of erroring on it.
+// Talks over a raw TCP socket instead of Node's http.get(). Real hardware
+// finding: digiCamControl's own web server sends a malformed response with
+// a duplicate Content-Length header on these endpoints, which Node's
+// default (strict, llhttp-based) parser rejects outright with "Parse
+// Error: Duplicate Content-Length" - and setting insecureHTTPParser: true
+// on http.get() was NOT enough to work around it on the Node version this
+// runs on; that flag doesn't cover every malformed-header case in every
+// Node release. These calls are all small plain-text/JSON GETs to
+// localhost, so hand-rolling the request/response here entirely
+// sidesteps Node's HTTP parser (and its opinions about what a "valid"
+// response looks like) rather than depending on it being lenient enough.
 function httpGetText(url, timeoutMs) {
   return new Promise((resolve, reject) => {
-    const req = http.get(url, { timeout: timeoutMs, insecureHTTPParser: true }, (res) => {
-      let body = '';
-      res.on('data', (chunk) => { body += chunk; });
-      res.on('end', () => resolve({ statusCode: res.statusCode, body }));
+    const parsed = new URL(url);
+    const socket = net.createConnection({ host: parsed.hostname, port: Number(parsed.port) || 80 });
+
+    let raw = Buffer.alloc(0);
+    let settled = false;
+    const finish = (fn, arg) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      fn(arg);
+    };
+
+    const timer = setTimeout(() => finish(reject, new Error('timed out')), timeoutMs);
+
+    socket.on('connect', () => {
+      const requestPath = parsed.pathname + parsed.search;
+      socket.write(`GET ${requestPath} HTTP/1.1\r\nHost: ${parsed.hostname}\r\nConnection: close\r\n\r\n`);
     });
-    req.on('timeout', () => req.destroy(new Error('timed out')));
-    req.on('error', reject);
+    socket.on('data', (chunk) => { raw = Buffer.concat([raw, chunk]); });
+    socket.on('end', () => {
+      const text = raw.toString('utf8');
+      const headerEnd = text.indexOf('\r\n\r\n');
+      if (headerEnd === -1) {
+        finish(resolve, { statusCode: 0, body: '' });
+        return;
+      }
+      const statusLine = text.slice(0, headerEnd).split('\r\n')[0];
+      const statusMatch = statusLine.match(/HTTP\/\d\.\d\s+(\d+)/);
+      const statusCode = statusMatch ? Number(statusMatch[1]) : 0;
+      const body = text.slice(headerEnd + 4);
+      finish(resolve, { statusCode, body });
+    });
+    socket.on('error', (err) => finish(reject, err));
   });
 }
 
