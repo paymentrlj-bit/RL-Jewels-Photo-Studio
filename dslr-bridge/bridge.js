@@ -208,41 +208,72 @@ function waitForCapturedFile(captureDir, capturedAfter) {
   });
 }
 
+// digiCamControl still holds an exclusive lock on the file for a moment
+// after it appears in the directory listing - the write/transfer isn't
+// necessarily flushed and closed yet just because the file is visible.
+// Real hardware finding: reading it too early throws EBUSY on Windows
+// ("resource busy or locked"), which previously crashed the whole capture
+// (and, since that happened before the resumeLiveView() call below, left
+// live view stuck paused too - the bridge's /live proxy then saw
+// digiCamControl's stream socket go away with "socket hang up"). Retries
+// the read with backoff instead of failing on the first attempt.
+function readFileWithRetry(filePath, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  return new Promise((resolve, reject) => {
+    const tick = () => {
+      try {
+        resolve(fs.readFileSync(filePath));
+      } catch (err) {
+        const retryable = err.code === 'EBUSY' || err.code === 'EPERM' || err.code === 'ENOENT';
+        if (!retryable || Date.now() >= deadline) {
+          reject(err);
+          return;
+        }
+        setTimeout(tick, FILE_POLL_INTERVAL_MS);
+      }
+    };
+    tick();
+  });
+}
+
 async function capturePhoto() {
   const captureDir = path.join(os.tmpdir(), 'rlj-dslr-capture');
   fs.mkdirSync(captureDir, { recursive: true });
   const captureStartedAt = Date.now();
 
-  // camera= is left empty deliberately - real hardware test confirmed
-  // digiCamControl defaults to whatever's currently connected, which avoids
-  // hardcoding this camera's name/serial (and breaking if the body is ever
-  // swapped).
-  const { statusCode, body } = await httpGetText(`${WEBSERVER_BASE}/?slc=capture&camera=`, CAPTURE_TIMEOUT_MS);
-  if (statusCode !== 200 || !/ok/i.test(body)) {
-    throw new Error(`digiCamControl capture command failed (HTTP ${statusCode}): ${body.slice(0, 300) || 'no response body'}`);
+  try {
+    // camera= is left empty deliberately - real hardware test confirmed
+    // digiCamControl defaults to whatever's currently connected, which avoids
+    // hardcoding this camera's name/serial (and breaking if the body is ever
+    // swapped).
+    const { statusCode, body } = await httpGetText(`${WEBSERVER_BASE}/?slc=capture&camera=`, CAPTURE_TIMEOUT_MS);
+    if (statusCode !== 200 || !/ok/i.test(body)) {
+      throw new Error(`digiCamControl capture command failed (HTTP ${statusCode}): ${body.slice(0, 300) || 'no response body'}`);
+    }
+    const captureMs = Date.now() - captureStartedAt;
+
+    const readStartedAt = Date.now();
+    const files = await waitForCapturedFile(captureDir, captureStartedAt);
+    const capturedPath = path.join(captureDir, files[0]);
+    const buffer = await readFileWithRetry(capturedPath, FILE_POLL_TIMEOUT_MS);
+    const ext = path.extname(capturedPath).toLowerCase();
+    const mimeType = ext === '.png' ? 'image/png' : 'image/jpeg';
+    for (const f of files) {
+      try { fs.unlinkSync(path.join(captureDir, f)); } catch {}
+    }
+    const readMs = Date.now() - readStartedAt;
+    log(`timing: digiCamControl(shutter+USB transfer)=${captureMs}ms, file read+encode=${readMs}ms, total=${captureMs + readMs}ms`);
+
+    return { imageBase64: `data:${mimeType};base64,${buffer.toString('base64')}`, captureMs, readMs };
+  } finally {
+    // Live view stops the moment a real capture fires (expected DSLR
+    // behavior - the mirror has to physically flip for an actual exposure,
+    // which can't happen while live view is reading the sensor continuously)
+    // - bring it back now so the feed is ready again without staff needing
+    // to do anything. In a finally block so a failed capture (e.g. the file
+    // read above still timing out) doesn't leave live view stuck paused too.
+    resumeLiveView();
   }
-  const captureMs = Date.now() - captureStartedAt;
-
-  const readStartedAt = Date.now();
-  const files = await waitForCapturedFile(captureDir, captureStartedAt);
-  const capturedPath = path.join(captureDir, files[0]);
-  const buffer = fs.readFileSync(capturedPath);
-  const ext = path.extname(capturedPath).toLowerCase();
-  const mimeType = ext === '.png' ? 'image/png' : 'image/jpeg';
-  for (const f of files) {
-    try { fs.unlinkSync(path.join(captureDir, f)); } catch {}
-  }
-  const readMs = Date.now() - readStartedAt;
-  log(`timing: digiCamControl(shutter+USB transfer)=${captureMs}ms, file read+encode=${readMs}ms, total=${captureMs + readMs}ms`);
-
-  // Live view stops the moment a real capture fires (expected DSLR
-  // behavior - the mirror has to physically flip for an actual exposure,
-  // which can't happen while live view is reading the sensor continuously)
-  // - bring it back now so the feed is ready again without staff needing to
-  // do anything.
-  resumeLiveView();
-
-  return { imageBase64: `data:${mimeType};base64,${buffer.toString('base64')}`, captureMs, readMs };
 }
 
 function send(res, status, body) {
