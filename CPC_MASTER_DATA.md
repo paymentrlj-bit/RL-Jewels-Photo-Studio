@@ -181,6 +181,35 @@ existing ones corrected), regenerate `data/cpc-master.csv`:
    new CSV (this would lose any variants/corrections made since the Sheet
    was created, unless copied over first).
 
+## Two further efficiencies built on top of the lookup
+
+Both of these only exist *because* the CPC master lookup already tells the
+app, with certainty, what a product is - neither would make sense without
+it, which is why they can look similar at a glance despite doing different
+things:
+
+- **Auto-advance on QR detection** applies to *every* scan, at the Side 1
+  step itself. Previously, once Side 1's QR was read, staff still had to
+  tap "Flip Tag to Scan Side 2" before the camera moved on. Now
+  `BarcodeScannerModal.tsx` auto-advances to Side 2 about 700ms after a
+  successful Side 1 read (just long enough to see the green "Captured"
+  flash) - one fewer tap per product, always. A pending auto-advance is
+  cancelled if staff rescans or manually flips before it fires.
+- **Skip Side 1 entirely for known single-size (`certain`) products**
+  applies only when the CPC was *already* resolved before the scanner was
+  even opened - typed manually into the CPC field (which triggers a lookup
+  on blur) or left over from an earlier scan this session. If that lookup
+  came back `certain`, there is nothing left for a Side 1 QR scan to tell
+  the app, so `ProductForm.tsx` hands the scanner a `knownSide1Data` prop
+  and the modal opens straight on Side 2 (weights) - staff never point the
+  camera at the front label at all for that product. A `guess` match still
+  opens on Side 1 as normal, since scanning the actual tag is how a
+  multi-size product's specific size gets confirmed.
+
+In short: auto-advance shaves a tap off the QR step every time; skip-Side-1
+removes the entire QR step, but only when the product's specs are already
+known beyond doubt.
+
 ## Other fields derivable from this data (not yet wired into the UI)
 
 Beyond the core name/size/metal/purity auto-fill:

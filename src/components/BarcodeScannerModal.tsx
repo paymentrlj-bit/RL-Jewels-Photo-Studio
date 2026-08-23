@@ -41,17 +41,29 @@ interface BarcodeScannerModalProps {
   isOpen: boolean;
   onClose: () => void;
   onScanSuccess: (data: ScannedProductData) => void;
+  // When the CPC has already been looked up (typed manually, or scanned
+  // earlier this session) and matched a `certain` - single, unambiguous -
+  // product, ProductForm passes what it already knows here. The modal then
+  // skips Side 1's QR scan entirely and opens straight on Side 2 (weights):
+  // there's nothing left for a Side 1 scan to tell us that the CPC lookup
+  // hasn't already answered for certain.
+  knownSide1Data?: ScannedProductData | null;
 }
 
 export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
   isOpen,
   onClose,
   onScanSuccess,
+  knownSide1Data,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const scanIntervalRef = useRef<any>(null);
+  // Pending "auto-advance to Side 2" timer, started the instant Side 1's
+  // QR is read so staff don't have to tap "Flip Tag" themselves. Tracked in
+  // a ref so a rescan or an early manual tap can cancel it before it fires.
+  const side1AutoAdvanceRef = useRef<any>(null);
 
   // Two-Sided Tag Tracking
   const [currentSide, setCurrentSide] = useState<'side1' | 'side2'>('side1');
@@ -76,6 +88,10 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
     if (scanIntervalRef.current) {
       clearInterval(scanIntervalRef.current);
       scanIntervalRef.current = null;
+    }
+    if (side1AutoAdvanceRef.current) {
+      clearTimeout(side1AutoAdvanceRef.current);
+      side1AutoAdvanceRef.current = null;
     }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => {
@@ -256,7 +272,15 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
       setSide1Snapshot(snapshot);
       const merged = mergeScannedTagData(parsed, side2Data);
       setCombinedData(merged);
-      setStatusMessage('✨ Side 1 Captured! Flip tag to Side 2 (Weights) or Apply to form.');
+      setStatusMessage('✨ Side 1 Captured! Auto-advancing to Side 2 (Weights)...');
+      // No manual "Flip Tag" tap needed - the instant a QR reads
+      // successfully, move on. Brief delay just lets staff see the green
+      // "Captured" confirmation flash before the view changes.
+      if (side1AutoAdvanceRef.current) clearTimeout(side1AutoAdvanceRef.current);
+      side1AutoAdvanceRef.current = setTimeout(() => {
+        side1AutoAdvanceRef.current = null;
+        handleSwitchToSide2();
+      }, 700);
     } else {
       setSide2Data(parsed);
       setSide2Snapshot(snapshot);
@@ -386,6 +410,19 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
       return;
     }
 
+    // A `certain` CPC match (typed manually, or scanned earlier this
+    // session) already tells us everything Side 1 exists to find out - so
+    // open straight on Side 2 (weights) instead of asking staff to point
+    // the camera at the front label again for a QR we've already resolved.
+    if (knownSide1Data) {
+      setSide1Data(knownSide1Data);
+      setSide1Snapshot(null);
+      const merged = mergeScannedTagData(knownSide1Data, null);
+      setCombinedData(merged);
+      setCurrentSide('side2');
+      setStatusMessage('✨ Known product (CPC already confirmed) - skip straight to Side 2 (Weights).');
+    }
+
     let isMounted = true;
 
     async function startCamera() {
@@ -471,7 +508,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
       clearTimeout(timeout);
       stopCamera();
     };
-  }, [isOpen, facingMode, stopCamera]);
+  }, [isOpen, facingMode, stopCamera, knownSide1Data]);
 
   // Trigger manual capture and fast AI OCR on current frame
   const handleManualCapture = () => {
@@ -497,6 +534,10 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
 
   // Switch to Side 2 (Weights & Back) - ensures live camera view is immediately active
   const handleSwitchToSide2 = () => {
+    if (side1AutoAdvanceRef.current) {
+      clearTimeout(side1AutoAdvanceRef.current);
+      side1AutoAdvanceRef.current = null;
+    }
     setCurrentSide('side2');
     setAutoScanAttempts(0);
     setAutoScanActive(true);
@@ -506,6 +547,10 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
 
   // Retake current side - instantly re-enables live video
   const handleRetakeSide = (side: 'side1' | 'side2') => {
+    if (side1AutoAdvanceRef.current) {
+      clearTimeout(side1AutoAdvanceRef.current);
+      side1AutoAdvanceRef.current = null;
+    }
     if (side === 'side1') {
       setSide1Data(null);
       setSide1Snapshot(null);
@@ -757,8 +802,9 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
               </button>
             </div>
 
-            {/* If Side 1 is captured, prompt user to Flip & Scan Side 2 */}
-            {side1Data && !side2Data && (
+            {/* If Side 1 is captured and we haven't already auto-advanced,
+                offer a manual "skip the wait" flip to Side 2 */}
+            {side1Data && !side2Data && currentSide === 'side1' && (
               <button
                 id="flip-tag-to-side2-btn"
                 type="button"

@@ -278,6 +278,30 @@ export const ProductForm: React.FC<ProductFormProps> = ({
     onProceed();
   };
 
+  // If the CPC currently in the field already resolved to a `certain`
+  // (single, unambiguous) product - typed manually and blurred, or left
+  // over from an earlier scan - there's nothing left for a Side 1 QR scan
+  // to tell us. Handing this to the scanner lets it skip straight to Side 2
+  // (weights) instead of asking staff to point the camera at the front
+  // label again for a code we've already resolved.
+  const knownSide1Data: ScannedProductData | null =
+    cpcLookupResult &&
+    cpcLookupResult.cpcNumber === cpc.trim() &&
+    cpcLookupResult.matchType === 'certain' &&
+    cpcLookupResult.autoFilled
+      ? {
+          cpc: cpc.trim(),
+          name: cpcLookupResult.autoFilled.productName,
+          itemType: cpcLookupResult.autoFilled.productName,
+          purity: cpcLookupResult.autoFilled.purity,
+          gender,
+          grossWeight: '',
+          otherWeight: '',
+          netWeight: '',
+          size: cpcLookupResult.autoFilled.sizeName,
+        }
+      : null;
+
   const filteredSuggestions = ITEM_TYPE_SUGGESTIONS.filter((s) =>
     s.toLowerCase().includes(itemType.toLowerCase().trim())
   );
@@ -641,6 +665,7 @@ export const ProductForm: React.FC<ProductFormProps> = ({
         isOpen={showScannerModal}
         onClose={() => setShowScannerModal(false)}
         onScanSuccess={handleScanSuccess}
+        knownSide1Data={knownSide1Data}
       />
 
       {showConfirmDetails && (
