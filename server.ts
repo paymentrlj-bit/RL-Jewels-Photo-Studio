@@ -9,6 +9,7 @@ import { DEFAULT_ENHANCE_PROMPT } from './src/utils/promptSettings';
 import { isDriveConfigured, exportProductToDrive } from './driveExport';
 import { isDslrCaptureConfigured, isDslrBridgeReachable, captureDslrPhoto, getDslrLiveViewStream, autofocusDslr, focusNudgeDslr } from './dslrBridge';
 import { logEvent, newRequestId, readEventsForAnalytics, isAxiomConfigured, getAxiomDataset, LoggedSession } from './logging';
+import { lookupCpc, addLearnedCpc, deriveProductIdFromCpc, normalizeGoldPurity, guessGenderFromStyleName, getCpcMasterStats, CpcMasterRecord } from './cpcMaster';
 
 dotenv.config();
 
@@ -1077,6 +1078,71 @@ Respond ONLY as JSON: {"name": string, "description": string, "metaTitle": strin
   } finally {
     clearTimeout(timeout);
   }
+});
+
+// ---------------------------------------------------------------------------
+// CPC (Counter Product Code) lookup: recognizes a scanned/typed CPC number
+// against the store's real POS export (data/cpc-master.csv, see
+// cpcMaster.ts) so product name/size/metal/purity can be auto-filled
+// instantly and correctly instead of guessed from OCR. Scope right now is
+// GOLD only (per current priority) - a match on another metal is still
+// returned (the data covers everything), the client just doesn't act on it
+// yet.
+// ---------------------------------------------------------------------------
+
+app.get('/api/cpc-lookup', requireAuth, (req, res) => {
+  const session = (req as any).session as SessionInfo;
+  const cpc = String(req.query.cpc || '').trim();
+  if (!cpc) {
+    return res.status(400).json({ error: 'cpc query parameter is required.' });
+  }
+  const result = lookupCpc(cpc);
+  logEvent('cpc.lookup', {
+    cpc, matchType: result.matchType,
+    groupName: result.record?.groupName || null,
+  }, session);
+  res.json({
+    ...result,
+    // Pre-normalized onto this app's own GoldPurity/gender types so the
+    // client doesn't need to duplicate the "22 Ct" -> "22kt" (etc.) parsing
+    // logic - null when the record isn't gold, or gender can't be guessed.
+    normalizedPurity: result.record ? normalizeGoldPurity(result.record.purity) : null,
+    genderGuess: result.record ? guessGenderFromStyleName(result.record.styleName) : null,
+  });
+});
+
+// Called when staff finish filling in a product whose CPC wasn't found
+// above - so this SAME running server recognizes it immediately if scanned
+// again later the same shift. See cpcMaster.ts's addLearnedCpc() for why
+// this is in-memory only for now (ephemeral hosting, no local persistence)
+// and why logging this event is what actually keeps the data from being
+// lost.
+app.post('/api/cpc-lookup/learn', requireAuth, (req, res) => {
+  const session = (req as any).session as SessionInfo;
+  const { cpcNumber, styleName, sizeName, designName, groupName, purity } = req.body || {};
+  if (!cpcNumber || typeof cpcNumber !== 'string' || !cpcNumber.trim()) {
+    return res.status(400).json({ error: 'cpcNumber is required.' });
+  }
+  if (!groupName || typeof groupName !== 'string' || !groupName.trim()) {
+    return res.status(400).json({ error: 'groupName is required.' });
+  }
+  const record: CpcMasterRecord = {
+    cpcNumber: cpcNumber.trim(),
+    productId: deriveProductIdFromCpc(cpcNumber) || '',
+    lotNo: '',
+    styleName: typeof styleName === 'string' ? styleName.trim() : '',
+    sizeName: typeof sizeName === 'string' ? sizeName.trim() : '',
+    designName: typeof designName === 'string' ? designName.trim() : '',
+    groupName: groupName.trim(),
+    purity: typeof purity === 'string' ? purity.trim() : '',
+    primaryGroupId: '',
+    designId: '',
+    sizeId: '',
+    sellByPiece: '0',
+  };
+  addLearnedCpc(record);
+  logEvent('cpc.learned', { ...record, stats: getCpcMasterStats() }, session);
+  res.json({ success: true });
 });
 
 // ---------------------------------------------------------------------------

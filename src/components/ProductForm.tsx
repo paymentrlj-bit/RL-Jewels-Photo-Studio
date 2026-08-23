@@ -5,6 +5,18 @@ import { BarcodeScannerModal, ScannedProductData } from './BarcodeScannerModal';
 import { ProcessingStatusCard } from './ProcessingStatusCard';
 import { logClientEvent } from '../utils/analytics';
 
+// Matches the word-capitalization convention already used for OCR-derived
+// names in utils/tagParser.ts, applied here to the ALL-CAPS style names
+// that come back from the CPC master lookup (e.g. "ANGUTHI GENTS" ->
+// "Anguthi Gents").
+function toTitleCase(s: string): string {
+  return s
+    .toLowerCase()
+    .split(' ')
+    .map((w) => (w ? w.charAt(0).toUpperCase() + w.slice(1) : w))
+    .join(' ');
+}
+
 interface ProductFormProps {
   cpc: string;
   setCpc: (val: string) => void;
@@ -64,6 +76,52 @@ export const ProductForm: React.FC<ProductFormProps> = ({
   // log) when staff had to correct an OCR-autofilled field before proceeding
   // - the single best signal for which field/parser step needs improving.
   const [scanBaseline, setScanBaseline] = useState<ScannedProductData | null>(null);
+  // Result of the last CPC master-data lookup, keyed to the CPC it was for
+  // - so a stale result (from a CPC the staff has since edited away from)
+  // never gets treated as "this CPC wasn't found" at submit time.
+  const [cpcLookupResult, setCpcLookupResult] = useState<{
+    cpcNumber: string;
+    matchType: 'exact' | 'product-sibling' | 'none';
+    isGold: boolean;
+  } | null>(null);
+
+  // Looks the CPC up against the store's real product data (see
+  // cpcMaster.ts) and, for a GOLD match, auto-fills name/item
+  // type/purity/gender-guess/size - far more reliable than OCR-guessing a
+  // physical tag, since it's the store's own catalog data. Silent on
+  // failure/no-match: this is a convenience on top of manual entry, never a
+  // blocker to it.
+  const performCpcLookup = async (cpcValue: string) => {
+    const trimmed = cpcValue.trim();
+    if (!trimmed) {
+      setCpcLookupResult(null);
+      return;
+    }
+    try {
+      const res = await fetch(`/api/cpc-lookup?cpc=${encodeURIComponent(trimmed)}`);
+      const data = await res.json();
+      const isGold = data?.record?.groupName === 'GOLD';
+      setCpcLookupResult({ cpcNumber: trimmed, matchType: data?.matchType || 'none', isGold });
+      if (isGold && data.record) {
+        const cleanName = toTitleCase(data.record.styleName || '');
+        if (cleanName) {
+          setProductName(cleanName);
+          setItemType(cleanName);
+        }
+        if (data.normalizedPurity) setPurity(data.normalizedPurity);
+        if (data.genderGuess) setGender(data.genderGuess);
+        if (setSize && data.record.sizeName) setSize(data.record.sizeName);
+
+        const siblingNote = data.matchType === 'product-sibling' ? ' (matched from another lot of this product - please confirm size)' : '';
+        setScanSuccessBanner(`CPC ${trimmed} recognized${siblingNote}: ${(data.normalizedPurity || data.record.purity).toString().toUpperCase()} ${cleanName}`);
+        setTimeout(() => setScanSuccessBanner(null), 6000);
+      }
+    } catch {
+      // Lookup is a convenience on top of manual/OCR entry, not a
+      // requirement - a network hiccup here should never block staff from
+      // just typing the fields in themselves.
+    }
+  };
 
   // Calculate Net Weight: Net = Gross - Other
   const calculateNetWeight = (grossVal: string, otherVal: string) => {
@@ -120,6 +178,13 @@ export const ProductForm: React.FC<ProductFormProps> = ({
     setTimeout(() => {
       setScanSuccessBanner(null);
     }, 6000);
+
+    // The scanned CPC's weight (GW/OW/NW) is per-physical-piece and only
+    // OCR can read it, but name/item type/purity/size are catalog-level
+    // facts the store's own CPC master data knows for certain - re-fetch
+    // and let it override the OCR guess for those specific fields when
+    // it's found, right after the OCR banner above.
+    if (data.cpc) performCpcLookup(data.cpc);
   };
 
   const handleValidateAndProceed = () => {
@@ -150,6 +215,26 @@ export const ProductForm: React.FC<ProductFormProps> = ({
           logClientEvent('field_corrected', { field, ocrValue, finalValue });
         }
       }
+    }
+
+    // The CPC lookup for THIS exact value came back with nothing (checked
+    // against cpcLookupResult.cpcNumber, not just "no result yet", so a
+    // stale/in-flight lookup for a since-edited CPC never counts) - staff
+    // just finished filling this product in by hand, so teach the master
+    // list this CPC for the rest of this server's uptime. Fire-and-forget:
+    // this is a nice-to-have, never a reason to block or slow down submit.
+    if (cpcLookupResult && cpcLookupResult.cpcNumber === cpc.trim() && cpcLookupResult.matchType === 'none') {
+      fetch('/api/cpc-lookup/learn', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cpcNumber: cpc.trim(),
+          styleName: productName || itemType,
+          sizeName: size || 'DEFAULT',
+          groupName: 'GOLD',
+          purity: purity === '18kt' ? '18 Ct' : purity === '24kt' ? '24 Ct' : '22 Ct',
+        }),
+      }).catch(() => {});
     }
 
     onProceed();
@@ -230,7 +315,8 @@ export const ProductForm: React.FC<ProductFormProps> = ({
                 setCpc(e.target.value.toUpperCase());
                 setErrorMsg('');
               }}
-              placeholder="e.g. 20L1579 or RLJ-RN-8821"
+              onBlur={(e) => performCpcLookup(e.target.value)}
+              placeholder="e.g. 1265L1051 or RLJ-RN-8821"
               className="min-h-[48px] w-full bg-stone-50/80 border border-stone-200 focus:border-red-600 focus:bg-white rounded-xl pl-4 pr-14 py-3 text-stone-900 font-mono text-base tracking-wider placeholder:text-stone-400 focus:outline-none transition-all uppercase font-bold"
             />
             {/* Scanner Button inside the right of the textbox */}
@@ -256,7 +342,7 @@ export const ProductForm: React.FC<ProductFormProps> = ({
               type="text"
               value={productName}
               onChange={(e) => setProductName(e.target.value)}
-              placeholder="e.g. 22kt Gold Traditional Earrings (Sz: 17N0)"
+              placeholder="e.g. 22kt Gold Traditional Earrings (Sz: 17NO)"
               className="min-h-[48px] w-full bg-stone-50/80 border border-stone-200 focus:border-red-600 focus:bg-white rounded-xl px-4 py-3 text-stone-800 text-sm placeholder:text-stone-400 focus:outline-none transition-colors"
             />
           </div>
@@ -270,7 +356,7 @@ export const ProductForm: React.FC<ProductFormProps> = ({
               type="text"
               value={size}
               onChange={(e) => setSize && setSize(e.target.value.toUpperCase())}
-              placeholder="e.g. 17N0, 2.4, 18&quot;, DEFAULT"
+              placeholder="e.g. 17NO, 18INCH, DEFAULT"
               className="min-h-[48px] w-full bg-stone-50/80 border border-stone-200 focus:border-red-600 focus:bg-white rounded-xl px-3.5 py-3 text-stone-900 font-mono text-sm placeholder:text-stone-400 focus:outline-none uppercase"
             />
           </div>
