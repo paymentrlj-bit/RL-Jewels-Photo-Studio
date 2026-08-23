@@ -18,8 +18,8 @@ const SHEETS_API = 'https://sheets.googleapis.com/v4/spreadsheets';
 const DRIVE_FILES_URL = 'https://www.googleapis.com/drive/v3/files';
 const SHEET_TITLE = 'RL Jewels CPC Master Data';
 const TAB_NAME = 'CPCData';
-const COLUMN_COUNT = 9; // A through I - keep in sync with cpcMaster.ts's CSV_COLUMNS
-const DATA_RANGE = `${TAB_NAME}!A:I`;
+const COLUMN_COUNT = 8; // A through H - keep in sync with cpcMaster.ts's CSV_COLUMNS. Column A is productId - the sole lookup key.
+const DATA_RANGE = `${TAB_NAME}!A:H`;
 
 let cachedSheetId: string | null = null;
 
@@ -143,5 +143,48 @@ export async function appendRow(spreadsheetId: string, row: string[]): Promise<v
   if (!res.ok) {
     const data: any = await res.json().catch(() => ({}));
     throw new Error(data.error?.message || `Failed to append a row to the CPC master Sheet (HTTP ${res.status}).`);
+  }
+}
+
+// Finds the 1-indexed sheet row number of the row whose productId (column
+// A) exactly equals the given value - a live lookup (not relying on any
+// in-memory bookkeeping from when the sheet was last read), since this is
+// only called on the rare "staff corrected an auto-filled value" path,
+// where correctness matters far more than shaving one small request.
+// Reads just column A, not the whole sheet - cheap even as the sheet
+// grows. Returns null if not found, or if the productId appears more than
+// once (staff corrections only make sense to apply to an unambiguous
+// single row - see cpcMaster.ts's correctSingleRowProduct()).
+export async function findSingleRowIndexByProductId(spreadsheetId: string, productId: string): Promise<number | null> {
+  const accessToken = await getAccessToken();
+  const range = `${TAB_NAME}!A:A`;
+  const res = await fetch(`${SHEETS_API}/${spreadsheetId}/values/${encodeURIComponent(range)}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const data: any = await res.json();
+  if (!res.ok) throw new Error(data.error?.message || `Failed to search the CPC master Sheet (HTTP ${res.status}).`);
+  const values: string[][] = data.values || [];
+  const matches: number[] = [];
+  for (let i = 1; i < values.length; i++) { // skip header row
+    if ((values[i][0] || '').trim() === productId) matches.push(i + 1); // 1-indexed sheet row
+  }
+  return matches.length === 1 ? matches[0] : null;
+}
+
+// Overwrites one specific row in place (used when a staff correction to a
+// single-row - i.e. unambiguous - product needs to be saved for good,
+// rather than appended as a new row).
+export async function updateRow(spreadsheetId: string, rowIndex: number, row: string[]): Promise<void> {
+  const accessToken = await getAccessToken();
+  const lastCol = String.fromCharCode('A'.charCodeAt(0) + COLUMN_COUNT - 1);
+  const range = `${TAB_NAME}!A${rowIndex}:${lastCol}${rowIndex}`;
+  const res = await fetch(`${SHEETS_API}/${spreadsheetId}/values/${encodeURIComponent(range)}?valueInputOption=RAW`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ range, majorDimension: 'ROWS', values: [row] }),
+  });
+  if (!res.ok) {
+    const data: any = await res.json().catch(() => ({}));
+    throw new Error(data.error?.message || `Failed to update row ${rowIndex} of the CPC master Sheet (HTTP ${res.status}).`);
   }
 }

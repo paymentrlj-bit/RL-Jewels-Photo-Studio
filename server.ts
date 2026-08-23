@@ -9,7 +9,7 @@ import { DEFAULT_ENHANCE_PROMPT } from './src/utils/promptSettings';
 import { isDriveConfigured, exportProductToDrive } from './driveExport';
 import { isDslrCaptureConfigured, isDslrBridgeReachable, captureDslrPhoto, getDslrLiveViewStream, autofocusDslr, focusNudgeDslr } from './dslrBridge';
 import { logEvent, newRequestId, readEventsForAnalytics, isAxiomConfigured, getAxiomDataset, LoggedSession } from './logging';
-import { lookupCpc, addLearnedCpc, deriveProductIdFromCpc, normalizeGoldPurity, guessGenderFromStyleName, getCpcMasterStats, initCpcMaster, CpcMasterRecord } from './cpcMaster';
+import { lookupCpc, addLearnedCpc, correctSingleRowProduct, deriveProductIdFromCpc, normalizeGoldPurity, guessGenderFromStyleName, getCpcMasterStats, initCpcMaster, CpcMasterRecord } from './cpcMaster';
 
 dotenv.config();
 
@@ -1111,35 +1111,70 @@ app.get('/api/cpc-lookup', requireAuth, (req, res) => {
   });
 });
 
-// Called when staff finish filling in a product whose CPC wasn't found
-// above - so this SAME running server recognizes it immediately if scanned
-// again later the same shift, and appends it to the CPC master Sheet so it
-// survives a restart/redeploy too. See cpcMaster.ts's addLearnedCpc() for
-// how that append works and why logging this event is also a useful
-// backstop if it ever fails.
-app.post('/api/cpc-lookup/learn', requireAuth, (req, res) => {
-  const session = (req as any).session as SessionInfo;
-  const { cpcNumber, styleName, sizeName, designName, groupName, purity } = req.body || {};
+// Shared body parsing for /learn and /correct below - both take the same
+// shape (a CPC to derive the ProductId from, plus the product fields), the
+// only difference is which cpcMaster.ts function they call with it.
+function parseCpcRecordBody(body: any): { cpcNumber: string; record: CpcMasterRecord } | { error: string } {
+  const { cpcNumber, styleName, sizeName, designName, groupName, purity } = body || {};
   if (!cpcNumber || typeof cpcNumber !== 'string' || !cpcNumber.trim()) {
-    return res.status(400).json({ error: 'cpcNumber is required.' });
+    return { error: 'cpcNumber is required.' };
   }
   if (!groupName || typeof groupName !== 'string' || !groupName.trim()) {
-    return res.status(400).json({ error: 'groupName is required.' });
+    return { error: 'groupName is required.' };
   }
-  const record: CpcMasterRecord = {
+  const productId = deriveProductIdFromCpc(cpcNumber);
+  if (!productId) {
+    return { error: 'cpcNumber does not look like a valid CPC (expected <ProductId>L<LotNo>).' };
+  }
+  return {
     cpcNumber: cpcNumber.trim(),
-    productId: deriveProductIdFromCpc(cpcNumber) || '',
-    styleName: typeof styleName === 'string' ? styleName.trim() : '',
-    sizeName: typeof sizeName === 'string' ? sizeName.trim() : '',
-    designName: typeof designName === 'string' ? designName.trim() : '',
-    groupName: groupName.trim(),
-    purity: typeof purity === 'string' ? purity.trim() : '',
-    sellByPiece: '0',
-    lotCount: '1',
+    record: {
+      productId,
+      styleName: typeof styleName === 'string' ? styleName.trim() : '',
+      sizeName: typeof sizeName === 'string' ? sizeName.trim() : '',
+      designName: typeof designName === 'string' ? designName.trim() : '',
+      groupName: groupName.trim(),
+      purity: typeof purity === 'string' ? purity.trim() : '',
+      sellByPiece: '0',
+      lotCount: '1',
+    },
   };
-  addLearnedCpc(record);
-  logEvent('cpc.learned', { ...record, stats: getCpcMasterStats() }, session);
+}
+
+// Called when staff finish filling in a product whose ProductId wasn't
+// found above (or a genuinely new variant of one that was) - so this SAME
+// running server recognizes it immediately if scanned again later the
+// same shift, and appends it to the CPC master Sheet so it survives a
+// restart/redeploy too. See cpcMaster.ts's addLearnedCpc() for how that
+// append works and why logging this event is also a useful backstop if it
+// ever fails.
+app.post('/api/cpc-lookup/learn', requireAuth, (req, res) => {
+  const session = (req as any).session as SessionInfo;
+  const parsed = parseCpcRecordBody(req.body);
+  if ('error' in parsed) return res.status(400).json({ error: parsed.error });
+  addLearnedCpc(parsed.record);
+  logEvent('cpc.learned', { cpc: parsed.cpcNumber, ...parsed.record, stats: getCpcMasterStats() }, session);
   res.json({ success: true });
+});
+
+// Called when staff correct a value that was auto-filled from a 'certain'
+// (single-row, unambiguous) CPC match - the store's own data was wrong,
+// and this fixes it for good rather than just for this one submission.
+// See cpcMaster.ts's correctSingleRowProduct() for how the underlying
+// Sheet row gets updated in place.
+app.post('/api/cpc-lookup/correct', requireAuth, async (req, res) => {
+  const session = (req as any).session as SessionInfo;
+  const parsed = parseCpcRecordBody(req.body);
+  if ('error' in parsed) return res.status(400).json({ error: parsed.error });
+  try {
+    await correctSingleRowProduct(parsed.record);
+    logEvent('cpc.corrected', { cpc: parsed.cpcNumber, ...parsed.record, stats: getCpcMasterStats() }, session);
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error('CPC correction failed:', err?.message || err);
+    logEvent('cpc.corrected', { cpc: parsed.cpcNumber, ...parsed.record, success: false, errorMessage: debugDetail(err) }, session);
+    res.status(502).json({ error: err?.message || 'Failed to save the correction.', debugDetail: debugDetail(err) });
+  }
 });
 
 // ---------------------------------------------------------------------------

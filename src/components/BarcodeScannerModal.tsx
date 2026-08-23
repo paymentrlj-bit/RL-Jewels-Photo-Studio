@@ -140,23 +140,83 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
     return null;
   };
 
+  // Runs the same on-device barcode/QR detection used by the live auto-scan
+  // loop (checkBarcodeOnFrame below) against a still image instead of the
+  // live video element - needed here because Side 1's manual-capture and
+  // file-upload paths hand processImageContent a base64 image, not a
+  // video frame to read live.
+  const detectBarcodeFromImageBase64 = async (imageBase64: string): Promise<string | null> => {
+    const img = new Image();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error('Could not load captured image.'));
+        img.src = imageBase64;
+      });
+    } catch {
+      return null;
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(img, 0, 0);
+
+    if ('BarcodeDetector' in window) {
+      try {
+        const barcodeDetector = new (window as any).BarcodeDetector({
+          formats: ['qr_code', 'code_128', 'code_39', 'ean_13', 'data_matrix'],
+        });
+        const barcodes = await barcodeDetector.detect(canvas);
+        if (barcodes && barcodes.length > 0 && barcodes[0].rawValue) {
+          const rawCode = barcodes[0].rawValue.trim();
+          if (rawCode.length >= 3) return rawCode;
+        }
+      } catch {
+        // fall through to jsQR below
+      }
+    }
+    return extractBarcodeFromFrame(canvas);
+  };
+
   /**
-   * Free High-Speed Tag Scanner & OCR (Zero Gemini API Cost)
-   * Uses fast on-device Barcode/QR detection + free OCR + intelligent rule-based parsing.
+   * Side 1's ONLY job is reading the QR/barcode to get the CPC number - the
+   * CPC master lookup (see ProductForm.tsx's performCpcLookup, triggered
+   * from onScanSuccess) supplies name/item type/purity/size once the app
+   * has that CPC, far more reliably than OCR ever could. So Side 1 never
+   * calls OCR at all: no server round trip, no OCR.space quota spent, on
+   * fields nothing uses anymore. Side 2 (the back label) still needs real
+   * OCR - weight can only come from actually reading the printed numbers.
    */
   const processImageContent = async (imageBase64: string, targetSide: 'side1' | 'side2') => {
     setIsProcessing(true);
     setAutoScanActive(false); // Stop live loop upon capture
     setCameraError(null);
-    setStatusMessage(`⚡ Free OCR Scanning on ${targetSide === 'side1' ? 'Side 1 (QR/Specs)' : 'Side 2 (Weights)'}...`);
 
+    if (targetSide === 'side1') {
+      setStatusMessage('⚡ Scanning for QR/Barcode on Side 1...');
+      const detectedBarcode = await detectBarcodeFromImageBase64(imageBase64);
+      if (detectedBarcode) {
+        const parsed = parseJewelryTagText(''); // no OCR text - defaults only, cpc set below
+        parsed.cpc = detectedBarcode;
+        handleParsedSuccess(parsed, imageBase64, 'side1', `Barcode: ${detectedBarcode}`);
+      } else {
+        setStatusMessage('No QR/barcode found - align the code in the reticle and try again, or close this and type the CPC in manually.');
+        setIsProcessing(false);
+        setAutoScanActive(true);
+      }
+      return;
+    }
+
+    // Side 2 (weights) - still needs real OCR of the printed label.
+    setStatusMessage('⚡ Free OCR Scanning on Side 2 (Weights)...');
     let detectedBarcode: string | null = null;
     if (videoRef.current) {
       detectedBarcode = extractBarcodeFromFrame(videoRef.current);
     }
 
     try {
-      // 1. Free OCR via server endpoint
       const ocrRes = await fetch('/api/ocr-space', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -165,16 +225,14 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
       const ocrData = await ocrRes.json();
       const txt = ocrData?.rawText || '';
 
-      const existingRef = targetSide === 'side2' ? side1Data || undefined : undefined;
-      const parsed = parseJewelryTagText(txt, existingRef);
+      const parsed = parseJewelryTagText(txt, side1Data || undefined);
       if (detectedBarcode && (!parsed.cpc || parsed.cpc === 'RLJ-TAG')) {
         parsed.cpc = detectedBarcode;
       }
       handleParsedSuccess(parsed, imageBase64, targetSide, txt || (detectedBarcode ? `Barcode: ${detectedBarcode}` : 'Tag Captured'));
     } catch (fallbackErr: any) {
       console.warn('OCR notice:', fallbackErr);
-      const existingRef = targetSide === 'side2' ? side1Data || undefined : undefined;
-      const parsed = parseJewelryTagText(detectedBarcode || '', existingRef);
+      const parsed = parseJewelryTagText(detectedBarcode || '', side1Data || undefined);
       if (detectedBarcode) {
         parsed.cpc = detectedBarcode;
       }

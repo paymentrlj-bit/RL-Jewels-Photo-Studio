@@ -7,15 +7,16 @@
 // (82,891 rows across every metal - GOLD, SILVER, DIAMOND, ONE GRAM,
 // BY PCS, STONES). That system builds every CPC number the same way:
 // <ProductId><BranchSeparator "L"><LotNo>, e.g. "1265L1051" = ProductId
-// 1265, LotNo 1051 (see deriveProductIdFromCpc below).
+// 1265, LotNo 1051.
 //
-// ProductId is the ONLY part of a CPC number this module actually keys
-// its lookup on - LotNo carries no independent information (see the
-// dataset note below: for 3,246 of 3,247 products, every lot of the same
-// ProductId shares identical style/metal/purity, and even size is the
-// same for the vast majority), so there's nothing to gain from trying to
-// match the full CPC string exactly. Every lookup derives the ProductId
-// and looks that up - see lookupCpc() below.
+// ProductId is the ONLY part of a CPC number this module ever uses. The
+// LotNo carries no independent information (see the dataset note below:
+// for 3,246 of 3,247 products, every lot of the same ProductId shares
+// identical style/metal/purity, and even size is the same for the vast
+// majority), so the CPC number itself is not stored anywhere - only its
+// ProductId is. deriveProductIdFromCpc() extracts it by splitting on the
+// first "L", which works even for a CPC that isn't in the master data at
+// all (a brand-new product, or the data simply being out of date).
 //
 // data/cpc-master.csv is NOT the raw 82,891-row export - it's
 // deduplicated down to 3,352 rows: one row per distinct (ProductId,
@@ -47,10 +48,9 @@
 
 import fs from 'fs';
 import path from 'path';
-import { ensureCpcSheet, readAllRows, seedSheet, appendRow } from './cpcSheet';
+import { ensureCpcSheet, readAllRows, seedSheet, appendRow, findSingleRowIndexByProductId, updateRow } from './cpcSheet';
 
 export interface CpcMasterRecord {
-  cpcNumber: string;
   productId: string;
   styleName: string;
   sizeName: string;
@@ -63,7 +63,7 @@ export interface CpcMasterRecord {
 
 const CSV_PATH = path.join(process.cwd(), 'data', 'cpc-master.csv');
 const CSV_COLUMNS: (keyof CpcMasterRecord)[] = [
-  'cpcNumber', 'productId', 'styleName', 'sizeName', 'designName',
+  'productId', 'styleName', 'sizeName', 'designName',
   'groupName', 'purity', 'sellByPiece', 'lotCount',
 ];
 
@@ -71,10 +71,6 @@ const byProductId = new Map<string, CpcMasterRecord[]>();
 let loadedFromDisk = false;
 let sourceInitialized = false;
 let learnedThisSession = 0;
-// Guards against the exact same CPC being appended to the Sheet twice in
-// one process's lifetime (e.g. a retried request) - not a lookup index,
-// just deduplication for the Sheet-append side effect.
-const learnedCpcNumbers = new Set<string>();
 let totalRecordCount = 0;
 
 function indexRecord(record: CpcMasterRecord) {
@@ -88,12 +84,27 @@ function rowToRecord(cols: string[]): CpcMasterRecord | null {
   if (cols.length < CSV_COLUMNS.length) return null;
   const record = {} as CpcMasterRecord;
   CSV_COLUMNS.forEach((key, idx) => { record[key] = cols[idx] ?? ''; });
-  if (!record.cpcNumber) return null;
+  if (!record.productId) return null;
   return record;
 }
 
 function recordToRow(record: CpcMasterRecord): string[] {
   return CSV_COLUMNS.map((key) => record[key] ?? '');
+}
+
+// True if two records describe the same product+variant (everything
+// except lotCount, which is a count, not an identifying field). Used to
+// avoid adding a duplicate row for a combination we already have.
+function sameVariant(a: CpcMasterRecord, b: CpcMasterRecord): boolean {
+  return (
+    a.productId === b.productId &&
+    a.styleName === b.styleName &&
+    a.sizeName === b.sizeName &&
+    a.designName === b.designName &&
+    a.groupName === b.groupName &&
+    a.purity === b.purity &&
+    a.sellByPiece === b.sellByPiece
+  );
 }
 
 function readCsvRows(): { header: string[]; records: CpcMasterRecord[] } {
@@ -198,8 +209,9 @@ export interface CpcLookupResult {
   //   and should be treated as a suggestion, not a fact.
   // 'none': this ProductId isn't in our data at all.
   matchType: 'certain' | 'guess' | 'none';
-  record: CpcMasterRecord | null;
+  cpcNumber: string; // the (normalized) CPC that was looked up - not stored data, just an echo of the input
   productId: string | null;
+  record: CpcMasterRecord | null;
 }
 
 // Looks up purely by ProductId - the LotNo portion of a CPC number is
@@ -210,42 +222,82 @@ export interface CpcLookupResult {
 export function lookupCpc(cpcNumberRaw: string): CpcLookupResult {
   const cpcNumber = cpcNumberRaw.trim().toUpperCase();
   const productId = deriveProductIdFromCpc(cpcNumber);
-  if (!productId) return { matchType: 'none', record: null, productId: null };
+  if (!productId) return { matchType: 'none', cpcNumber, productId: null, record: null };
 
   const rows = byProductId.get(productId);
-  if (!rows || rows.length === 0) return { matchType: 'none', record: null, productId };
+  if (!rows || rows.length === 0) return { matchType: 'none', cpcNumber, productId, record: null };
 
   if (rows.length === 1) {
-    return { matchType: 'certain', record: { ...rows[0], cpcNumber }, productId };
+    return { matchType: 'certain', cpcNumber, productId, record: rows[0] };
   }
   return {
     matchType: 'guess',
-    record: { ...rows[0], cpcNumber, sizeName: mostCommonSizeBylotCount(rows), lotCount: '' },
+    cpcNumber,
     productId,
+    record: { ...rows[0], sizeName: mostCommonSizeBylotCount(rows), lotCount: '' },
   };
 }
 
-// Adds a staff-entered product for a CPC whose ProductId wasn't found
-// above - indexes it in memory immediately (so this same server
-// recognizes it right away if scanned again later the same shift) and
-// appends it as a new row to the Sheet in the background (not awaited by
-// callers, so a staff member's submission is never held up by the round
-// trip) so it survives a restart/redeploy too. A save failure here is
-// logged but not thrown - logEvent('cpc.learned', ...) in server.ts is
-// the audit-trail backstop if an append is ever lost.
+// Adds a staff-entered product for a ProductId that wasn't found above (or
+// a genuinely new variant of a 'guess' product) - indexes it in memory
+// immediately (so this same server recognizes it right away if scanned
+// again later the same shift) and appends it as a new row to the Sheet in
+// the background (not awaited by callers, so a staff member's submission
+// is never held up by the round trip) so it survives a restart/redeploy
+// too. A save failure here is logged but not thrown - logEvent
+// ('cpc.learned', ...) in server.ts is the audit-trail backstop if an
+// append is ever lost. No-ops (does not add a duplicate row) if an
+// identical variant already exists for this ProductId.
 export function addLearnedCpc(record: CpcMasterRecord) {
-  const cpcNumber = record.cpcNumber.trim().toUpperCase();
-  if (learnedCpcNumbers.has(cpcNumber)) return; // already learned this process's lifetime - avoid a duplicate Sheet row
-  learnedCpcNumbers.add(cpcNumber);
+  const normalized: CpcMasterRecord = { ...record, lotCount: record.lotCount || '1' };
+  const existing = byProductId.get(normalized.productId) || [];
+  if (existing.some((r) => sameVariant(r, normalized))) return;
 
-  const normalized: CpcMasterRecord = { ...record, cpcNumber, lotCount: record.lotCount || '1' };
   indexRecord(normalized);
   learnedThisSession++;
   ensureCpcSheet()
     .then(({ spreadsheetId }) => appendRow(spreadsheetId, recordToRow(normalized)))
     .catch((err) => {
-      console.warn('CPC append to Sheet failed (this CPC may not survive a restart until it can be re-learned):', err?.message || err);
+      console.warn('CPC append to Sheet failed (this entry may not survive a restart until it can be re-entered):', err?.message || err);
     });
+}
+
+// Saves a staff correction to a product that WAS a 'certain' (single-row,
+// unambiguous) match - i.e. the correction is a genuine fix to data we
+// already had, not a new variant. Updates that one row in place (found by
+// a live search, not cached bookkeeping - see cpcSheet.ts's
+// findSingleRowIndexByProductId) rather than appending, so the product
+// stays unambiguous ('certain') afterward instead of accidentally
+// becoming a 'guess' with two near-duplicate rows. If the row can't be
+// found unambiguously (e.g. it's no longer single - already handled by a
+// concurrent change), falls back to appending instead.
+//
+// The in-memory fix always applies immediately, even if the Sheet side
+// fails or Drive isn't configured at all - same fail-open pattern as
+// addLearnedCpc(), so a Drive hiccup never means "the correction didn't
+// happen," only "it might not survive a restart yet."
+export async function correctSingleRowProduct(record: CpcMasterRecord): Promise<void> {
+  const normalized: CpcMasterRecord = { ...record, lotCount: record.lotCount || '1' };
+
+  const existing = byProductId.get(normalized.productId);
+  if (existing && existing.length === 1) {
+    existing[0] = normalized; // update the in-memory copy immediately
+  } else {
+    byProductId.set(normalized.productId, [normalized]);
+    totalRecordCount++;
+  }
+
+  try {
+    const { spreadsheetId } = await ensureCpcSheet();
+    const rowIndex = await findSingleRowIndexByProductId(spreadsheetId, normalized.productId);
+    if (rowIndex) {
+      await updateRow(spreadsheetId, rowIndex, recordToRow(normalized));
+    } else {
+      await appendRow(spreadsheetId, recordToRow(normalized));
+    }
+  } catch (err: any) {
+    console.warn('CPC correction save to Sheet failed (applied in memory for now, may not survive a restart until this is fixed):', err?.message || err);
+  }
 }
 
 export function getCpcMasterStats() {
