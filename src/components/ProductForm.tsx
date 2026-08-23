@@ -81,7 +81,7 @@ export const ProductForm: React.FC<ProductFormProps> = ({
   // never gets treated as "this CPC wasn't found" at submit time.
   const [cpcLookupResult, setCpcLookupResult] = useState<{
     cpcNumber: string;
-    matchType: 'exact' | 'product-sibling' | 'none';
+    matchType: 'certain' | 'guess' | 'none';
     isGold: boolean;
   } | null>(null);
 
@@ -112,8 +112,8 @@ export const ProductForm: React.FC<ProductFormProps> = ({
         if (data.genderGuess) setGender(data.genderGuess);
         if (setSize && data.record.sizeName) setSize(data.record.sizeName);
 
-        const siblingNote = data.matchType === 'product-sibling' ? ' (matched from another lot of this product - please confirm size)' : '';
-        setScanSuccessBanner(`CPC ${trimmed} recognized${siblingNote}: ${(data.normalizedPurity || data.record.purity).toString().toUpperCase()} ${cleanName}`);
+        const guessNote = data.matchType === 'guess' ? ' (this product comes in more than one size - please confirm)' : '';
+        setScanSuccessBanner(`CPC ${trimmed} recognized${guessNote}: ${(data.normalizedPurity || data.record.purity).toString().toUpperCase()} ${cleanName}`);
         setTimeout(() => setScanSuccessBanner(null), 6000);
       }
     } catch {

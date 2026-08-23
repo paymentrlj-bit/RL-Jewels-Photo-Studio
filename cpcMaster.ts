@@ -9,7 +9,15 @@
 // <ProductId><BranchSeparator "L"><LotNo>, e.g. "1265L1051" = ProductId
 // 1265, LotNo 1051 (see deriveProductIdFromCpc below).
 //
-// data/cpc-master.csv is NOT that raw 82,891-row export - it's
+// ProductId is the ONLY part of a CPC number this module actually keys
+// its lookup on - LotNo carries no independent information (see the
+// dataset note below: for 3,246 of 3,247 products, every lot of the same
+// ProductId shares identical style/metal/purity, and even size is the
+// same for the vast majority), so there's nothing to gain from trying to
+// match the full CPC string exactly. Every lookup derives the ProductId
+// and looks that up - see lookupCpc() below.
+//
+// data/cpc-master.csv is NOT the raw 82,891-row export - it's
 // deduplicated down to 3,352 rows: one row per distinct (ProductId,
 // styleName, sizeName, designName, groupName, purity, sellByPiece)
 // combination, not one row per physical lot. Verified against the real
@@ -19,9 +27,8 @@
 // sizeName (46 of 3,247 products come in more than one size) and, in that
 // one exceptional product, designName. `lotCount` on each row records how
 // many original physical lots collapsed into it - used to weight the
-// "most common size" guess in the product-sibling match type below by
-// actual original inventory count, not just by how many distinct rows
-// happen to exist.
+// "most likely size" guess (see lookupCpc()) by actual original inventory
+// count, not just by how many distinct rows happen to exist.
 //
 // Feature scope right now is GOLD only (per current product priority) -
 // this module loads and indexes every row regardless of metal so the data
@@ -60,17 +67,21 @@ const CSV_COLUMNS: (keyof CpcMasterRecord)[] = [
   'groupName', 'purity', 'sellByPiece', 'lotCount',
 ];
 
-const byCpc = new Map<string, CpcMasterRecord>();
 const byProductId = new Map<string, CpcMasterRecord[]>();
 let loadedFromDisk = false;
 let sourceInitialized = false;
 let learnedThisSession = 0;
+// Guards against the exact same CPC being appended to the Sheet twice in
+// one process's lifetime (e.g. a retried request) - not a lookup index,
+// just deduplication for the Sheet-append side effect.
+const learnedCpcNumbers = new Set<string>();
+let totalRecordCount = 0;
 
 function indexRecord(record: CpcMasterRecord) {
-  byCpc.set(record.cpcNumber, record);
   const siblings = byProductId.get(record.productId);
   if (siblings) siblings.push(record);
   else byProductId.set(record.productId, [record]);
+  totalRecordCount++;
 }
 
 function rowToRecord(cols: string[]): CpcMasterRecord | null {
@@ -117,7 +128,7 @@ function loadMasterFromDisk() {
     return;
   }
   for (const record of records) indexRecord(record);
-  console.log(`CPC master data loaded from bundled CSV: ${byCpc.size} CPC numbers across ${byProductId.size} products.`);
+  console.log(`CPC master data loaded from bundled CSV: ${totalRecordCount} rows across ${byProductId.size} products.`);
 }
 
 // Primary path: ensures the Google Sheet exists (creating + seeding it
@@ -134,14 +145,14 @@ export async function initCpcMaster(): Promise<void> {
       const { header, records } = readCsvRows();
       await seedSheet(spreadsheetId, header, records.map(recordToRow));
       for (const record of records) indexRecord(record);
-      console.log(`CPC master Sheet created and seeded: ${byCpc.size} CPC numbers across ${byProductId.size} products.`);
+      console.log(`CPC master Sheet created and seeded: ${totalRecordCount} rows across ${byProductId.size} products.`);
     } else {
       const rows = await readAllRows(spreadsheetId);
       for (let i = 1; i < rows.length; i++) {
         const record = rowToRecord(rows[i]);
         if (record) indexRecord(record);
       }
-      console.log(`CPC master data loaded from Sheet: ${byCpc.size} CPC numbers across ${byProductId.size} products.`);
+      console.log(`CPC master data loaded from Sheet: ${totalRecordCount} rows across ${byProductId.size} products.`);
     }
   } catch (err: any) {
     console.warn('CPC master Sheet unavailable (falling back to bundled CSV only, learned CPCs will not persist across restarts until this is fixed):', err?.message || err);
@@ -177,49 +188,57 @@ function mostCommonSizeBylotCount(records: CpcMasterRecord[]): string {
 }
 
 export interface CpcLookupResult {
-  // 'exact': this literal CPC number is in the master data.
-  // 'product-sibling': this exact CPC isn't known, but its ProductId
-  //   prefix matches other rows of a known product - style/metal/purity
-  //   are near-certainly right, size is a best guess (the one field that
-  //   can genuinely differ per product) weighted by real lot counts, and
-  //   should be treated as a suggestion.
-  // 'none': nothing usable found.
-  matchType: 'exact' | 'product-sibling' | 'none';
+  // 'certain': this ProductId only has ONE distinct row in our data - no
+  //   ambiguity at all, whatever we return is definitely right (style,
+  //   metal, purity, AND size).
+  // 'guess': this ProductId has MULTIPLE distinct rows (a genuine
+  //   multi-size/multi-design product) - style/metal/purity are still
+  //   near-certain (verified consistent across all but 1 of 3,247
+  //   products), but sizeName is a best guess weighted by real lot counts
+  //   and should be treated as a suggestion, not a fact.
+  // 'none': this ProductId isn't in our data at all.
+  matchType: 'certain' | 'guess' | 'none';
   record: CpcMasterRecord | null;
   productId: string | null;
 }
 
+// Looks up purely by ProductId - the LotNo portion of a CPC number is
+// deliberately never used for matching (see the file header comment for
+// why). Certainty comes from how many distinct rows exist for that
+// ProductId, not from whether this literal CPC string happens to match
+// one we've seen before.
 export function lookupCpc(cpcNumberRaw: string): CpcLookupResult {
   const cpcNumber = cpcNumberRaw.trim().toUpperCase();
-
-  const exact = byCpc.get(cpcNumber);
-  if (exact) return { matchType: 'exact', record: exact, productId: exact.productId };
-
   const productId = deriveProductIdFromCpc(cpcNumber);
-  if (productId) {
-    const siblings = byProductId.get(productId);
-    if (siblings && siblings.length > 0) {
-      const base = siblings[0];
-      return {
-        matchType: 'product-sibling',
-        record: { ...base, cpcNumber, sizeName: mostCommonSizeBylotCount(siblings), lotCount: '' },
-        productId,
-      };
-    }
+  if (!productId) return { matchType: 'none', record: null, productId: null };
+
+  const rows = byProductId.get(productId);
+  if (!rows || rows.length === 0) return { matchType: 'none', record: null, productId };
+
+  if (rows.length === 1) {
+    return { matchType: 'certain', record: { ...rows[0], cpcNumber }, productId };
   }
-  return { matchType: 'none', record: null, productId };
+  return {
+    matchType: 'guess',
+    record: { ...rows[0], cpcNumber, sizeName: mostCommonSizeBylotCount(rows), lotCount: '' },
+    productId,
+  };
 }
 
-// Adds a staff-entered product for a CPC that wasn't found above - indexes
-// it in memory immediately (so this same server recognizes it right away
-// if scanned again later the same shift) and appends it as a new row to
-// the Sheet in the background (not awaited by callers, so a staff
-// member's submission is never held up by the round trip) so it survives
-// a restart/redeploy too. A save failure here is logged but not thrown -
-// logEvent('cpc.learned', ...) in server.ts is the audit-trail backstop if
-// an append is ever lost.
+// Adds a staff-entered product for a CPC whose ProductId wasn't found
+// above - indexes it in memory immediately (so this same server
+// recognizes it right away if scanned again later the same shift) and
+// appends it as a new row to the Sheet in the background (not awaited by
+// callers, so a staff member's submission is never held up by the round
+// trip) so it survives a restart/redeploy too. A save failure here is
+// logged but not thrown - logEvent('cpc.learned', ...) in server.ts is
+// the audit-trail backstop if an append is ever lost.
 export function addLearnedCpc(record: CpcMasterRecord) {
-  const normalized: CpcMasterRecord = { ...record, cpcNumber: record.cpcNumber.trim().toUpperCase(), lotCount: record.lotCount || '1' };
+  const cpcNumber = record.cpcNumber.trim().toUpperCase();
+  if (learnedCpcNumbers.has(cpcNumber)) return; // already learned this process's lifetime - avoid a duplicate Sheet row
+  learnedCpcNumbers.add(cpcNumber);
+
+  const normalized: CpcMasterRecord = { ...record, cpcNumber, lotCount: record.lotCount || '1' };
   indexRecord(normalized);
   learnedThisSession++;
   ensureCpcSheet()
@@ -230,7 +249,7 @@ export function addLearnedCpc(record: CpcMasterRecord) {
 }
 
 export function getCpcMasterStats() {
-  return { totalCpcNumbers: byCpc.size, totalProducts: byProductId.size, learnedThisSession };
+  return { totalRows: totalRecordCount, totalProducts: byProductId.size, learnedThisSession };
 }
 
 // ---------------------------------------------------------------------------

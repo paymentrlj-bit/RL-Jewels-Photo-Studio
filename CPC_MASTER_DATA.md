@@ -18,6 +18,12 @@ Example: `1265L1051` = ProductId `1265`, LotNo `1051`. `cpcMaster.ts`'s
 on the first `L` - this works even for a CPC that isn't in the master data
 at all, since it's just string structure, not a database lookup.
 
+**Only the ProductId is ever used to look anything up - the LotNo is
+deliberately ignored.** Every lot of the same ProductId shares identical
+style/metal/purity in all but one case out of 3,247 products (see below),
+so there's nothing to gain from trying to match a CPC's exact full string;
+ProductId alone already carries everything useful.
+
 ## Where the data comes from, and why it's 3,352 rows, not 82,891
 
 The store's real POS export was 82,891 rows - one row per physical lot,
@@ -40,21 +46,22 @@ not one row per physical lot - 3,352 rows, a 96% reduction. Each row keeps
 one real representative `cpcNumber` from that group, plus a `lotCount`
 column recording how many original physical lots collapsed into it.
 
-This is why a CPC lookup has two possible positive outcomes:
+A lookup has three possible outcomes, and which one you get depends on how
+many distinct rows exist for that ProductId - not on whether this literal
+CPC string happens to match one seen before:
 
-- **`exact`** - this literal CPC is one of the 3,352 kept rows. Full
-  confidence, including size.
-- **`product-sibling`** - this exact CPC isn't one of the kept rows, but
-  its ProductId prefix matches other rows of a known product.
-  Style/metal/purity are near-certainly right; size is a best guess -
-  the size with the highest total `lotCount` among that product's rows
+- **`certain`** - this ProductId has exactly ONE distinct row in our data
+  (true for 3,201 of 3,247 products, 98.6%). No ambiguity at all - style,
+  metal, purity, AND size are all definitely right, regardless of which
+  specific lot number was scanned.
+- **`guess`** - this ProductId has MORE THAN ONE distinct row (a genuine
+  multi-size or, in one case, multi-design product - 46 of 3,247).
+  Style/metal/purity are still near-certain; size is a best guess - the
+  size with the highest total `lotCount` among that product's rows
   (weighted by real original inventory count, not just "how many
   deduplicated rows exist") - and should be treated as a suggestion, not
-  a fact. In practice this is the outcome for most real CPCs now, since
-  only one representative CPC per group keeps `exact` status - the
-  auto-filled values are identical to what `exact` would have given for
-  the 3,201 single-size products (98.6% of the total), and only genuinely
-  a best guess for the 46 multi-size ones.
+  a fact.
+- **`none`** - this ProductId isn't in our data at all.
 
 ### Cleanup applied before deduplicating
 
