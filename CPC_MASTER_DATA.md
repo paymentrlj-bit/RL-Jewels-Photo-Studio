@@ -68,25 +68,34 @@ When a CPC comes back `none` and staff finish filling the product in by
 hand, `ProductForm.tsx` calls `POST /api/cpc-lookup/learn`, which adds it
 to the in-memory lookup (`cpcMaster.ts`'s `addLearnedCpc()`) - so the SAME
 running server recognizes it immediately if scanned again later that
-shift.
+shift, AND persists it to Drive so it survives a restart/redeploy too.
 
-**This does not currently survive a restart or redeploy.** This app runs
-on ephemeral hosting (see the `ADMIN_PASSWORD` comment in `server.ts` for
-the same constraint elsewhere) - there's no local file a learned CPC could
-safely persist to, since a write there would just vanish on the next
-deploy. Every learned CPC is also logged via `logEvent('cpc.learned', ...)`
-so nothing is actually lost even when the in-memory copy resets - it's
-recoverable from Axiom and mergeable into `data/cpc-master.csv` for the
-next deploy, but that's a manual step today, not automatic.
+**How this stays durable across restarts:** every learned CPC is mirrored
+into a single small JSON file, `rlj-cpc-learned-overlay.json`, in the same
+shared Google Drive folder already used for photo export (reuses the
+existing `GOOGLE_DRIVE_*` credentials from `DRIVE_SETUP.md` - no new setup
+needed if Drive export is already configured). `driveExport.ts`'s
+`saveCpcOverlayToDrive()` overwrites this file with the full current list
+on every new learned CPC (writes are serialized within one server process
+via a simple queue, so two nearly-simultaneous learns don't clobber each
+other); `loadCpcOverlayFromDrive()` reads it back. `server.ts` awaits
+`initCpcOverlayFromDrive()` before it starts accepting requests, so a
+freshly-deployed server already recognizes everything learned before it.
 
-**A real fix needs a decision on where the durable copy lives** - the
-strongest candidate is reusing the Google Drive service account already
-set up for photo export (`driveExport.ts`, see `DRIVE_SETUP.md`) to keep a
-small overlay file of newly-learned CPCs, merged with the static file at
-lookup time. That wasn't built without confirming this is the right
-tradeoff first (it adds a Drive API call to the learn path, and needs the
-existing service account granted write access to wherever this file
-would live).
+If `GOOGLE_DRIVE_*` isn't configured at all, this fails open exactly like
+the photo-export feature does: learned CPCs still work for the rest of
+that server's uptime (in-memory), they just won't survive a restart, and a
+warning is logged either way. Every learned CPC is also logged via
+`logEvent('cpc.learned', ...)` regardless, as a secondary audit trail
+recoverable from Axiom if the Drive save itself ever fails.
+
+**Known limitation:** the overlay save is a full overwrite (not an
+append), which is simplest and correct for a file this size, but two
+*different* server instances (not just two requests on the same one)
+learning a CPC at nearly the same moment could still race and one save
+could clobber the other. Not handled - a low-probability edge case at this
+app's scale, not worth a more complex sync mechanism (e.g. Drive revision
+conflict detection) unless it's actually observed happening.
 
 ## Updating the master file from a fresh POS export
 

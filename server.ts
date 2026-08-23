@@ -9,7 +9,7 @@ import { DEFAULT_ENHANCE_PROMPT } from './src/utils/promptSettings';
 import { isDriveConfigured, exportProductToDrive } from './driveExport';
 import { isDslrCaptureConfigured, isDslrBridgeReachable, captureDslrPhoto, getDslrLiveViewStream, autofocusDslr, focusNudgeDslr } from './dslrBridge';
 import { logEvent, newRequestId, readEventsForAnalytics, isAxiomConfigured, getAxiomDataset, LoggedSession } from './logging';
-import { lookupCpc, addLearnedCpc, deriveProductIdFromCpc, normalizeGoldPurity, guessGenderFromStyleName, getCpcMasterStats, CpcMasterRecord } from './cpcMaster';
+import { lookupCpc, addLearnedCpc, deriveProductIdFromCpc, normalizeGoldPurity, guessGenderFromStyleName, getCpcMasterStats, initCpcOverlayFromDrive, CpcMasterRecord } from './cpcMaster';
 
 dotenv.config();
 
@@ -1635,6 +1635,16 @@ app.get('/api/analytics/summary', requireAuth, async (req, res) => {
 // ---------------------------------------------------------------------------
 
 async function setupServer() {
+  // Restores CPCs staff learned in a previous run before accepting any
+  // requests, so the very first lookups after a deploy already have them.
+  // Fails open (falls back to static-only CPC data) rather than blocking
+  // startup - a Drive hiccup here shouldn't take down the whole app.
+  try {
+    await initCpcOverlayFromDrive();
+  } catch (err: any) {
+    console.warn('CPC overlay restore from Drive failed (continuing with static data only):', err?.message || err);
+  }
+
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },

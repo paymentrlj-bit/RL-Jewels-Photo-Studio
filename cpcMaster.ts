@@ -21,6 +21,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { loadCpcOverlayFromDrive, saveCpcOverlayToDrive } from './driveExport';
 
 export interface CpcMasterRecord {
   cpcNumber: string;
@@ -46,7 +47,11 @@ const CSV_COLUMNS: (keyof CpcMasterRecord)[] = [
 const byCpc = new Map<string, CpcMasterRecord>();
 const byProductId = new Map<string, CpcMasterRecord[]>();
 let loadedFromDisk = false;
-let learnedCount = 0;
+// Full list of every learned CPC (whether restored from the Drive overlay
+// at startup or added during this process's own runtime) - this is what
+// gets re-uploaded wholesale on every save, see persistLearnedToDrive().
+const learnedRecords: CpcMasterRecord[] = [];
+let overlayLoadedFromDrive = false;
 
 function indexRecord(record: CpcMasterRecord) {
   byCpc.set(record.cpcNumber, record);
@@ -134,34 +139,97 @@ export function lookupCpc(cpcNumberRaw: string): CpcLookupResult {
   return { matchType: 'none', record: null, productId };
 }
 
+// Serializes writes to the Drive overlay file so two nearly-simultaneous
+// addLearnedCpc() calls don't race and clobber each other - each save
+// waits for the previous one to finish (success or failure) before
+// re-uploading the now-current full learnedRecords list. Only guards
+// against races within this one process; two different server instances
+// writing at once is a much rarer edge case for this deployment's scale
+// and isn't handled here.
+let writeQueue: Promise<void> = Promise.resolve();
+
+function persistLearnedToDrive() {
+  writeQueue = writeQueue
+    .then(() => saveCpcOverlayToDrive(learnedRecords))
+    .catch((err) => {
+      console.warn('CPC overlay save to Drive failed (this CPC may not survive a restart until the next successful save):', err?.message || err);
+    });
+}
+
 // Adds a staff-entered product for a CPC that wasn't found above, so this
 // SAME server process recognizes it immediately afterward (e.g. a second
-// lot of the same new design scanned later the same shift).
-//
-// IMPORTANT: in-memory only, does NOT survive a restart/redeploy. This
-// hosting setup runs on ephemeral containers (see the ADMIN_PASSWORD
-// comment in server.ts for the same constraint) - there's no local file
-// this could safely persist to, since a local write would just silently
-// vanish on the next deploy. Every learned entry is also logged via
-// logEvent('cpc.learned', ...) in server.ts so nothing is actually lost -
-// it's recoverable from Axiom and mergeable into data/cpc-master.csv for
-// the next deploy. Real durable persistence (most likely a Google
-// Drive-backed overlay file, reusing the existing service account) is a
-// deliberate follow-up, not built here without confirming the approach.
+// lot of the same new design scanned later the same shift), and persists
+// it to the Drive overlay so it also survives a restart/redeploy. The
+// Drive save happens in the background (not awaited by callers) so a
+// staff member's submission is never held up by it - see
+// persistLearnedToDrive() above for how failures are handled, and
+// logEvent('cpc.learned', ...) in server.ts for the audit-trail backstop
+// if a save is ever lost.
 export function addLearnedCpc(record: CpcMasterRecord) {
-  indexRecord({ ...record, cpcNumber: record.cpcNumber.trim().toUpperCase() });
-  learnedCount++;
+  const normalized = { ...record, cpcNumber: record.cpcNumber.trim().toUpperCase() };
+  indexRecord(normalized);
+  learnedRecords.push(normalized);
+  persistLearnedToDrive();
+}
+
+function isValidCpcMasterRecord(x: unknown): x is CpcMasterRecord {
+  if (!x || typeof x !== 'object') return false;
+  const r = x as Record<string, unknown>;
+  return typeof r.cpcNumber === 'string' && r.cpcNumber.trim().length > 0 && typeof r.groupName === 'string';
+}
+
+// Restores CPCs learned in a previous run of this server from the Drive
+// overlay file, so a restart/redeploy doesn't lose them. Called once from
+// server.ts before it starts accepting requests - awaited (with a
+// reasonable ceiling implicit in the Drive client's own timeouts) so the
+// very first lookups after a deploy already have this data, rather than a
+// race where early requests miss it.
+export async function initCpcOverlayFromDrive(): Promise<void> {
+  if (overlayLoadedFromDrive) return;
+  overlayLoadedFromDrive = true;
+  const rawRecords = await loadCpcOverlayFromDrive();
+  let restored = 0;
+  for (const raw of rawRecords) {
+    if (!isValidCpcMasterRecord(raw)) continue;
+    const normalized: CpcMasterRecord = {
+      cpcNumber: raw.cpcNumber.trim().toUpperCase(),
+      productId: raw.productId || '',
+      lotNo: raw.lotNo || '',
+      styleName: raw.styleName || '',
+      sizeName: raw.sizeName || '',
+      designName: raw.designName || '',
+      groupName: raw.groupName || '',
+      purity: raw.purity || '',
+      primaryGroupId: raw.primaryGroupId || '',
+      designId: raw.designId || '',
+      sizeId: raw.sizeId || '',
+      sellByPiece: raw.sellByPiece || '0',
+    };
+    // Never override a static-file entry - the overlay should only ever
+    // contain CPCs that were unknown to the static file at the time they
+    // were learned, but this keeps a stale/manually-edited overlay from
+    // being able to shadow real catalog data either way.
+    if (byCpc.has(normalized.cpcNumber)) continue;
+    indexRecord(normalized);
+    learnedRecords.push(normalized);
+    restored++;
+  }
+  if (restored > 0) {
+    console.log(`CPC overlay restored from Drive: ${restored} previously-learned CPC numbers.`);
+  }
 }
 
 export function getCpcMasterStats() {
-  return { totalCpcNumbers: byCpc.size, totalProducts: byProductId.size, learnedThisSession: learnedCount };
+  return { totalCpcNumbers: byCpc.size, totalProducts: byProductId.size, learnedThisSession: learnedRecords.length };
 }
 
 // Loaded once, eagerly, at process startup (like DEFAULT_ENHANCE_PROMPT and
 // the other startup-time config in server.ts) rather than on first lookup -
 // so a missing/broken data file is discovered and logged immediately on
 // boot instead of silently surfacing as a mysterious "not found" on the
-// first CPC someone scans.
+// first CPC someone scans. The Drive overlay (initCpcOverlayFromDrive) is
+// NOT called here - it's async and network-dependent, so server.ts awaits
+// it explicitly before listening instead of racing it against startup.
 loadMasterFromDisk();
 
 // ---------------------------------------------------------------------------
