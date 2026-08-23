@@ -30,7 +30,10 @@ export function isDriveConfigured(): boolean {
   return Boolean(getOAuthCredentials() && process.env.GOOGLE_DRIVE_ROOT_FOLDER_ID);
 }
 
-async function getAccessToken(): Promise<string> {
+// Exported so cpcSheet.ts can reuse this same cached OAuth2Client/token
+// instead of maintaining a second one - both modules authenticate as the
+// same Google account under the same drive.file-equivalent scope.
+export async function getAccessToken(): Promise<string> {
   const creds = getOAuthCredentials();
   if (!creds) throw new Error('Google Drive OAuth credentials are not configured.');
 

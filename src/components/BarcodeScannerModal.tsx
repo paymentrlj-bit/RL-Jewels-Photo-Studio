@@ -41,17 +41,29 @@ interface BarcodeScannerModalProps {
   isOpen: boolean;
   onClose: () => void;
   onScanSuccess: (data: ScannedProductData) => void;
+  // When the CPC has already been looked up (typed manually, or scanned
+  // earlier this session) and matched a `certain` - single, unambiguous -
+  // product, ProductForm passes what it already knows here. The modal then
+  // skips Side 1's QR scan entirely and opens straight on Side 2 (weights):
+  // there's nothing left for a Side 1 scan to tell us that the CPC lookup
+  // hasn't already answered for certain.
+  knownSide1Data?: ScannedProductData | null;
 }
 
 export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
   isOpen,
   onClose,
   onScanSuccess,
+  knownSide1Data,
 }) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const scanIntervalRef = useRef<any>(null);
+  // Pending "auto-advance to Side 2" timer, started the instant Side 1's
+  // QR is read so staff don't have to tap "Flip Tag" themselves. Tracked in
+  // a ref so a rescan or an early manual tap can cancel it before it fires.
+  const side1AutoAdvanceRef = useRef<any>(null);
 
   // Two-Sided Tag Tracking
   const [currentSide, setCurrentSide] = useState<'side1' | 'side2'>('side1');
@@ -76,6 +88,10 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
     if (scanIntervalRef.current) {
       clearInterval(scanIntervalRef.current);
       scanIntervalRef.current = null;
+    }
+    if (side1AutoAdvanceRef.current) {
+      clearTimeout(side1AutoAdvanceRef.current);
+      side1AutoAdvanceRef.current = null;
     }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => {
@@ -140,23 +156,83 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
     return null;
   };
 
+  // Runs the same on-device barcode/QR detection used by the live auto-scan
+  // loop (checkBarcodeOnFrame below) against a still image instead of the
+  // live video element - needed here because Side 1's manual-capture and
+  // file-upload paths hand processImageContent a base64 image, not a
+  // video frame to read live.
+  const detectBarcodeFromImageBase64 = async (imageBase64: string): Promise<string | null> => {
+    const img = new Image();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error('Could not load captured image.'));
+        img.src = imageBase64;
+      });
+    } catch {
+      return null;
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(img, 0, 0);
+
+    if ('BarcodeDetector' in window) {
+      try {
+        const barcodeDetector = new (window as any).BarcodeDetector({
+          formats: ['qr_code', 'code_128', 'code_39', 'ean_13', 'data_matrix'],
+        });
+        const barcodes = await barcodeDetector.detect(canvas);
+        if (barcodes && barcodes.length > 0 && barcodes[0].rawValue) {
+          const rawCode = barcodes[0].rawValue.trim();
+          if (rawCode.length >= 3) return rawCode;
+        }
+      } catch {
+        // fall through to jsQR below
+      }
+    }
+    return extractBarcodeFromFrame(canvas);
+  };
+
   /**
-   * Free High-Speed Tag Scanner & OCR (Zero Gemini API Cost)
-   * Uses fast on-device Barcode/QR detection + free OCR + intelligent rule-based parsing.
+   * Side 1's ONLY job is reading the QR/barcode to get the CPC number - the
+   * CPC master lookup (see ProductForm.tsx's performCpcLookup, triggered
+   * from onScanSuccess) supplies name/item type/purity/size once the app
+   * has that CPC, far more reliably than OCR ever could. So Side 1 never
+   * calls OCR at all: no server round trip, no OCR.space quota spent, on
+   * fields nothing uses anymore. Side 2 (the back label) still needs real
+   * OCR - weight can only come from actually reading the printed numbers.
    */
   const processImageContent = async (imageBase64: string, targetSide: 'side1' | 'side2') => {
     setIsProcessing(true);
     setAutoScanActive(false); // Stop live loop upon capture
     setCameraError(null);
-    setStatusMessage(`⚡ Free OCR Scanning on ${targetSide === 'side1' ? 'Side 1 (QR/Specs)' : 'Side 2 (Weights)'}...`);
 
+    if (targetSide === 'side1') {
+      setStatusMessage('⚡ Scanning for QR/Barcode on Side 1...');
+      const detectedBarcode = await detectBarcodeFromImageBase64(imageBase64);
+      if (detectedBarcode) {
+        const parsed = parseJewelryTagText(''); // no OCR text - defaults only, cpc set below
+        parsed.cpc = detectedBarcode;
+        handleParsedSuccess(parsed, imageBase64, 'side1', `Barcode: ${detectedBarcode}`);
+      } else {
+        setStatusMessage('No QR/barcode found - align the code in the reticle and try again, or close this and type the CPC in manually.');
+        setIsProcessing(false);
+        setAutoScanActive(true);
+      }
+      return;
+    }
+
+    // Side 2 (weights) - still needs real OCR of the printed label.
+    setStatusMessage('⚡ Free OCR Scanning on Side 2 (Weights)...');
     let detectedBarcode: string | null = null;
     if (videoRef.current) {
       detectedBarcode = extractBarcodeFromFrame(videoRef.current);
     }
 
     try {
-      // 1. Free OCR via server endpoint
       const ocrRes = await fetch('/api/ocr-space', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -165,16 +241,14 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
       const ocrData = await ocrRes.json();
       const txt = ocrData?.rawText || '';
 
-      const existingRef = targetSide === 'side2' ? side1Data || undefined : undefined;
-      const parsed = parseJewelryTagText(txt, existingRef);
+      const parsed = parseJewelryTagText(txt, side1Data || undefined);
       if (detectedBarcode && (!parsed.cpc || parsed.cpc === 'RLJ-TAG')) {
         parsed.cpc = detectedBarcode;
       }
       handleParsedSuccess(parsed, imageBase64, targetSide, txt || (detectedBarcode ? `Barcode: ${detectedBarcode}` : 'Tag Captured'));
     } catch (fallbackErr: any) {
       console.warn('OCR notice:', fallbackErr);
-      const existingRef = targetSide === 'side2' ? side1Data || undefined : undefined;
-      const parsed = parseJewelryTagText(detectedBarcode || '', existingRef);
+      const parsed = parseJewelryTagText(detectedBarcode || '', side1Data || undefined);
       if (detectedBarcode) {
         parsed.cpc = detectedBarcode;
       }
@@ -198,7 +272,15 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
       setSide1Snapshot(snapshot);
       const merged = mergeScannedTagData(parsed, side2Data);
       setCombinedData(merged);
-      setStatusMessage('✨ Side 1 Captured! Flip tag to Side 2 (Weights) or Apply to form.');
+      setStatusMessage('✨ Side 1 Captured! Auto-advancing to Side 2 (Weights)...');
+      // No manual "Flip Tag" tap needed - the instant a QR reads
+      // successfully, move on. Brief delay just lets staff see the green
+      // "Captured" confirmation flash before the view changes.
+      if (side1AutoAdvanceRef.current) clearTimeout(side1AutoAdvanceRef.current);
+      side1AutoAdvanceRef.current = setTimeout(() => {
+        side1AutoAdvanceRef.current = null;
+        handleSwitchToSide2();
+      }, 700);
     } else {
       setSide2Data(parsed);
       setSide2Snapshot(snapshot);
@@ -328,6 +410,19 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
       return;
     }
 
+    // A `certain` CPC match (typed manually, or scanned earlier this
+    // session) already tells us everything Side 1 exists to find out - so
+    // open straight on Side 2 (weights) instead of asking staff to point
+    // the camera at the front label again for a QR we've already resolved.
+    if (knownSide1Data) {
+      setSide1Data(knownSide1Data);
+      setSide1Snapshot(null);
+      const merged = mergeScannedTagData(knownSide1Data, null);
+      setCombinedData(merged);
+      setCurrentSide('side2');
+      setStatusMessage('✨ Known product (CPC already confirmed) - skip straight to Side 2 (Weights).');
+    }
+
     let isMounted = true;
 
     async function startCamera() {
@@ -413,7 +508,7 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
       clearTimeout(timeout);
       stopCamera();
     };
-  }, [isOpen, facingMode, stopCamera]);
+  }, [isOpen, facingMode, stopCamera, knownSide1Data]);
 
   // Trigger manual capture and fast AI OCR on current frame
   const handleManualCapture = () => {
@@ -439,6 +534,10 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
 
   // Switch to Side 2 (Weights & Back) - ensures live camera view is immediately active
   const handleSwitchToSide2 = () => {
+    if (side1AutoAdvanceRef.current) {
+      clearTimeout(side1AutoAdvanceRef.current);
+      side1AutoAdvanceRef.current = null;
+    }
     setCurrentSide('side2');
     setAutoScanAttempts(0);
     setAutoScanActive(true);
@@ -448,6 +547,10 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
 
   // Retake current side - instantly re-enables live video
   const handleRetakeSide = (side: 'side1' | 'side2') => {
+    if (side1AutoAdvanceRef.current) {
+      clearTimeout(side1AutoAdvanceRef.current);
+      side1AutoAdvanceRef.current = null;
+    }
     if (side === 'side1') {
       setSide1Data(null);
       setSide1Snapshot(null);
@@ -699,8 +802,9 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
               </button>
             </div>
 
-            {/* If Side 1 is captured, prompt user to Flip & Scan Side 2 */}
-            {side1Data && !side2Data && (
+            {/* If Side 1 is captured and we haven't already auto-advanced,
+                offer a manual "skip the wait" flip to Side 2 */}
+            {side1Data && !side2Data && currentSide === 'side1' && (
               <button
                 id="flip-tag-to-side2-btn"
                 type="button"

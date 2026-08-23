@@ -5,6 +5,18 @@ import { BarcodeScannerModal, ScannedProductData } from './BarcodeScannerModal';
 import { ProcessingStatusCard } from './ProcessingStatusCard';
 import { logClientEvent } from '../utils/analytics';
 
+// Matches the word-capitalization convention already used for OCR-derived
+// names in utils/tagParser.ts, applied here to the ALL-CAPS style names
+// that come back from the CPC master lookup (e.g. "ANGUTHI GENTS" ->
+// "Anguthi Gents").
+function toTitleCase(s: string): string {
+  return s
+    .toLowerCase()
+    .split(' ')
+    .map((w) => (w ? w.charAt(0).toUpperCase() + w.slice(1) : w))
+    .join(' ');
+}
+
 interface ProductFormProps {
   cpc: string;
   setCpc: (val: string) => void;
@@ -64,6 +76,64 @@ export const ProductForm: React.FC<ProductFormProps> = ({
   // log) when staff had to correct an OCR-autofilled field before proceeding
   // - the single best signal for which field/parser step needs improving.
   const [scanBaseline, setScanBaseline] = useState<ScannedProductData | null>(null);
+  // Result of the last CPC master-data lookup, keyed to the CPC it was for
+  // - so a stale result (from a CPC the staff has since edited away from)
+  // never gets treated as "this CPC wasn't found" at submit time.
+  // `autoFilled` snapshots exactly what was set from the lookup, so submit
+  // time can tell whether staff changed any of it - see
+  // handleValidateAndProceed's confirm-before-save step below.
+  const [cpcLookupResult, setCpcLookupResult] = useState<{
+    cpcNumber: string;
+    matchType: 'certain' | 'guess' | 'none';
+    isGold: boolean;
+    autoFilled: { productName: string; sizeName: string; purity: GoldPurity } | null;
+  } | null>(null);
+  // Set when submit finds a mismatch between what was auto-filled from a
+  // CPC match and what staff actually entered - shown as a simple
+  // "please double-check this" prompt, not framed as a database operation.
+  const [showConfirmDetails, setShowConfirmDetails] = useState(false);
+
+  // Looks the CPC up against the store's real product data (see
+  // cpcMaster.ts) and, for a GOLD match, auto-fills name/item
+  // type/purity/gender-guess/size - far more reliable than OCR-guessing a
+  // physical tag, since it's the store's own catalog data. Silent on
+  // failure/no-match: this is a convenience on top of manual entry, never a
+  // blocker to it.
+  const performCpcLookup = async (cpcValue: string) => {
+    const trimmed = cpcValue.trim();
+    if (!trimmed) {
+      setCpcLookupResult(null);
+      return;
+    }
+    try {
+      const res = await fetch(`/api/cpc-lookup?cpc=${encodeURIComponent(trimmed)}`);
+      const data = await res.json();
+      const isGold = data?.record?.groupName === 'GOLD';
+      let autoFilled: { productName: string; sizeName: string; purity: GoldPurity } | null = null;
+
+      if (isGold && data.record) {
+        const cleanName = toTitleCase(data.record.styleName || '');
+        if (cleanName) {
+          setProductName(cleanName);
+          setItemType(cleanName);
+        }
+        const resolvedPurity: GoldPurity = data.normalizedPurity || purity;
+        if (data.normalizedPurity) setPurity(data.normalizedPurity);
+        if (data.genderGuess) setGender(data.genderGuess);
+        if (setSize && data.record.sizeName) setSize(data.record.sizeName);
+        autoFilled = { productName: cleanName, sizeName: data.record.sizeName || '', purity: resolvedPurity };
+
+        const guessNote = data.matchType === 'guess' ? ' (this product comes in more than one size - please confirm)' : '';
+        setScanSuccessBanner(`CPC ${trimmed} recognized${guessNote}: ${(data.normalizedPurity || data.record.purity).toString().toUpperCase()} ${cleanName}`);
+        setTimeout(() => setScanSuccessBanner(null), 6000);
+      }
+      setCpcLookupResult({ cpcNumber: trimmed, matchType: data?.matchType || 'none', isGold, autoFilled });
+    } catch {
+      // Lookup is a convenience on top of manual/OCR entry, not a
+      // requirement - a network hiccup here should never block staff from
+      // just typing the fields in themselves.
+    }
+  };
 
   // Calculate Net Weight: Net = Gross - Other
   const calculateNetWeight = (grossVal: string, otherVal: string) => {
@@ -120,6 +190,13 @@ export const ProductForm: React.FC<ProductFormProps> = ({
     setTimeout(() => {
       setScanSuccessBanner(null);
     }, 6000);
+
+    // The scanned CPC's weight (GW/OW/NW) is per-physical-piece and only
+    // OCR can read it, but name/item type/purity/size are catalog-level
+    // facts the store's own CPC master data knows for certain - re-fetch
+    // and let it override the OCR guess for those specific fields when
+    // it's found, right after the OCR banner above.
+    if (data.cpc) performCpcLookup(data.cpc);
   };
 
   const handleValidateAndProceed = () => {
@@ -152,8 +229,78 @@ export const ProductForm: React.FC<ProductFormProps> = ({
       }
     }
 
+    // A CPC match whose auto-filled details staff then changed needs a
+    // quick "please double-check this" confirmation before it's saved as
+    // the new truth (see performCpcSaveAndProceed below) - everything else
+    // proceeds straight through.
+    if (cpcLookupResult && cpcLookupResult.cpcNumber === cpc.trim() && cpcLookupResult.autoFilled && cpcLookupResult.matchType !== 'none') {
+      const { autoFilled } = cpcLookupResult;
+      const mismatch = autoFilled.productName !== productName || autoFilled.sizeName !== size || autoFilled.purity !== purity;
+      if (mismatch) {
+        setShowConfirmDetails(true);
+        return;
+      }
+    }
+
+    performCpcSaveAndProceed();
+  };
+
+  // Saves whatever's needed back to the CPC master data (a brand-new
+  // ProductId, a correction to an existing unambiguous one, or a new
+  // variant of a multi-size one) and then proceeds - shared by the direct
+  // path above and the confirm-details popup's "Confirm" button.
+  // Fire-and-forget: none of this should ever block or slow down submit.
+  const performCpcSaveAndProceed = () => {
+    if (cpcLookupResult && cpcLookupResult.cpcNumber === cpc.trim()) {
+      const payload = {
+        cpcNumber: cpc.trim(),
+        styleName: productName || itemType,
+        sizeName: size || 'DEFAULT',
+        groupName: 'GOLD',
+        purity: purity === '18kt' ? '18 Ct' : purity === '24kt' ? '24 Ct' : '22 Ct',
+      };
+      // 'certain' + a change staff confirmed = fix the one existing row in
+      // place. 'guess' + a change = a genuinely new size/variant, added
+      // alongside what we already had. 'none' = first time seeing this
+      // ProductId at all. Everything else needs no save (nothing changed).
+      if (cpcLookupResult.matchType === 'none') {
+        fetch('/api/cpc-lookup/learn', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).catch(() => {});
+      } else if (cpcLookupResult.autoFilled) {
+        const { autoFilled } = cpcLookupResult;
+        const mismatch = autoFilled.productName !== productName || autoFilled.sizeName !== size || autoFilled.purity !== purity;
+        if (mismatch && cpcLookupResult.matchType === 'certain') {
+          fetch('/api/cpc-lookup/correct', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).catch(() => {});
+        } else if (mismatch && cpcLookupResult.matchType === 'guess') {
+          fetch('/api/cpc-lookup/learn', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }).catch(() => {});
+        }
+      }
+    }
     onProceed();
   };
+
+  // If the CPC currently in the field already resolved to a `certain`
+  // (single, unambiguous) product - typed manually and blurred, or left
+  // over from an earlier scan - there's nothing left for a Side 1 QR scan
+  // to tell us. Handing this to the scanner lets it skip straight to Side 2
+  // (weights) instead of asking staff to point the camera at the front
+  // label again for a code we've already resolved.
+  const knownSide1Data: ScannedProductData | null =
+    cpcLookupResult &&
+    cpcLookupResult.cpcNumber === cpc.trim() &&
+    cpcLookupResult.matchType === 'certain' &&
+    cpcLookupResult.autoFilled
+      ? {
+          cpc: cpc.trim(),
+          name: cpcLookupResult.autoFilled.productName,
+          itemType: cpcLookupResult.autoFilled.productName,
+          purity: cpcLookupResult.autoFilled.purity,
+          gender,
+          grossWeight: '',
+          otherWeight: '',
+          netWeight: '',
+          size: cpcLookupResult.autoFilled.sizeName,
+        }
+      : null;
 
   const filteredSuggestions = ITEM_TYPE_SUGGESTIONS.filter((s) =>
     s.toLowerCase().includes(itemType.toLowerCase().trim())
@@ -230,7 +377,8 @@ export const ProductForm: React.FC<ProductFormProps> = ({
                 setCpc(e.target.value.toUpperCase());
                 setErrorMsg('');
               }}
-              placeholder="e.g. 20L1579 or RLJ-RN-8821"
+              onBlur={(e) => performCpcLookup(e.target.value)}
+              placeholder="e.g. 1265L1051 or RLJ-RN-8821"
               className="min-h-[48px] w-full bg-stone-50/80 border border-stone-200 focus:border-red-600 focus:bg-white rounded-xl pl-4 pr-14 py-3 text-stone-900 font-mono text-base tracking-wider placeholder:text-stone-400 focus:outline-none transition-all uppercase font-bold"
             />
             {/* Scanner Button inside the right of the textbox */}
@@ -256,7 +404,7 @@ export const ProductForm: React.FC<ProductFormProps> = ({
               type="text"
               value={productName}
               onChange={(e) => setProductName(e.target.value)}
-              placeholder="e.g. 22kt Gold Traditional Earrings (Sz: 17N0)"
+              placeholder="e.g. 22kt Gold Traditional Earrings (Sz: 17NO)"
               className="min-h-[48px] w-full bg-stone-50/80 border border-stone-200 focus:border-red-600 focus:bg-white rounded-xl px-4 py-3 text-stone-800 text-sm placeholder:text-stone-400 focus:outline-none transition-colors"
             />
           </div>
@@ -270,7 +418,7 @@ export const ProductForm: React.FC<ProductFormProps> = ({
               type="text"
               value={size}
               onChange={(e) => setSize && setSize(e.target.value.toUpperCase())}
-              placeholder="e.g. 17N0, 2.4, 18&quot;, DEFAULT"
+              placeholder="e.g. 17NO, 18INCH, DEFAULT"
               className="min-h-[48px] w-full bg-stone-50/80 border border-stone-200 focus:border-red-600 focus:bg-white rounded-xl px-3.5 py-3 text-stone-900 font-mono text-sm placeholder:text-stone-400 focus:outline-none uppercase"
             />
           </div>
@@ -517,7 +665,50 @@ export const ProductForm: React.FC<ProductFormProps> = ({
         isOpen={showScannerModal}
         onClose={() => setShowScannerModal(false)}
         onScanSuccess={handleScanSuccess}
+        knownSide1Data={knownSide1Data}
       />
+
+      {showConfirmDetails && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-5 sm:p-6 shadow-2xl space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-full bg-amber-50 border border-amber-200 flex items-center justify-center shrink-0">
+                <ShieldAlert className="w-5 h-5 text-amber-600" />
+              </div>
+              <div>
+                <h3 className="font-bold text-stone-900">Please Double-Check</h3>
+                <p className="text-sm text-stone-600 mt-1">
+                  Make sure the details below are correct before continuing.
+                </p>
+              </div>
+            </div>
+            <div className="bg-stone-50 border border-stone-200 rounded-xl p-3 space-y-1 text-sm">
+              <div className="flex justify-between"><span className="text-stone-500">Name</span><span className="font-semibold text-stone-900">{productName}</span></div>
+              <div className="flex justify-between"><span className="text-stone-500">Purity</span><span className="font-semibold text-stone-900">{purity.toUpperCase()}</span></div>
+              <div className="flex justify-between"><span className="text-stone-500">Size</span><span className="font-semibold text-stone-900">{size}</span></div>
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setShowConfirmDetails(false)}
+                className="flex-1 min-h-[44px] py-2.5 rounded-xl bg-stone-100 hover:bg-stone-200 text-stone-700 font-semibold text-sm transition-colors"
+              >
+                Go Back
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowConfirmDetails(false);
+                  performCpcSaveAndProceed();
+                }}
+                className="flex-1 min-h-[44px] py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-sm transition-colors"
+              >
+                Confirm & Continue
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
     </div>
