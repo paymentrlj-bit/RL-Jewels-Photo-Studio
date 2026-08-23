@@ -30,7 +30,10 @@ export function isDriveConfigured(): boolean {
   return Boolean(getOAuthCredentials() && process.env.GOOGLE_DRIVE_ROOT_FOLDER_ID);
 }
 
-async function getAccessToken(): Promise<string> {
+// Exported so cpcSheet.ts can reuse this same cached OAuth2Client/token
+// instead of maintaining a second one - both modules authenticate as the
+// same Google account under the same drive.file-equivalent scope.
+export async function getAccessToken(): Promise<string> {
   const creds = getOAuthCredentials();
   if (!creds) throw new Error('Google Drive OAuth credentials are not configured.');
 
@@ -71,39 +74,6 @@ async function findOrCreateFolder(accessToken: string, name: string, parentId: s
     throw new Error(createData.error?.message || 'Failed to create Drive folder.');
   }
   return createData.id;
-}
-
-// Finds a file (not folder) by exact name under a given parent - used by
-// the CPC learned-overlay functions below to locate their single JSON file
-// without needing to remember its file ID across server restarts.
-async function findFile(accessToken: string, name: string, parentId: string): Promise<string | null> {
-  const escapedName = name.replace(/'/g, "\\'");
-  const query = `name='${escapedName}' and '${parentId}' in parents and trashed=false`;
-  const searchRes = await fetch(`${DRIVE_FILES_URL}?q=${encodeURIComponent(query)}&fields=files(id,name)`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
-  const searchData: any = await searchRes.json();
-  return searchData.files && searchData.files.length > 0 ? searchData.files[0].id : null;
-}
-
-async function updateFileContent(accessToken: string, fileId: string, mimeType: string, content: string): Promise<void> {
-  const res = await fetch(`${DRIVE_UPLOAD_URL}/${fileId}?uploadType=media`, {
-    method: 'PATCH',
-    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': mimeType },
-    body: content,
-  });
-  if (!res.ok) {
-    const data: any = await res.json().catch(() => ({}));
-    throw new Error(data.error?.message || `Failed to update Drive file (HTTP ${res.status}).`);
-  }
-}
-
-async function downloadFileContent(accessToken: string, fileId: string): Promise<string> {
-  const res = await fetch(`${DRIVE_FILES_URL}/${fileId}?alt=media`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
-  if (!res.ok) throw new Error(`Failed to download Drive file (HTTP ${res.status}).`);
-  return res.text();
 }
 
 async function uploadFile(
@@ -171,54 +141,4 @@ export async function exportProductToDrive(input: DriveExportInput): Promise<{ f
 
   const folderLink = `https://drive.google.com/drive/folders/${categoryFolderId}`;
   return { folderLink, photoLink };
-}
-
-// ---------------------------------------------------------------------------
-// CPC learned-overlay: a single small JSON file (in the same shared Drive
-// root folder used for photo exports above) holding every CPC number staff
-// have entered that wasn't in the shipped data/cpc-master.csv - see
-// cpcMaster.ts. This is what makes a newly-learned CPC survive a server
-// restart/redeploy: the in-memory lookup map alone does not, since this app
-// runs on ephemeral hosting.
-// ---------------------------------------------------------------------------
-
-const CPC_OVERLAY_FILENAME = 'rlj-cpc-learned-overlay.json';
-
-// Returns [] (not an error) whenever there's nothing durable to read yet -
-// Drive not configured, the overlay file doesn't exist (first run ever), or
-// its content isn't valid JSON. Callers fall back to static-only data.
-export async function loadCpcOverlayFromDrive(): Promise<unknown[]> {
-  if (!isDriveConfigured()) return [];
-  try {
-    const rootFolderId = process.env.GOOGLE_DRIVE_ROOT_FOLDER_ID!;
-    const accessToken = await getAccessToken();
-    const fileId = await findFile(accessToken, CPC_OVERLAY_FILENAME, rootFolderId);
-    if (!fileId) return [];
-    const content = await downloadFileContent(accessToken, fileId);
-    const parsed = JSON.parse(content);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (err: any) {
-    console.warn('CPC overlay load from Drive failed (falling back to static data only):', err?.message || err);
-    return [];
-  }
-}
-
-// Overwrites the overlay file with the full current list (not an append) -
-// simplest correct approach for a file this small, and the caller
-// (cpcMaster.ts) already keeps the full in-memory list this mirrors, so
-// there's no extra state to track here. Throws on failure so the caller can
-// decide how to handle/log it - unlike loadCpcOverlayFromDrive, a save
-// failure is worth surfacing since it means a newly-learned CPC risks not
-// surviving the next restart.
-export async function saveCpcOverlayToDrive(records: unknown[]): Promise<void> {
-  if (!isDriveConfigured()) throw new Error('Google Drive export is not configured on this server.');
-  const rootFolderId = process.env.GOOGLE_DRIVE_ROOT_FOLDER_ID!;
-  const accessToken = await getAccessToken();
-  const content = JSON.stringify(records, null, 2);
-  const fileId = await findFile(accessToken, CPC_OVERLAY_FILENAME, rootFolderId);
-  if (fileId) {
-    await updateFileContent(accessToken, fileId, 'application/json', content);
-  } else {
-    await uploadFile(accessToken, rootFolderId, CPC_OVERLAY_FILENAME, 'application/json', content);
-  }
 }

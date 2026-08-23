@@ -9,7 +9,7 @@ import { DEFAULT_ENHANCE_PROMPT } from './src/utils/promptSettings';
 import { isDriveConfigured, exportProductToDrive } from './driveExport';
 import { isDslrCaptureConfigured, isDslrBridgeReachable, captureDslrPhoto, getDslrLiveViewStream, autofocusDslr, focusNudgeDslr } from './dslrBridge';
 import { logEvent, newRequestId, readEventsForAnalytics, isAxiomConfigured, getAxiomDataset, LoggedSession } from './logging';
-import { lookupCpc, addLearnedCpc, deriveProductIdFromCpc, normalizeGoldPurity, guessGenderFromStyleName, getCpcMasterStats, initCpcOverlayFromDrive, CpcMasterRecord } from './cpcMaster';
+import { lookupCpc, addLearnedCpc, deriveProductIdFromCpc, normalizeGoldPurity, guessGenderFromStyleName, getCpcMasterStats, initCpcMaster, CpcMasterRecord } from './cpcMaster';
 
 dotenv.config();
 
@@ -1113,10 +1113,10 @@ app.get('/api/cpc-lookup', requireAuth, (req, res) => {
 
 // Called when staff finish filling in a product whose CPC wasn't found
 // above - so this SAME running server recognizes it immediately if scanned
-// again later the same shift. See cpcMaster.ts's addLearnedCpc() for why
-// this is in-memory only for now (ephemeral hosting, no local persistence)
-// and why logging this event is what actually keeps the data from being
-// lost.
+// again later the same shift, and appends it to the CPC master Sheet so it
+// survives a restart/redeploy too. See cpcMaster.ts's addLearnedCpc() for
+// how that append works and why logging this event is also a useful
+// backstop if it ever fails.
 app.post('/api/cpc-lookup/learn', requireAuth, (req, res) => {
   const session = (req as any).session as SessionInfo;
   const { cpcNumber, styleName, sizeName, designName, groupName, purity } = req.body || {};
@@ -1129,16 +1129,13 @@ app.post('/api/cpc-lookup/learn', requireAuth, (req, res) => {
   const record: CpcMasterRecord = {
     cpcNumber: cpcNumber.trim(),
     productId: deriveProductIdFromCpc(cpcNumber) || '',
-    lotNo: '',
     styleName: typeof styleName === 'string' ? styleName.trim() : '',
     sizeName: typeof sizeName === 'string' ? sizeName.trim() : '',
     designName: typeof designName === 'string' ? designName.trim() : '',
     groupName: groupName.trim(),
     purity: typeof purity === 'string' ? purity.trim() : '',
-    primaryGroupId: '',
-    designId: '',
-    sizeId: '',
     sellByPiece: '0',
+    lotCount: '1',
   };
   addLearnedCpc(record);
   logEvent('cpc.learned', { ...record, stats: getCpcMasterStats() }, session);
@@ -1635,14 +1632,16 @@ app.get('/api/analytics/summary', requireAuth, async (req, res) => {
 // ---------------------------------------------------------------------------
 
 async function setupServer() {
-  // Restores CPCs staff learned in a previous run before accepting any
-  // requests, so the very first lookups after a deploy already have them.
-  // Fails open (falls back to static-only CPC data) rather than blocking
-  // startup - a Drive hiccup here shouldn't take down the whole app.
+  // Loads the CPC master data (from the Sheet if reachable, else the
+  // bundled CSV - see cpcMaster.ts) before accepting any requests, so the
+  // very first lookups after a deploy already have it. initCpcMaster()
+  // already fails open internally; this outer catch is just an extra
+  // safety net so a genuinely unexpected error here still can't block the
+  // whole app from starting.
   try {
-    await initCpcOverlayFromDrive();
+    await initCpcMaster();
   } catch (err: any) {
-    console.warn('CPC overlay restore from Drive failed (continuing with static data only):', err?.message || err);
+    console.warn('CPC master data init failed unexpectedly (continuing without it):', err?.message || err);
   }
 
   if (process.env.NODE_ENV !== 'production') {
