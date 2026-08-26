@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   Check,
   RefreshCw,
@@ -9,6 +9,7 @@ import {
   ChevronLeft,
   CheckCircle2,
   WifiOff,
+  FlaskConical,
 } from 'lucide-react';
 import { PhotoItem, GoldPurity, ProductGender, ReviewDecision } from '../types';
 import { ProcessingStatusCard } from './ProcessingStatusCard';
@@ -32,6 +33,7 @@ interface ReviewStepProps {
   onRetakePhoto: (newDataUrl: string) => void;
   onBackToPhotos: () => void;
   onProceedToExport: () => void;
+  isAdmin?: boolean;
 }
 
 export const ReviewStep: React.FC<ReviewStepProps> = ({
@@ -51,9 +53,44 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
   onRetakePhoto,
   onBackToPhotos,
   onProceedToExport,
+  isAdmin,
 }) => {
   const displayCpc = cpc || sku;
   const retakeInputRef = useRef<HTMLInputElement | null>(null);
+  const [goldenSetLabel, setGoldenSetLabel] = useState('');
+  const [savingGoldenSet, setSavingGoldenSet] = useState(false);
+  const [goldenSetMsg, setGoldenSetMsg] = useState('');
+
+  // Admin-only utility for building the golden-set regression baseline
+  // (PIPELINE_REBUILD_BRIEF.md Section 6) - saves this exact processed
+  // result, labeled and phase-tagged, to the same Drive folder used for
+  // photo export, for later phases to diff against. Not part of the normal
+  // staff approval flow.
+  const handleSaveToGoldenSet = async () => {
+    if (!photo.processedImage || !goldenSetLabel.trim()) return;
+    setSavingGoldenSet(true);
+    setGoldenSetMsg('');
+    try {
+      const res = await fetch('/api/golden-set/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phase: 'phase-1',
+          label: goldenSetLabel.trim(),
+          originalImageBase64: photo.originalImage,
+          processedImageBase64: photo.processedImage,
+          metadata: { itemType, purity, cpc: displayCpc, modelUsed: photo.modelUsed, attemptCount: photo.attemptCount },
+        }),
+      });
+      const data = await res.json();
+      setGoldenSetMsg(data.success ? 'Saved to golden set.' : data.error || 'Save failed.');
+      if (data.success) setGoldenSetLabel('');
+    } catch {
+      setGoldenSetMsg('Save failed - could not reach the server.');
+    } finally {
+      setSavingGoldenSet(false);
+    }
+  };
 
   const handleRetakeFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -249,6 +286,29 @@ export const ReviewStep: React.FC<ReviewStepProps> = ({
           <p className="text-[11px] text-stone-500 bg-stone-50 border border-stone-200 rounded-xl px-3 py-2">
             Please double-check the enhanced photo genuinely matches your piece - same design, same proportions, nothing added or missing - before approving.
           </p>
+
+          {isAdmin && photo.processedImage && !photo.isSample && (
+            <div className="bg-amber-50/60 border border-amber-200 rounded-xl px-3 py-2.5 flex flex-wrap items-center gap-2">
+              <FlaskConical className="w-4 h-4 text-amber-700 shrink-0" />
+              <input
+                type="text"
+                value={goldenSetLabel}
+                onChange={(e) => setGoldenSetLabel(e.target.value)}
+                placeholder="e.g. thin-chain-01"
+                className="flex-1 min-w-[140px] min-h-[36px] bg-white border border-amber-300 rounded-lg px-2.5 py-1.5 text-xs text-stone-800 placeholder:text-stone-400 focus:outline-none focus:border-amber-500"
+              />
+              <button
+                type="button"
+                onClick={handleSaveToGoldenSet}
+                disabled={savingGoldenSet || !goldenSetLabel.trim()}
+                className="min-h-[36px] px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white text-xs font-bold flex items-center gap-1.5 transition-colors"
+              >
+                {savingGoldenSet ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FlaskConical className="w-3.5 h-3.5" />}
+                <span>Save to Golden Set</span>
+              </button>
+              {goldenSetMsg && <span className="text-[11px] text-amber-900 font-semibold w-full">{goldenSetMsg}</span>}
+            </div>
+          )}
 
           <div className="pt-3 border-t border-stone-100 space-y-3">
             <div className="grid grid-cols-3 gap-2.5 sm:gap-3">
