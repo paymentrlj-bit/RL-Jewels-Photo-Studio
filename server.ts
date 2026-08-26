@@ -7,9 +7,11 @@ import { GoogleGenAI } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 import { DEFAULT_ENHANCE_PROMPT } from './src/utils/promptSettings';
 import { isDriveConfigured, exportProductToDrive } from './driveExport';
+import { isGoldenSetConfigured, saveToGoldenSet } from './goldenSet';
 import { isDslrCaptureConfigured, isDslrBridgeReachable, captureDslrPhoto, getDslrLiveViewStream, autofocusDslr, focusNudgeDslr } from './dslrBridge';
 import { logEvent, newRequestId, readEventsForAnalytics, isAxiomConfigured, getAxiomDataset, LoggedSession } from './logging';
 import { lookupCpc, addLearnedCpc, correctSingleRowProduct, deriveProductIdFromCpc, normalizeGoldPurity, guessGenderFromStyleName, getCpcMasterStats, initCpcMaster, CpcMasterRecord } from './cpcMaster';
+import { isElongatedCategory } from './src/utils/tagParser';
 
 dotenv.config();
 
@@ -43,6 +45,13 @@ function getGeminiClient(): GoogleGenAI {
 const MODEL_ENHANCE_DEFAULT = 'gemini-3.1-flash-image';
 const MODEL_ENHANCE_ESCALATED = 'nano-banana-pro-preview';
 const MODEL_AUDIT = 'gemini-3.1-flash-lite';
+// The escalated enhance attempt is the last gate before something ships, so
+// it's graded by a stronger model than the default tier's flash-lite - not a
+// new/unverified model ID (Section 1 forbids that without checking the real
+// /v1beta/models list, which this environment cannot do), but a reuse of the
+// already-verified MODEL_COPY tier, which is both stronger than flash-lite
+// and already confirmed to exist on this account.
+const MODEL_AUDIT_ESCALATED = 'gemini-3.1-pro-preview';
 // Product copy (name + description) only runs once per staff-approved photo,
 // not on every pipeline attempt, so it can afford a stronger model than the
 // audit's flash-lite tier - bland, generic copy was traced to that model
@@ -73,6 +82,9 @@ const COST_PER_CALL_USD: Record<string, number> = {
   [MODEL_ENHANCE_ESCALATED]: Number(process.env.COST_ENHANCE_ESCALATED_USD) || 0.13,
   [MODEL_AUDIT]: Number(process.env.COST_AUDIT_USD) || 0.001,
   [MODEL_SEGMENT]: Number(process.env.COST_SEGMENT_USD) || 0.001,
+  // MODEL_AUDIT_ESCALATED is the exact same model ID as MODEL_COPY
+  // ('gemini-3.1-pro-preview'), so this one entry covers cost lookups for
+  // both - a separate key would be an unreachable duplicate (same string).
   [MODEL_COPY]: Number(process.env.COST_COPY_USD) || 0.01,
 };
 
@@ -195,7 +207,8 @@ async function enhanceImage(
   model: string,
   imageBase64: string,
   mimeType: string,
-  prompt: string
+  prompt: string,
+  aspectRatio: '1:1' | '3:4' = '1:1'
 ): Promise<EnhanceResult | null> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), ENHANCE_TIMEOUT_MS);
@@ -212,7 +225,12 @@ async function enhanceImage(
         // 1K is visually indistinguishable from 2K at normal web/catalogue
         // display sizes and costs roughly 33% less per image - 2K only
         // matters for print or heavy pinch-zoom, neither of which applies here.
-        imageConfig: { aspectRatio: '1:1', imageSize: '1K' },
+        // aspectRatio defaults to 1:1 but a long/elongated category (chain,
+        // necklace, mangalsutra, bracelet, anklet, waist chain - see
+        // isElongatedCategory in tagParser.ts) is requested at 3:4 instead,
+        // so a long item is never compressed to fit a forced square
+        // (PIPELINE_REBUILD_BRIEF.md, old-pipeline fix #2).
+        imageConfig: { aspectRatio, imageSize: '1K' },
         abortSignal: controller.signal,
       } as any,
     });
@@ -234,13 +252,41 @@ interface AuditResult {
   checklist: Record<string, boolean>;
 }
 
+// Fields grouped by what a failure actually means - used by the caller to
+// decide whether escalating to a stronger enhance model is even capable of
+// fixing the specific failure (see shouldEscalate below,
+// PIPELINE_REBUILD_BRIEF.md old-pipeline fix #7). SOURCE_FIDELITY_FIELDS are
+// properties of the source photo or of design-fidelity to the physical
+// piece - a bigger generative model does not make a blurry counter photo
+// sharp, and does not reduce hallucination risk by being more capable, so
+// escalating on one of these just spends money for the same result.
+// ENHANCEMENT_QUALITY_FIELDS are genuine polish issues (background, exposure,
+// color) that a stronger pass has a real chance of improving.
+export const SOURCE_FIDELITY_FIELDS = [
+  'sharpFocus',
+  'notCropped',
+  'clearlyIdentifiableCategory',
+  'naturalDropPhysics',
+  'stoneCountMatches',
+  'beadDetailPreserved',
+  'chainPatternMatches',
+  'engravingPreserved',
+] as const;
+export const ENHANCEMENT_QUALITY_FIELDS = [
+  'backgroundCleanWhite',
+  'noBlownHighlights',
+  'neutralWhiteBalance',
+  'colorConsistentAcrossSurface',
+] as const;
+
 async function auditOutput(
   ai: GoogleGenAI,
   originalBase64: string,
   originalMime: string,
   enhancedBase64: string,
   enhancedMime: string,
-  context: { itemType: string; purity: string }
+  context: { itemType: string; purity: string },
+  model: string = MODEL_AUDIT
 ): Promise<AuditResult> {
   const prompt = `You are a strict quality inspector for "RL Jewels" e-commerce catalogue photos.
 IMAGE 1 is the original counter photo. IMAGE 2 is the AI-enhanced result that is about to be published.
@@ -255,9 +301,12 @@ Compare IMAGE 2 against IMAGE 1 and grade it. Respond ONLY as JSON matching this
   "neutralWhiteBalance": boolean, // is the metal color neutral/true (not orange or blue-tinted)?
   "colorConsistentAcrossSurface": boolean, // is the color/white-balance correction UNIFORM across the entire piece? Look closely at motifs, engraved details, and recessed/shadowed areas - fail this if any sub-region of the piece (e.g. around a motif) has a visibly different color cast than the open/flat metal surfaces around it. This patchy, inconsistent correction is a common failure - check it carefully.
   "clearlyIdentifiableCategory": boolean, // is the item unmistakably recognizable as a "${context.itemType}" at a glance, with its defining structural features clearly visible (e.g. a ring/bangle's interior opening, a chain's link structure and clasp)?
-  "matchesOriginalDesign": boolean, // CRITICAL: does image 2 show the exact same design as image 1, with no added, removed, or altered engravings, motifs, stones, proportions, or band/chain profile? (Note: a different camera angle/pose than image 1 is fine and expected - only judge the actual design, not the viewpoint.)
+  "stoneCountMatches": boolean, // does image 2 have the exact same number of visible stones/beads/gems as image 1 - none added, removed, or merged? If the item has no stones/beads at all, this is automatically true.
+  "beadDetailPreserved": boolean, // for beadwork/textured surfaces: is the individual bead/texture detail from image 1 still visible and undistorted in image 2 (not smoothed away or altered)? If the item has no beadwork/texture, this is automatically true.
+  "chainPatternMatches": boolean, // for chains/necklaces: does the link pattern, spacing, and clasp in image 2 match image 1's actual structure? If the item is not a chain/necklace, this is automatically true.
+  "engravingPreserved": boolean, // is every engraving, motif, or pattern from image 1 still present, unaltered, and legible in image 2 - none added, removed, or simplified? If the item has no engraving/motif, this is automatically true.
   "naturalDropPhysics": boolean, // If this piece has hanging chains, mesh, tassels, or ball/bead drops (e.g. jhumka, chandbali, bali, layered haars, charm bracelets): do they fall in smooth, symmetric, gravity-consistent curves - NOT tangled, kinked, flattened, pinched, or bent at an implausible angle? Is the exact number of chain strands, links, balls, or beads the SAME as in image 1 (none added or dropped)? If the two earrings/sides of a pair are both visible, are their drops symmetric to each other? If the item has no hanging/repeated drop elements at all, this is automatically true.
-  "overallPass": boolean,       // true only if ALL of the above are true
+  "overallPass": boolean,       // your own overall judgment - true only if ALL of the above are true. NOTE: the caller recomputes this independently as the logical AND of every field above and does NOT trust this field - fill it in honestly anyway, since a self-inconsistent response (a false sub-check alongside overallPass:true) is itself a signal something was misjudged.
   "reason": string              // if overallPass is false, a short, specific, staff-facing reason naming which check failed and why (e.g. "The enhanced image added a decorative pattern to the band that isn't on the original piece."). If overallPass is true, a short confirmation.
 }`;
 
@@ -265,7 +314,7 @@ Compare IMAGE 2 against IMAGE 1 and grade it. Respond ONLY as JSON matching this
   const timeout = setTimeout(() => controller.abort(), AUDIT_TIMEOUT_MS);
   try {
     const response = await ai.models.generateContent({
-      model: MODEL_AUDIT,
+      model,
       contents: {
         parts: [
           { inlineData: { mimeType: originalMime, data: originalBase64 } },
@@ -287,10 +336,17 @@ Compare IMAGE 2 against IMAGE 1 and grade it. Respond ONLY as JSON matching this
       neutralWhiteBalance: Boolean(parsed.neutralWhiteBalance),
       colorConsistentAcrossSurface: Boolean(parsed.colorConsistentAcrossSurface),
       clearlyIdentifiableCategory: Boolean(parsed.clearlyIdentifiableCategory),
-      matchesOriginalDesign: Boolean(parsed.matchesOriginalDesign),
+      stoneCountMatches: Boolean(parsed.stoneCountMatches),
+      beadDetailPreserved: Boolean(parsed.beadDetailPreserved),
+      chainPatternMatches: Boolean(parsed.chainPatternMatches),
+      engravingPreserved: Boolean(parsed.engravingPreserved),
       naturalDropPhysics: Boolean(parsed.naturalDropPhysics),
     };
-    const overallPass = typeof parsed.overallPass === 'boolean' ? parsed.overallPass : Object.values(checklist).every(Boolean);
+    // Never trust the model's own self-reported overallPass - it can return
+    // an internally inconsistent blob (a false sub-check alongside
+    // overallPass:true), which has shipped bad photos before. Always
+    // recompute server-side as the logical AND of every individual field.
+    const overallPass = Object.values(checklist).every(Boolean);
     return {
       overallPass,
       reason: parsed.reason || (overallPass ? 'Passed quality check.' : 'Did not meet catalogue quality standards.'),
@@ -299,6 +355,21 @@ Compare IMAGE 2 against IMAGE 1 and grade it. Respond ONLY as JSON matching this
   } finally {
     clearTimeout(timeout);
   }
+}
+
+// Escalating to a stronger, more expensive enhance model only makes sense
+// when every failing field is a genuine enhancement-quality issue that pass
+// could plausibly fix - never for source-photo/design-fidelity failures (see
+// SOURCE_FIDELITY_FIELDS above). Validated against real production data: in
+// this app's own Axiom logs, escalation's success rate on source-fidelity
+// failures was *worse* than the default tier, not better - escalating on
+// those failures was pure wasted cost.
+function shouldEscalate(checklist: Record<string, boolean>): boolean {
+  const failingFields = Object.entries(checklist)
+    .filter(([, pass]) => !pass)
+    .map(([field]) => field);
+  if (failingFields.length === 0) return false;
+  return failingFields.every((field) => (ENHANCEMENT_QUALITY_FIELDS as readonly string[]).includes(field));
 }
 
 interface SegmentationResult {
@@ -354,6 +425,38 @@ All coordinates normalized 0-1000. Trace the jewelry's real outline closely, inc
   } finally {
     clearTimeout(timeout);
   }
+}
+
+// Dedupes segmentation calls keyed on the actual image bytes, not on client-
+// side "did the photo change" bookkeeping - handleRegeneratePhoto resubmits
+// the exact same original image on every regenerate/retry, and previously
+// this meant a fresh (paid) segmentation call every single time even though
+// the answer can never have changed (PIPELINE_REBUILD_BRIEF.md old-pipeline
+// fix #5). Keying on a content hash instead of a client flag also correctly
+// still re-segments a genuine reshoot (different bytes -> different key).
+const SEGMENTATION_CACHE_TTL_MS = 15 * 60 * 1000;
+const SEGMENTATION_CACHE_MAX_ENTRIES = 200;
+const segmentationCache = new Map<string, { result: SegmentationResult | null; expiresAt: number }>();
+
+function hashImageForCache(base64: string): string {
+  return crypto.createHash('sha256').update(base64).digest('hex');
+}
+
+function getCachedSegmentation(key: string): { hit: boolean; result: SegmentationResult | null } {
+  const entry = segmentationCache.get(key);
+  if (!entry || entry.expiresAt < Date.now()) {
+    if (entry) segmentationCache.delete(key);
+    return { hit: false, result: null };
+  }
+  return { hit: true, result: entry.result };
+}
+
+function setCachedSegmentation(key: string, result: SegmentationResult | null): void {
+  if (!segmentationCache.has(key) && segmentationCache.size >= SEGMENTATION_CACHE_MAX_ENTRIES) {
+    const oldestKey = segmentationCache.keys().next().value;
+    if (oldestKey !== undefined) segmentationCache.delete(oldestKey);
+  }
+  segmentationCache.set(key, { result, expiresAt: Date.now() + SEGMENTATION_CACHE_TTL_MS });
 }
 
 // ---------------------------------------------------------------------------
@@ -667,6 +770,42 @@ app.post('/api/prompt-config', requireAuth, (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// Admin pipeline toggle (PIPELINE_REBUILD_BRIEF.md Section 4)
+//
+// A single global switch, not a per-photo choice, selecting which pipeline
+// processes every new submission going forward - flipping it never touches
+// already-processed results. Phase 1 only has the old (now-fixed) pipeline
+// built, so 'new' is a real, named value here for forward compatibility but
+// is rejected with a clear error rather than silently accepted and ignored -
+// this app's own philosophy throughout is "never a silent bad/no-op result,"
+// and quietly accepting a setting that does nothing would violate that.
+// ---------------------------------------------------------------------------
+
+type ActivePipeline = 'old' | 'new';
+let activePipeline: ActivePipeline = 'old';
+
+app.get('/api/admin/pipeline', requireAuth, (req, res) => {
+  res.json({ activePipeline, availablePipelines: ['old'] });
+});
+
+app.post('/api/admin/pipeline', requireAuth, (req, res) => {
+  const session = (req as any).session as SessionInfo;
+  const { activePipeline: requested } = req.body || {};
+  if (requested !== 'old' && requested !== 'new') {
+    return res.status(400).json({ error: "activePipeline must be 'old' or 'new'." });
+  }
+  if (requested === 'new') {
+    return res.status(400).json({
+      error: 'The new deterministic-first pipeline is not built yet (PIPELINE_REBUILD_BRIEF.md Phase 2+). Only "old" is selectable right now.',
+    });
+  }
+  const previous = activePipeline;
+  activePipeline = requested;
+  logEvent('admin.pipeline_changed', { previous, next: activePipeline }, session);
+  res.json({ success: true, activePipeline });
+});
+
+// ---------------------------------------------------------------------------
 // Core pipeline: enhance -> audit the OUTPUT -> one escalated retry -> else
 // needs_reshoot with a specific reason. Never silently ship a failed result,
 // and never fall back to a fake local "enhancement" - a failed AI call is
@@ -689,7 +828,7 @@ app.post('/api/audit-and-enhance', requireAuth, async (req, res) => {
     res.write(JSON.stringify(event) + '\n');
   };
 
-  const { imageBase64, itemType, purity, gender, sku, cpc, weight, customEnhancePrompt } = req.body;
+  const { imageBase64, itemType, purity, gender, sku, cpc, weight } = req.body;
 
   const session = (req as any).session as SessionInfo;
   const requestId = newRequestId();
@@ -699,6 +838,7 @@ app.post('/api/audit-and-enhance', requireAuth, async (req, res) => {
 
   logEvent('pipeline.started', {
     requestId,
+    pipelineUsed: activePipeline,
     itemType: itemType || null,
     purity: purity || null,
     gender: gender || null,
@@ -706,7 +846,6 @@ app.post('/api/audit-and-enhance', requireAuth, async (req, res) => {
     cpc: cpc || sku || null,
     imageBytesApprox: typeof imageBase64 === 'string' ? Math.round((imageBase64.length * 3) / 4) : 0,
     segmentationEnabled: ENABLE_SEGMENTATION_GROUNDING,
-    hasCustomPrompt: Boolean(customEnhancePrompt && String(customEnhancePrompt).trim()),
   }, session);
 
   // Every attempt at every Gemini call in this pipeline funnels through here,
@@ -737,6 +876,7 @@ app.post('/api/audit-and-enhance', requireAuth, async (req, res) => {
   const sendFinal = (event: Record<string, unknown>) => {
     logEvent('pipeline.completed', {
       requestId,
+      pipelineUsed: activePipeline,
       status: event.status,
       reason: event.reason,
       retryable: event.retryable,
@@ -777,10 +917,10 @@ app.post('/api/audit-and-enhance', requireAuth, async (req, res) => {
   }
 
   const ai = getGeminiClient();
-  const promptTemplate =
-    customEnhancePrompt && typeof customEnhancePrompt === 'string' && customEnhancePrompt.trim()
-      ? customEnhancePrompt.trim()
-      : serverCustomPrompt || DEFAULT_ENHANCE_PROMPT;
+  // Server-side serverCustomPrompt is the sole source of truth (see
+  // PIPELINE_REBUILD_BRIEF.md old-pipeline fix #4) - there is no per-device
+  // client override anymore, so this is never anything else.
+  const promptTemplate = serverCustomPrompt || DEFAULT_ENHANCE_PROMPT;
 
   const contextBlock = `
 
@@ -791,6 +931,11 @@ ADDITIONAL CONTEXT (FROM CATALOG FORM):
 ${weight ? `- Weight: ${weight}g` : ''}`;
 
   const auditContext = { itemType: itemType || 'jewellery', purity: purity || '22kt' };
+
+  // Long/elongated categories (chain, necklace, mangalsutra, bracelet,
+  // anklet, waist chain) keep their true proportions instead of being forced
+  // into a square (PIPELINE_REBUILD_BRIEF.md old-pipeline fix #2).
+  const aspectRatio: '1:1' | '3:4' = isElongatedCategory(itemType || '') ? '3:4' : '1:1';
 
   // Bounds the ENTIRE pipeline below - see PIPELINE_BUDGET_MS.
   const deadline = Date.now() + PIPELINE_BUDGET_MS;
@@ -803,13 +948,22 @@ ${weight ? `- Weight: ${weight}g` : ''}`;
   if (ENABLE_SEGMENTATION_GROUNDING) {
     sendEvent({ stage: 'segmenting' });
     const segmentStartedAt = Date.now();
-    const segmentation = await withHeartbeat('segmenting', segmentJewelry(ai, cleanBase64, mimeType));
-    apiCallCount++;
-    estimatedCostUsd += COST_PER_CALL_USD[MODEL_SEGMENT] || 0;
+    const cacheKey = hashImageForCache(cleanBase64);
+    const cached = getCachedSegmentation(cacheKey);
+    let segmentation: SegmentationResult | null;
+    if (cached.hit) {
+      segmentation = cached.result;
+    } else {
+      segmentation = await withHeartbeat('segmenting', segmentJewelry(ai, cleanBase64, mimeType));
+      apiCallCount++;
+      estimatedCostUsd += COST_PER_CALL_USD[MODEL_SEGMENT] || 0;
+      setCachedSegmentation(cacheKey, segmentation);
+    }
     logEvent('pipeline.segmentation', {
       requestId,
       found: Boolean(segmentation),
       latencyMs: Date.now() - segmentStartedAt,
+      cacheHit: cached.hit,
     }, session);
     if (segmentation) {
       segmentationBlock = `
@@ -832,7 +986,7 @@ Every point inside this outline is part of the SAME physical piece described abo
       enhanced = await withHeartbeat(
         'enhancing',
         withTransientRetry(
-          () => enhanceImage(ai, MODEL_ENHANCE_DEFAULT, cleanBase64, mimeType, promptTemplate + contextBlock + segmentationBlock),
+          () => enhanceImage(ai, MODEL_ENHANCE_DEFAULT, cleanBase64, mimeType, promptTemplate + contextBlock + segmentationBlock, aspectRatio),
           3,
           deadline,
           recordAttempt('enhance', MODEL_ENHANCE_DEFAULT)
@@ -886,6 +1040,26 @@ Every point inside this outline is part of the SAME physical piece described abo
     }, session);
 
     if (!audit.overallPass) {
+      // Never escalate a source-photo/design-fidelity failure - a bigger
+      // generative model does not sharpen a blurry counter photo, and does
+      // not reduce hallucination risk by being more capable. Validated
+      // against this app's own production data: escalation's success rate
+      // on exactly these fields was *worse* than the default tier, not
+      // better (PIPELINE_REBUILD_BRIEF.md old-pipeline fix #7).
+      if (!shouldEscalate(audit.checklist)) {
+        logEvent('pipeline.escalation_skipped', {
+          requestId,
+          reason: audit.reason,
+          checklist: audit.checklist,
+        }, session);
+        return sendFinal({
+          status: 'needs_reshoot',
+          reason: audit.reason,
+          checklist: audit.checklist,
+          originalImage: imageBase64,
+        });
+      }
+
       // Single escalated retry with the specific failure reason fed back in.
       const correctivePrompt = `${promptTemplate}${contextBlock}${segmentationBlock}
 
@@ -905,7 +1079,7 @@ Correct this specific issue while still following every rule above.`;
         const retryEnhanced = await withHeartbeat(
           'escalating',
           withTransientRetry(
-            () => enhanceImage(ai, MODEL_ENHANCE_ESCALATED, cleanBase64, mimeType, correctivePrompt),
+            () => enhanceImage(ai, MODEL_ENHANCE_ESCALATED, cleanBase64, mimeType, correctivePrompt, aspectRatio),
             3,
             deadline,
             recordAttempt('enhance-escalated', MODEL_ENHANCE_ESCALATED)
@@ -914,13 +1088,16 @@ Correct this specific issue while still following every rule above.`;
         attemptCount = 2;
         if (retryEnhanced) {
           sendEvent({ stage: 'auditing', attempt: 2 });
+          // The escalated attempt is the last gate before something ships -
+          // graded by a stronger audit model than the default tier
+          // (PIPELINE_REBUILD_BRIEF.md old-pipeline fix #8).
           const retryAudit = await withHeartbeat(
             'auditing',
             withTransientRetry(
-              () => auditOutput(ai, cleanBase64, mimeType, retryEnhanced.imageBase64, retryEnhanced.mimeType, auditContext),
+              () => auditOutput(ai, cleanBase64, mimeType, retryEnhanced.imageBase64, retryEnhanced.mimeType, auditContext, MODEL_AUDIT_ESCALATED),
               3,
               deadline,
-              recordAttempt('audit', MODEL_AUDIT)
+              recordAttempt('audit-escalated', MODEL_AUDIT_ESCALATED)
             )
           );
           logEvent('pipeline.audit_verdict', {
@@ -1213,6 +1390,48 @@ app.post('/api/export-to-drive', requireAuth, async (req, res) => {
   } catch (err: any) {
     console.error('export-to-drive failed:', err?.message || err);
     logEvent('drive.export', { cpc, itemType, success: false, latencyMs: Date.now() - startedAt, errorMessage: debugDetail(err) }, session);
+    return res.json({ success: false, error: debugDetail(err) });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Golden-set regression baseline (PIPELINE_REBUILD_BRIEF.md Section 6):
+// lets an admin save a specific photo's original+processed result as a
+// labeled, phase-tagged baseline in the same shared Drive folder used for
+// product export, so later phases can be diffed against earlier ones. See
+// goldenSet.ts for why this lives in Drive rather than local disk.
+// ---------------------------------------------------------------------------
+
+app.get('/api/golden-set/status', requireAuth, (req, res) => {
+  res.json({ configured: isGoldenSetConfigured() });
+});
+
+app.post('/api/golden-set/save', requireAuth, async (req, res) => {
+  const startedAt = Date.now();
+  const session = (req as any).session as SessionInfo;
+  if (!(req as any).session?.isAdmin) {
+    return res.status(403).json({ success: false, error: 'Admin only.' });
+  }
+  if (!isGoldenSetConfigured()) {
+    return res.json({ success: false, error: 'Golden-set saving is not configured on this server (needs the same Drive setup as photo export).' });
+  }
+  const { phase, label, originalImageBase64, processedImageBase64, metadata } = req.body || {};
+  if (!phase || !label || !originalImageBase64 || !processedImageBase64) {
+    return res.status(400).json({ success: false, error: 'Missing phase, label, originalImageBase64, or processedImageBase64.' });
+  }
+  try {
+    const result = await saveToGoldenSet({
+      phase,
+      label,
+      originalImageBase64,
+      processedImageBase64,
+      metadata: metadata && typeof metadata === 'object' ? metadata : {},
+    });
+    logEvent('goldenset.saved', { phase, label, success: true, latencyMs: Date.now() - startedAt }, session);
+    return res.json({ success: true, ...result });
+  } catch (err: any) {
+    console.error('golden-set save failed:', err?.message || err);
+    logEvent('goldenset.saved', { phase, label, success: false, latencyMs: Date.now() - startedAt, errorMessage: debugDetail(err) }, session);
     return res.json({ success: false, error: debugDetail(err) });
   }
 });

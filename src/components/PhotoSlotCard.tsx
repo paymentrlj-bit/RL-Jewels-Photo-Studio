@@ -17,6 +17,11 @@ interface PhotoSlotCardProps {
   onUpdateImage: (dataUrl: string) => void;
   onRemoveImage: () => void;
   onLoadSample: () => void;
+  // Lets a parent (UploadPhotosStep) know about the current local quality
+  // warnings so it can require a confirmation before submitting a flagged
+  // photo, instead of these being a silently-dismissable warning shown only
+  // here (PIPELINE_REBUILD_BRIEF.md shared blur/exposure-gate fix).
+  onPreflightIssues?: (issues: PreflightIssue[]) => void;
 }
 
 export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
@@ -24,6 +29,7 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
   onUpdateImage,
   onRemoveImage,
   onLoadSample,
+  onPreflightIssues,
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [showCameraModal, setShowCameraModal] = useState(false);
@@ -45,6 +51,11 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
   // dependency array on purpose).
   const zoomRef = useRef<typeof zoom>(null);
   useEffect(() => { zoomRef.current = zoom; }, [zoom]);
+
+  const updatePreflightIssues = (issues: PreflightIssue[]) => {
+    setPreflightIssues(issues);
+    onPreflightIssues?.(issues);
+  };
 
   useEffect(() => {
     fetch('/api/dslr-capture/status')
@@ -181,7 +192,7 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
           message: 'Flash appears to have fired - this often blows out highlights on polished gold. Consider retaking with flash off.',
         });
       }
-      setPreflightIssues(issues);
+      updatePreflightIssues(issues);
       logClientEvent('capture_completed', {
         method,
         isRetake,
@@ -358,7 +369,7 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
                 type="button"
                 onClick={() => {
                   onRemoveImage();
-                  setPreflightIssues([]);
+                  updatePreflightIssues([]);
                 }}
                 className="p-2 rounded-xl bg-white text-red-600 hover:text-red-800 shadow-md transition-colors"
                 title="Remove"
@@ -530,7 +541,7 @@ export const PhotoSlotCard: React.FC<PhotoSlotCardProps> = ({
               type="button"
               onClick={() => {
                 onRemoveImage();
-                setPreflightIssues([]);
+                updatePreflightIssues([]);
                 setDslrError('');
               }}
               className="min-h-[44px] min-w-[44px] py-2.5 px-3.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 text-xs font-semibold border border-red-200 transition-colors flex items-center justify-center"

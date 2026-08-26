@@ -18,6 +18,204 @@ function matchTaxonomyTerm(upperText: string): string | null {
   return null;
 }
 
+// Real, in-production category vocabulary - store-printed tags use this
+// exact trade language. Hoisted to module scope (was previously declared
+// inside parseJewelryTagText, which made it unreachable from anywhere else)
+// so other callers - e.g. server-side aspect-ratio branching - can reuse the
+// same taxonomy instead of inventing a new category list.
+export interface ItemCategoryRule {
+  type: string;
+  defaultGender: ProductGender;
+  titleTemplate: string;
+  keywords: string[];
+  regexPatterns: RegExp[];
+}
+
+export const CATEGORY_RULES: ItemCategoryRule[] = [
+  {
+    type: 'earrings',
+    defaultGender: "women's",
+    titleTemplate: 'Traditional Earrings',
+    keywords: [
+      'EARRING', 'EARRINGS', 'EARINGS', 'EARING', 'JHUMKA', 'JHUMKI',
+      'CHANDBALI', 'SUI DHAGA', 'SUIDHAGA', 'STUD', 'STUDS', 'TOPS',
+      'BALI', 'BALIS', 'HOOP', 'HOOPS', 'HANGINGS', 'LATKAN', 'ERR',
+    ],
+    regexPatterns: [
+      /\b(?:EARRINGS?|EARINGS?|JHUMK[AI]|CHANDBALI|STUDS?|TOPS?|BALIS?|HOOPS?)\b/i,
+      /\b(?:ER|E\.R|E-R|ERR)\b/i,
+    ],
+  },
+  {
+    type: 'pendant',
+    defaultGender: "women's",
+    titleTemplate: 'Fancy Padak Pendant',
+    keywords: ['FANCY PADAK', 'PADAK', 'PENDANT', 'PENDANTS', 'LOCKET', 'LOKET', 'MEDAL', 'PND'],
+    regexPatterns: [
+      /\b(?:PENDANTS?|PADAK|FANCY\s+PADAK|LOCKETS?|LOKET|MEDAL)\b/i,
+      /\b(?:PD|P\.D|P-D|PND)\b/i,
+    ],
+  },
+  {
+    type: 'ring',
+    defaultGender: "women's",
+    titleTemplate: 'Ring',
+    keywords: [
+      'LADIES RING', 'GENTS RING', 'GENTS FANCY A', 'RING', 'RINGS',
+      'BAND', 'SOLITAIRE', 'ANGETHI', 'VANKI', 'COUPLE RING',
+    ],
+    regexPatterns: [
+      /\b(?:LADIES\s+RING|GENTS\s+RING|GENTS\s+FANCY\s+[A-Z]|RINGS?|BAND|SOLITAIRE|ANGETHI|VANKI)\b/i,
+      /\b(?:RN|R\.N|R-N|RNG)\b/i,
+    ],
+  },
+  {
+    type: 'necklace',
+    defaultGender: "women's",
+    titleTemplate: 'Necklace',
+    keywords: [
+      'KUNDAN HARAM', 'HARAM', 'NECKLACE', 'NECKLACES', 'CHOKER',
+      'HAAR', 'HAR', 'RANI HAAR', 'RANIHAR', 'KANTHI', 'GALSARI', 'HASLI', 'GALA SET',
+    ],
+    regexPatterns: [
+      /\b(?:NECKLACES?|CHOKER|KUNDAN\s+HARAM|HARAM|RANI\s*HAAR|HAAR|HAR|KANTHI|HASLI)\b/i,
+      /\b(?:NK|N\.K|N-K|NCK)\b/i,
+    ],
+  },
+  {
+    type: 'mangalsutra',
+    defaultGender: "women's",
+    titleTemplate: 'Mangalsutra',
+    keywords: ['MANGALSUTRA', 'MANGAL SUTRA', 'TANMANIYA', 'THUSHI', 'VATIS', 'DOKIYA'],
+    regexPatterns: [
+      /\b(?:MANGALSUTRA|MANGAL\s+SUTRA|TANMANIYA|THUSHI|VATIS|DOKIYA)\b/i,
+      /\b(?:MS|M\.S|M-S)\b/i,
+    ],
+  },
+  {
+    type: 'chain',
+    defaultGender: 'unisex',
+    titleTemplate: 'Chain',
+    keywords: ['CHAIN', 'CHAINS', 'ROPE CHAIN', 'BOX CHAIN', 'HOLLOW CHAIN', 'NAWABI CHAIN', 'LOTUS CHAIN'],
+    regexPatterns: [
+      /\b(?:CHAINS?|ROPE\s+CHAIN|BOX\s+CHAIN|NAWABI\s+CHAIN)\b/i,
+      /\b(?:CH|C\.H|C-H|CHN)\b/i,
+    ],
+  },
+  {
+    type: 'bangle',
+    defaultGender: "women's",
+    titleTemplate: 'Bangle',
+    keywords: ['BANGLE', 'BANGLES', 'CHURI', 'CHUDI', 'KANGAN', 'PATLA', 'PACHELI', 'BABY BANGLE'],
+    regexPatterns: [
+      /\b(?:BANGLES?|CHURI|CHUDI|KANGAN|PATLA|PACHELI)\b/i,
+      /\b(?:BG|B\.G|B-G|BNG)\b/i,
+    ],
+  },
+  {
+    type: 'kada',
+    defaultGender: "men's",
+    titleTemplate: 'Solid Kada',
+    keywords: ['SOLID KADA', 'KADA', 'KADAS', 'KADDA', 'GENTS KADA', 'VALA'],
+    regexPatterns: [
+      /\b(?:SOLID\s+KADA|GENTS\s+KADA|KADAS?|KADDA|VALA)\b/i,
+      /\b(?:KD|K\.D|K-D)\b/i,
+    ],
+  },
+  {
+    type: 'bracelet',
+    defaultGender: "women's",
+    titleTemplate: 'Bracelet',
+    keywords: ['LADIES BRACELET', 'GENTS BRACELET', 'BRACELET', 'BRACELETS', 'BRACLET'],
+    regexPatterns: [
+      /\b(?:BRACELETS?|BRACLET|LADIES\s+BRACELET|GENTS\s+BRACELET)\b/i,
+      /\b(?:BR|B\.R|B-R|BRC)\b/i,
+    ],
+  },
+  {
+    type: 'anklet',
+    defaultGender: "women's",
+    titleTemplate: 'Anklet (Payal)',
+    keywords: ['PAYAL', 'PAJEB', 'ANKLET', 'ANKLETS', 'GOLUSU'],
+    regexPatterns: [
+      /\b(?:PAYAL|PAJEB|ANKLETS?|GOLUSU)\b/i,
+      /\b(?:PY|P\.Y|P-Y)\b/i,
+    ],
+  },
+  {
+    type: 'nose pin',
+    defaultGender: "women's",
+    titleTemplate: 'Nose Pin',
+    keywords: ['NOSE PIN', 'NOSEPIN', 'NATH', 'NOSE RING', 'NOSE STUD', 'MUKKUTHI'],
+    regexPatterns: [
+      /\b(?:NOSE\s*PIN|NOSEPIN|NATH|NOSE\s*RING|NOSE\s*STUD|MUKKUTHI)\b/i,
+      /\b(?:NP|N\.P|N-P)\b/i,
+    ],
+  },
+  {
+    type: 'waist chain',
+    defaultGender: "women's",
+    titleTemplate: 'Waist Chain (Kamarbandh)',
+    keywords: ['WAIST CHAIN', 'KAMARBANDH', 'KANDORA', 'ODDIYANAM', 'VADDANAM'],
+    regexPatterns: [
+      /\b(?:WAIST\s+CHAIN|KAMARBANDH|KANDORA|ODDIYANAM|VADDANAM)\b/i,
+      /\b(?:WC|W\.C|W-C)\b/i,
+    ],
+  },
+  {
+    type: 'temple set',
+    defaultGender: "women's",
+    titleTemplate: 'Temple Jewellery Set',
+    keywords: ['TEMPLE SET', 'TEMPLE', 'TEMPLE JEWELLERY', 'NAKSHI'],
+    regexPatterns: [/\b(?:TEMPLE\s+SET|TEMPLE\s+JEWELLERY|NAKSHI)\b/i],
+  },
+  {
+    type: 'bridal set',
+    defaultGender: "women's",
+    titleTemplate: 'Bridal Wedding Set',
+    keywords: ['BRIDAL SET', 'BRIDAL', 'WEDDING SET'],
+    regexPatterns: [/\b(?:BRIDAL\s+SET|BRIDAL|WEDDING\s+SET)\b/i],
+  },
+  {
+    type: 'coin/bar',
+    defaultGender: 'unisex',
+    titleTemplate: 'Gold Coin/Bar',
+    keywords: ['COIN', 'BAR', 'GINNI', 'VEDHANI', 'GOLD COIN', 'GOLD BAR', 'BULLION'],
+    regexPatterns: [/\b(?:COINS?|BARS?|GINNI|VEDHANI|BULLION)\b/i],
+  },
+];
+
+// Shared classification logic (keyword-then-regex, same order/priority
+// parseJewelryTagText uses against CATEGORY_RULES) exposed standalone so a
+// caller that only has a plain item-type string (not a full OCR text blob)
+// can resolve it to a category rule without re-implementing this matching.
+export function resolveCategoryRule(text: string): ItemCategoryRule | null {
+  const upper = (text || '').toUpperCase();
+  for (const rule of CATEGORY_RULES) {
+    for (const kw of rule.keywords) {
+      if (upper.includes(kw)) return rule;
+    }
+  }
+  for (const rule of CATEGORY_RULES) {
+    if (rule.regexPatterns.some((pattern) => pattern.test(text || ''))) return rule;
+  }
+  return null;
+}
+
+// Categories whose natural bounding-box proportions are long and thin rather
+// than roughly square - kept at their true elongated aspect ratio through
+// enhancement instead of forced into a 1:1 square. Rings, pendants,
+// earrings, bangles, and kada are closed loops or compact forms that already
+// read naturally in a square; long draped/linked pieces do not.
+const ELONGATED_ASPECT_RATIO_TYPES = new Set([
+  'chain', 'necklace', 'mangalsutra', 'bracelet', 'anklet', 'waist chain',
+]);
+
+export function isElongatedCategory(itemType: string): boolean {
+  const rule = resolveCategoryRule(itemType);
+  return rule ? ELONGATED_ASPECT_RATIO_TYPES.has(rule.type) : false;
+}
+
 /**
  * Normalizes numbers extracted via OCR by repairing common OCR digit character confusions
  * e.g. '3.46O' -> '3.460', 'O.OOO' -> '0.000', 'l8.450' -> '18.450', '3,460' -> '3.460'
@@ -110,168 +308,6 @@ export function parseJewelryTagText(
   // -------------------------------------------------------------
   // 2. Detect Item Category / Type & Formatted Name
   // -------------------------------------------------------------
-  interface ItemCategoryRule {
-    type: string;
-    defaultGender: ProductGender;
-    titleTemplate: string;
-    keywords: string[];
-    regexPatterns: RegExp[];
-  }
-
-  const CATEGORY_RULES: ItemCategoryRule[] = [
-    {
-      type: 'earrings',
-      defaultGender: "women's",
-      titleTemplate: 'Traditional Earrings',
-      keywords: [
-        'EARRING', 'EARRINGS', 'EARINGS', 'EARING', 'JHUMKA', 'JHUMKI',
-        'CHANDBALI', 'SUI DHAGA', 'SUIDHAGA', 'STUD', 'STUDS', 'TOPS',
-        'BALI', 'BALIS', 'HOOP', 'HOOPS', 'HANGINGS', 'LATKAN', 'ERR',
-      ],
-      regexPatterns: [
-        /\b(?:EARRINGS?|EARINGS?|JHUMK[AI]|CHANDBALI|STUDS?|TOPS?|BALIS?|HOOPS?)\b/i,
-        /\b(?:ER|E\.R|E-R|ERR)\b/i,
-      ],
-    },
-    {
-      type: 'pendant',
-      defaultGender: "women's",
-      titleTemplate: 'Fancy Padak Pendant',
-      keywords: ['FANCY PADAK', 'PADAK', 'PENDANT', 'PENDANTS', 'LOCKET', 'LOKET', 'MEDAL', 'PND'],
-      regexPatterns: [
-        /\b(?:PENDANTS?|PADAK|FANCY\s+PADAK|LOCKETS?|LOKET|MEDAL)\b/i,
-        /\b(?:PD|P\.D|P-D|PND)\b/i,
-      ],
-    },
-    {
-      type: 'ring',
-      defaultGender: "women's",
-      titleTemplate: 'Ring',
-      keywords: [
-        'LADIES RING', 'GENTS RING', 'GENTS FANCY A', 'RING', 'RINGS',
-        'BAND', 'SOLITAIRE', 'ANGETHI', 'VANKI', 'COUPLE RING',
-      ],
-      regexPatterns: [
-        /\b(?:LADIES\s+RING|GENTS\s+RING|GENTS\s+FANCY\s+[A-Z]|RINGS?|BAND|SOLITAIRE|ANGETHI|VANKI)\b/i,
-        /\b(?:RN|R\.N|R-N|RNG)\b/i,
-      ],
-    },
-    {
-      type: 'necklace',
-      defaultGender: "women's",
-      titleTemplate: 'Necklace',
-      keywords: [
-        'KUNDAN HARAM', 'HARAM', 'NECKLACE', 'NECKLACES', 'CHOKER',
-        'HAAR', 'HAR', 'RANI HAAR', 'RANIHAR', 'KANTHI', 'GALSARI', 'HASLI', 'GALA SET',
-      ],
-      regexPatterns: [
-        /\b(?:NECKLACES?|CHOKER|KUNDAN\s+HARAM|HARAM|RANI\s*HAAR|HAAR|HAR|KANTHI|HASLI)\b/i,
-        /\b(?:NK|N\.K|N-K|NCK)\b/i,
-      ],
-    },
-    {
-      type: 'mangalsutra',
-      defaultGender: "women's",
-      titleTemplate: 'Mangalsutra',
-      keywords: ['MANGALSUTRA', 'MANGAL SUTRA', 'TANMANIYA', 'THUSHI', 'VATIS', 'DOKIYA'],
-      regexPatterns: [
-        /\b(?:MANGALSUTRA|MANGAL\s+SUTRA|TANMANIYA|THUSHI|VATIS|DOKIYA)\b/i,
-        /\b(?:MS|M\.S|M-S)\b/i,
-      ],
-    },
-    {
-      type: 'chain',
-      defaultGender: 'unisex',
-      titleTemplate: 'Chain',
-      keywords: ['CHAIN', 'CHAINS', 'ROPE CHAIN', 'BOX CHAIN', 'HOLLOW CHAIN', 'NAWABI CHAIN', 'LOTUS CHAIN'],
-      regexPatterns: [
-        /\b(?:CHAINS?|ROPE\s+CHAIN|BOX\s+CHAIN|NAWABI\s+CHAIN)\b/i,
-        /\b(?:CH|C\.H|C-H|CHN)\b/i,
-      ],
-    },
-    {
-      type: 'bangle',
-      defaultGender: "women's",
-      titleTemplate: 'Bangle',
-      keywords: ['BANGLE', 'BANGLES', 'CHURI', 'CHUDI', 'KANGAN', 'PATLA', 'PACHELI', 'BABY BANGLE'],
-      regexPatterns: [
-        /\b(?:BANGLES?|CHURI|CHUDI|KANGAN|PATLA|PACHELI)\b/i,
-        /\b(?:BG|B\.G|B-G|BNG)\b/i,
-      ],
-    },
-    {
-      type: 'kada',
-      defaultGender: "men's",
-      titleTemplate: 'Solid Kada',
-      keywords: ['SOLID KADA', 'KADA', 'KADAS', 'KADDA', 'GENTS KADA', 'VALA'],
-      regexPatterns: [
-        /\b(?:SOLID\s+KADA|GENTS\s+KADA|KADAS?|KADDA|VALA)\b/i,
-        /\b(?:KD|K\.D|K-D)\b/i,
-      ],
-    },
-    {
-      type: 'bracelet',
-      defaultGender: "women's",
-      titleTemplate: 'Bracelet',
-      keywords: ['LADIES BRACELET', 'GENTS BRACELET', 'BRACELET', 'BRACELETS', 'BRACLET'],
-      regexPatterns: [
-        /\b(?:BRACELETS?|BRACLET|LADIES\s+BRACELET|GENTS\s+BRACELET)\b/i,
-        /\b(?:BR|B\.R|B-R|BRC)\b/i,
-      ],
-    },
-    {
-      type: 'anklet',
-      defaultGender: "women's",
-      titleTemplate: 'Anklet (Payal)',
-      keywords: ['PAYAL', 'PAJEB', 'ANKLET', 'ANKLETS', 'GOLUSU'],
-      regexPatterns: [
-        /\b(?:PAYAL|PAJEB|ANKLETS?|GOLUSU)\b/i,
-        /\b(?:PY|P\.Y|P-Y)\b/i,
-      ],
-    },
-    {
-      type: 'nose pin',
-      defaultGender: "women's",
-      titleTemplate: 'Nose Pin',
-      keywords: ['NOSE PIN', 'NOSEPIN', 'NATH', 'NOSE RING', 'NOSE STUD', 'MUKKUTHI'],
-      regexPatterns: [
-        /\b(?:NOSE\s*PIN|NOSEPIN|NATH|NOSE\s*RING|NOSE\s*STUD|MUKKUTHI)\b/i,
-        /\b(?:NP|N\.P|N-P)\b/i,
-      ],
-    },
-    {
-      type: 'waist chain',
-      defaultGender: "women's",
-      titleTemplate: 'Waist Chain (Kamarbandh)',
-      keywords: ['WAIST CHAIN', 'KAMARBANDH', 'KANDORA', 'ODDIYANAM', 'VADDANAM'],
-      regexPatterns: [
-        /\b(?:WAIST\s+CHAIN|KAMARBANDH|KANDORA|ODDIYANAM|VADDANAM)\b/i,
-        /\b(?:WC|W\.C|W-C)\b/i,
-      ],
-    },
-    {
-      type: 'temple set',
-      defaultGender: "women's",
-      titleTemplate: 'Temple Jewellery Set',
-      keywords: ['TEMPLE SET', 'TEMPLE', 'TEMPLE JEWELLERY', 'NAKSHI'],
-      regexPatterns: [/\b(?:TEMPLE\s+SET|TEMPLE\s+JEWELLERY|NAKSHI)\b/i],
-    },
-    {
-      type: 'bridal set',
-      defaultGender: "women's",
-      titleTemplate: 'Bridal Wedding Set',
-      keywords: ['BRIDAL SET', 'BRIDAL', 'WEDDING SET'],
-      regexPatterns: [/\b(?:BRIDAL\s+SET|BRIDAL|WEDDING\s+SET)\b/i],
-    },
-    {
-      type: 'coin/bar',
-      defaultGender: 'unisex',
-      titleTemplate: 'Gold Coin/Bar',
-      keywords: ['COIN', 'BAR', 'GINNI', 'VEDHANI', 'GOLD COIN', 'GOLD BAR', 'BULLION'],
-      regexPatterns: [/\b(?:COINS?|BARS?|GINNI|VEDHANI|BULLION)\b/i],
-    },
-  ];
-
   let detectedType = existing?.itemType || '';
   let detectedTitleSubstr = '';
   let matchedRule: ItemCategoryRule | null = null;
