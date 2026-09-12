@@ -1,0 +1,23 @@
+{
+  "device": "SMOKE TEST ONLY - synthetic images, not real photos",
+  "calibration_cards": [
+    { "file": "calib_card_00.jpg", "card_box": [50, 50, 350, 350] },
+    { "file": "calib_card_01.jpg", "card_box": [50, 50, 350, 350] }
+  ],
+  "test_cases": [
+    {
+      "file": "case_ring_01.jpg",
+      "label": "smoketest-ring-01",
+      "purity": "22kt",
+      "card_box": [20, 20, 220, 220],
+      "jewelry_box": [280, 280, 620, 620]
+    },
+    {
+      "file": "case_ring_02.jpg",
+      "label": "smoketest-ring-02-lighting-drift",
+      "purity": "22kt",
+      "card_box": [20, 20, 220, 220],
+      "jewelry_box": [280, 280, 620, 620]
+    }
+  ]
+}

@@ -48,8 +48,11 @@ export async function getAccessToken(): Promise<string> {
 
 // Finds a folder by exact name under a given parent, creating it if it
 // doesn't exist yet. Used to build a Group/Item-Type folder structure inside
-// the shared root folder on first use of each category.
-async function findOrCreateFolder(accessToken: string, name: string, parentId: string): Promise<string> {
+// the shared root folder on first use of each category. Exported so other
+// modules writing into the same shared Drive folder (e.g. goldenSet.ts) can
+// reuse this instead of re-implementing find-or-create, same precedent as
+// getAccessToken above.
+export async function findOrCreateFolder(accessToken: string, name: string, parentId: string): Promise<string> {
   const escapedName = name.replace(/'/g, "\\'");
   const query = `name='${escapedName}' and '${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
   const searchRes = await fetch(`${DRIVE_FILES_URL}?q=${encodeURIComponent(query)}&fields=files(id,name)`, {
@@ -76,7 +79,7 @@ async function findOrCreateFolder(accessToken: string, name: string, parentId: s
   return createData.id;
 }
 
-async function uploadFile(
+export async function uploadFile(
   accessToken: string,
   folderId: string,
   filename: string,

@@ -15,7 +15,6 @@ import { ReviewStep } from './components/ReviewStep';
 import { ExportStep } from './components/ExportStep';
 import { LoginModal, getStoredUserSession, saveStoredUserSession } from './components/LoginModal';
 import { useNetworkStatus } from './utils/useNetworkStatus';
-import { getStoredPromptConfig } from './utils/promptSettings';
 import { logClientEvent } from './utils/analytics';
 import { WifiOff } from 'lucide-react';
 
@@ -139,7 +138,6 @@ export default function App() {
   // each pipeline step starts) so the UI can show real progress instead of a
   // spinner, then resolves with the final {..., done:true} result line.
   const runPipeline = async (activePhoto: PhotoItem, onStage: (stage: ProcessingStage) => void) => {
-    const promptConfig = getStoredPromptConfig();
     const res = await fetch('/api/audit-and-enhance', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -151,7 +149,6 @@ export default function App() {
         sku: cpc,
         cpc,
         weight: netWeight || grossWeight,
-        customEnhancePrompt: promptConfig.enhancePrompt,
       }),
     });
 
@@ -574,6 +571,7 @@ export default function App() {
             onRetakePhoto={handleRetakePhoto}
             onBackToPhotos={() => setCurrentStep('capture')}
             onProceedToExport={handleProceedToExport}
+            isAdmin={currentUser?.isAdmin}
           />
         )}
 

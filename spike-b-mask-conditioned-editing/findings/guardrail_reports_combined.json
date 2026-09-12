@@ -1,0 +1,53 @@
+{
+  "default_tier_text_region": {
+    "n_total": 1,
+    "n_rejected": 1,
+    "rejection_rate": 1.0,
+    "per_pixel_tolerance": 18,
+    "reject_fraction_threshold": 0.02,
+    "cases": [
+      {
+        "label": "ring_with_tag_string",
+        "model": "gemini-3.1-flash-image",
+        "outside_mask_changed_fraction": 0.179235012489592,
+        "outside_mask_max_diff_p99": 80.0,
+        "reject": true,
+        "heatmap_path": "output/text_region/ring_with_tag_string_diff_heatmap.png"
+      }
+    ]
+  },
+  "default_tier_mask_overlay": {
+    "n_total": 1,
+    "n_rejected": 1,
+    "rejection_rate": 1.0,
+    "per_pixel_tolerance": 18,
+    "reject_fraction_threshold": 0.02,
+    "cases": [
+      {
+        "label": "ring_with_tag_string",
+        "model": "gemini-3.1-flash-image",
+        "outside_mask_changed_fraction": 0.03902997502081599,
+        "outside_mask_max_diff_p99": 41.0,
+        "reject": true,
+        "heatmap_path": "output/mask_overlay/ring_with_tag_string_diff_heatmap.png"
+      }
+    ]
+  },
+  "escalated_tier_mask_overlay": {
+    "n_total": 1,
+    "n_rejected": 1,
+    "rejection_rate": 1.0,
+    "per_pixel_tolerance": 18,
+    "reject_fraction_threshold": 0.02,
+    "cases": [
+      {
+        "label": "ring_with_tag_string",
+        "model": "nano-banana-pro-preview",
+        "outside_mask_changed_fraction": 0.05280183180682765,
+        "outside_mask_max_diff_p99": 159.0,
+        "reject": true,
+        "heatmap_path": "output/escalated_mask_overlay/ring_with_tag_string_diff_heatmap.png"
+      }
+    ]
+  }
+}

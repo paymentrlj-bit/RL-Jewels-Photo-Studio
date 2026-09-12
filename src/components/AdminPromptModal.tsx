@@ -1,12 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Sparkles, X, Check, RotateCcw, Copy, Sliders, ShieldCheck, FileText, Info } from 'lucide-react';
-import {
-  DEFAULT_ENHANCE_PROMPT,
-  getStoredPromptConfig,
-  saveStoredPromptConfig,
-  resetStoredPromptConfig,
-  PromptConfig,
-} from '../utils/promptSettings';
+import { Sparkles, X, Check, RotateCcw, Copy, Sliders, ShieldCheck, FileText, Info, Loader2 } from 'lucide-react';
+import { DEFAULT_ENHANCE_PROMPT, PromptConfig } from '../utils/promptSettings';
 
 interface AdminPromptModalProps {
   isOpen: boolean;
@@ -14,57 +8,84 @@ interface AdminPromptModalProps {
   onPromptUpdated?: (newConfig: PromptConfig) => void;
 }
 
+// This edits the server-side prompt (/api/prompt-config) directly - the only
+// prompt that actually drives enhance calls. There used to also be a
+// client-side/localStorage override, which meant an admin using this modal
+// could believe they'd changed the studio-wide prompt while actually only
+// changing what their own browser sent - a real, confusing gap. The server
+// is now the sole source of truth, and every change here is version-stamped
+// server-side (who/when/before/after) via admin.prompt_config_changed.
 export const AdminPromptModal: React.FC<AdminPromptModalProps> = ({
   isOpen,
   onClose,
   onPromptUpdated,
 }) => {
-  const [config, setConfig] = useState<PromptConfig>(getStoredPromptConfig());
-  const [enhancePrompt, setEnhancePrompt] = useState(config.enhancePrompt);
+  const [enhancePrompt, setEnhancePrompt] = useState(DEFAULT_ENHANCE_PROMPT);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState('');
   const [copied, setCopied] = useState(false);
   const [savedMsg, setSavedMsg] = useState(false);
   const [resetMsg, setResetMsg] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
-      const current = getStoredPromptConfig();
-      setConfig(current);
-      setEnhancePrompt(current.enhancePrompt);
       setSavedMsg(false);
       setResetMsg(false);
+      setLoadError('');
+      setLoading(true);
+      fetch('/api/prompt-config')
+        .then((res) => res.json())
+        .then((data) => {
+          setEnhancePrompt(data.enhancePrompt || DEFAULT_ENHANCE_PROMPT);
+        })
+        .catch(() => {
+          setLoadError('Could not load the current studio prompt from the server. Showing the default - saving now would overwrite whatever is actually live.');
+        })
+        .finally(() => setLoading(false));
     }
   }, [isOpen]);
 
   if (!isOpen) return null;
 
-  const handleSave = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    const updated: PromptConfig = {
-      ...config,
-      enhancePrompt: enhancePrompt.trim() || DEFAULT_ENHANCE_PROMPT,
-    };
-    saveStoredPromptConfig(updated);
-    setConfig(updated);
-    if (onPromptUpdated) {
-      onPromptUpdated(updated);
+  const savePrompt = async (promptText: string) => {
+    setSaving(true);
+    try {
+      const res = await fetch('/api/prompt-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enhancePrompt: promptText }),
+      });
+      const data = await res.json();
+      const applied = data.enhancePrompt || promptText;
+      setEnhancePrompt(applied);
+      if (onPromptUpdated) {
+        onPromptUpdated({ enhancePrompt: applied });
+      }
+      return true;
+    } catch {
+      setLoadError('Save failed - could not reach the server. The prompt shown here was not applied.');
+      return false;
+    } finally {
+      setSaving(false);
     }
-    setSavedMsg(true);
-    setTimeout(() => {
-      setSavedMsg(false);
-    }, 2000);
   };
 
-  const handleReset = () => {
-    const defaults = resetStoredPromptConfig();
-    setConfig(defaults);
-    setEnhancePrompt(defaults.enhancePrompt);
-    if (onPromptUpdated) {
-      onPromptUpdated(defaults);
+  const handleSave = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const ok = await savePrompt(enhancePrompt.trim() || DEFAULT_ENHANCE_PROMPT);
+    if (ok) {
+      setSavedMsg(true);
+      setTimeout(() => setSavedMsg(false), 2000);
     }
-    setResetMsg(true);
-    setTimeout(() => {
-      setResetMsg(false);
-    }, 2000);
+  };
+
+  const handleReset = async () => {
+    const ok = await savePrompt(DEFAULT_ENHANCE_PROMPT);
+    if (ok) {
+      setResetMsg(true);
+      setTimeout(() => setResetMsg(false), 2000);
+    }
   };
 
   const handleCopy = () => {
@@ -133,6 +154,13 @@ export const AdminPromptModal: React.FC<AdminPromptModalProps> = ({
           </div>
         )}
 
+        {loadError && (
+          <div className="bg-red-50 border-b border-red-200 text-red-800 text-xs px-4 py-2.5 flex items-center gap-2">
+            <ShieldCheck className="w-4 h-4 text-red-600 shrink-0" />
+            <span className="font-bold">{loadError}</span>
+          </div>
+        )}
+
         {/* Body content */}
         <div className="p-4 sm:p-6 overflow-y-auto space-y-4 flex-1">
           
@@ -156,7 +184,8 @@ export const AdminPromptModal: React.FC<AdminPromptModalProps> = ({
               <button
                 type="button"
                 onClick={handleReset}
-                className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-stone-100 hover:bg-amber-100 text-stone-700 hover:text-amber-800 text-xs font-semibold transition-colors"
+                disabled={loading || saving}
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-stone-100 hover:bg-amber-100 disabled:opacity-50 text-stone-700 hover:text-amber-800 text-xs font-semibold transition-colors"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
                 <span>Reset to Default</span>
@@ -166,11 +195,17 @@ export const AdminPromptModal: React.FC<AdminPromptModalProps> = ({
 
           {/* Textarea */}
           <div className="relative">
+            {loading && (
+              <div className="absolute inset-0 z-10 bg-stone-900/60 rounded-2xl flex items-center justify-center">
+                <Loader2 className="w-6 h-6 text-stone-300 animate-spin" />
+              </div>
+            )}
             <textarea
               value={enhancePrompt}
               onChange={(e) => setEnhancePrompt(e.target.value)}
               rows={16}
-              className="w-full bg-stone-900 text-stone-100 font-mono text-xs sm:text-[13px] leading-relaxed p-4 rounded-2xl border border-stone-700 focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/20 resize-y shadow-inner"
+              disabled={loading || saving}
+              className="w-full bg-stone-900 text-stone-100 font-mono text-xs sm:text-[13px] leading-relaxed p-4 rounded-2xl border border-stone-700 focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/20 resize-y shadow-inner disabled:opacity-70"
               placeholder="Enter product enhancement prompt..."
               spellCheck={false}
             />
@@ -203,10 +238,11 @@ export const AdminPromptModal: React.FC<AdminPromptModalProps> = ({
             <button
               type="button"
               onClick={() => handleSave()}
-              className="min-h-[44px] flex items-center gap-2 px-6 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold text-xs uppercase tracking-wider shadow-md transition-all active:scale-95"
+              disabled={loading || saving}
+              className="min-h-[44px] flex items-center gap-2 px-6 py-2 rounded-xl bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white font-bold text-xs uppercase tracking-wider shadow-md transition-all active:scale-95"
             >
-              <Sparkles className="w-4 h-4" />
-              <span>Save & Apply Prompt</span>
+              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+              <span>{saving ? 'Saving...' : 'Save & Apply Prompt'}</span>
             </button>
           </div>
         </div>

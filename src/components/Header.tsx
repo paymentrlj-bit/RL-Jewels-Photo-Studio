@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
-import { User, LogOut, Shield, KeyRound, WifiOff, Sliders, Sparkles, BarChart3 } from 'lucide-react';
+import { User, LogOut, Shield, KeyRound, WifiOff, Sliders, Sparkles, BarChart3, GitBranch } from 'lucide-react';
 import { BrandLogo } from './BrandLogo';
 import { UserSession } from '../types';
 import { AdminSecurityModal } from './AdminSecurityModal';
 import { AdminPromptModal } from './AdminPromptModal';
 import { AdminInsightsModal } from './AdminInsightsModal';
+import { AdminPipelineModal } from './AdminPipelineModal';
 
 interface HeaderProps {
   currentUser: UserSession | null;
@@ -24,6 +25,7 @@ export const Header: React.FC<HeaderProps> = ({
   const [showAdminSecurity, setShowAdminSecurity] = useState(false);
   const [showAdminPrompts, setShowAdminPrompts] = useState(false);
   const [showAdminInsights, setShowAdminInsights] = useState(false);
+  const [showAdminPipeline, setShowAdminPipeline] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
 
   const displayName = currentUser?.username || 'Counter Staff';
@@ -137,6 +139,19 @@ export const Header: React.FC<HeaderProps> = ({
                       onClick={(e) => {
                         e.stopPropagation();
                         setShowUserMenu(false);
+                        setShowAdminPipeline(true);
+                      }}
+                      className="w-full min-h-[44px] text-left px-3 py-2.5 rounded-xl hover:bg-stone-100 text-stone-700 font-semibold flex items-center gap-2"
+                    >
+                      <GitBranch className="w-4 h-4 text-red-600" />
+                      <span>Processing Pipeline</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowUserMenu(false);
                         setShowAdminSecurity(true);
                       }}
                       className="w-full min-h-[44px] text-left px-3 py-2.5 rounded-xl hover:bg-stone-100 text-stone-700 font-semibold flex items-center gap-2"
@@ -175,6 +190,11 @@ export const Header: React.FC<HeaderProps> = ({
       <AdminInsightsModal
         isOpen={showAdminInsights}
         onClose={() => setShowAdminInsights(false)}
+      />
+
+      <AdminPipelineModal
+        isOpen={showAdminPipeline}
+        onClose={() => setShowAdminPipeline(false)}
       />
     </header>
   );

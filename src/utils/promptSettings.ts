@@ -62,42 +62,11 @@ If a PRECISE JEWELRY OUTLINE block is provided below, it is real computer-vision
 
 OUTPUT: square (1:1) composition, the jewelry centered and occupying roughly 65-80% of the frame with clean margin so nothing is cropped, pure white background, ready for an e-commerce product catalogue.`;
 
-export const STORAGE_KEY_PROMPTS = 'rl_jewels_prompt_config_v1';
-
-export function getStoredPromptConfig(): PromptConfig {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY_PROMPTS);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed.enhancePrompt === 'string' && parsed.enhancePrompt.trim()) {
-        return parsed;
-      }
-    }
-  } catch (e) {
-    console.warn('Error reading stored prompt config:', e);
-  }
-  return {
-    enhancePrompt: DEFAULT_ENHANCE_PROMPT,
-  };
-}
-
-export function saveStoredPromptConfig(config: PromptConfig): void {
-  try {
-    const updated = {
-      ...config,
-      updatedAt: new Date().toISOString(),
-    };
-    localStorage.setItem(STORAGE_KEY_PROMPTS, JSON.stringify(updated));
-  } catch (e) {
-    console.error('Error saving prompt config to localStorage:', e);
-  }
-}
-
-export function resetStoredPromptConfig(): PromptConfig {
-  const defaults: PromptConfig = {
-    enhancePrompt: DEFAULT_ENHANCE_PROMPT,
-    updatedAt: new Date().toISOString(),
-  };
-  saveStoredPromptConfig(defaults);
-  return defaults;
-}
+// The server-side prompt (edited via AdminPromptModal.tsx, persisted through
+// /api/prompt-config, applied via `serverCustomPrompt` in server.ts) is the
+// sole source of truth for what every enhance call actually uses - there is
+// no client-side/localStorage override anymore. A per-device override with
+// no central record of who changed what was a real brand-consistency risk,
+// and the server endpoint already version-stamps every change
+// (admin.prompt_config_changed, with the previous/new prompt and who made
+// the change) which a localStorage value never could.
