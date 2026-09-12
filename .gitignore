@@ -10,3 +10,4 @@ logs/
 # Spike A tooling - generated output only, not the tooling/sample-input itself
 spike-a-color-correction/output/
 spike-a-color-correction/__pycache__/
+spike-b-mask-conditioned-editing/output/
