@@ -1,0 +1,45 @@
+# Caddy gets and renews the HTTPS certificate automatically, for free, from
+# Let's Encrypt. There is no certificate to buy, install, or remember to renew.
+#
+# HTTPS is not cosmetic here: browsers refuse camera access on plain HTTP, so
+# without this the barcode scanner cannot run at all and staff type every CPC
+# by hand.
+#
+# {$STUDIO_DOMAIN} is read from the .env file next to docker-compose.yml.
+
+{$STUDIO_DOMAIN} {
+	encode zstd gzip
+
+	reverse_proxy studio:3000 {
+		# The app reads this to identify the real client for the login lockout.
+		# Without it every request would look like it came from Caddy.
+		header_up X-Forwarded-For {remote_host}
+	}
+
+	# Phone photos are large. Caddy's default body limit would reject them
+	# before the app ever saw them; this matches the app's own 25MB ceiling
+	# with room for base64 inflation.
+	request_body {
+		max_size 30MB
+	}
+
+	header {
+		# The app is internal - there is no reason for it to be framed by
+		# anyone else's site.
+		X-Frame-Options DENY
+		X-Content-Type-Options nosniff
+		Referrer-Policy same-origin
+		# Tells browsers to stick to HTTPS for a year. Only safe once the
+		# certificate is confirmed working - it is, by the time Caddy serves
+		# this header at all.
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 10MB
+			roll_keep 5
+		}
+	}
+}

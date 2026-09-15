@@ -61,13 +61,20 @@ makes the three options below equivalent.
 
 | Target | Notes |
 |---|---|
-| **The shop Lenovo** ← *current plan* | **[RUNNING_ON_THE_LENOVO.md](RUNNING_ON_THE_LENOVO.md)** — plain Node, no Docker, no tunnel, no hosting bill. Staff phones reach it over the shop Wi-Fi. |
-| **VPS** | `docker compose up -d`. Put a reverse proxy in front for TLS. |
+| **Oracle Cloud Always Free** (Mumbai) ← *recommended* | **[ORACLE_CLOUD_SETUP.md](ORACLE_CLOUD_SETUP.md)** — ₹0/month forever, real HTTPS via Caddy, so the barcode scanner works. Deployment is three commands. |
+| **The shop Lenovo** | **[RUNNING_ON_THE_LENOVO.md](RUNNING_ON_THE_LENOVO.md)** — plain Node, no Docker. Good for the pilot. No HTTPS means no barcode scanning; photography still works. |
+| **Any other VPS** | Same as Oracle: `deploy/setup.sh`, then `docker compose up -d` in `deploy/`. |
 | **Cloud Run** | Build the image, mount a volume at `/data`. **Without a mounted volume you lose every product and photo on each container recycle.** |
 
-**Back up `DATA_DIR`.** It is the shoot. Copying the directory while the app is
-running is safe enough for this workload (SQLite is in WAL mode), but a nightly
-copy with the service briefly stopped is cleaner.
+> ⚠️ **Do not deploy this to Google AI Studio.** It hosts on Cloud Run with
+> ephemeral container storage and no volume mount. v1 survived that by storing
+> nothing; v2 keeps the database and every photo in `DATA_DIR`, so it would be
+> wiped on the next redeploy or idle timeout.
+
+**Back up `DATA_DIR`.** It is the shoot. `deploy/backup.sh --install` schedules
+a nightly archive; copying while the app runs is safe enough here (SQLite is in
+WAL mode). Pull a copy off the server weekly — an on-server backup does not
+survive losing the server.
 
 ---
 
