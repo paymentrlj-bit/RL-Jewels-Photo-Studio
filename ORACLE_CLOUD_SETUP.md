@@ -296,3 +296,10 @@ cached edge inside India, and hides your server's real IP.
 
 Do this *after* the site is confirmed working, never before. If anything
 breaks, switching back to grey cloud restores it instantly.
+
+> **One known consequence.** With Cloudflare proxying, every request reaches
+> Caddy from a Cloudflare edge address, so the login lockout will group
+> attempts by edge IP rather than by real visitor. The lockout still works —
+> it keys on username *and* IP, and the username half is unaffected — it is
+> just coarser. Tell me when you switch it on and I will teach the app to read
+> Cloudflare's `CF-Connecting-IP` header instead.

@@ -11,8 +11,17 @@
 	encode zstd gzip
 
 	reverse_proxy studio:3000 {
-		# The app reads this to identify the real client for the login lockout.
-		# Without it every request would look like it came from Caddy.
+		# Caddy will warn that this is "unnecessary" because it forwards
+		# X-Forwarded-For anyway. Ignore the warning - DO NOT DELETE THIS LINE.
+		#
+		# Caddy's default APPENDS the real client to whatever the client sent,
+		# so a request carrying a forged `X-Forwarded-For: 9.9.9.9` arrives
+		# upstream as "9.9.9.9, <real ip>". The app reads the first entry, so
+		# an attacker could pick their own bucket and walk around the per-IP
+		# half of the login lockout at will.
+		#
+		# Setting it explicitly REPLACES the header with the connection's real
+		# remote address, so nothing the client sends is trusted.
 		header_up X-Forwarded-For {remote_host}
 	}
 
