@@ -7,3 +7,8 @@ coverage/
 logs/
 .env*
 !.env.example
+
+# Runtime state: the SQLite database and every captured photo. Never commit
+# this - it is the store's actual catalogue work, and it belongs on a backed-up
+# volume, not in git.
+data-store/

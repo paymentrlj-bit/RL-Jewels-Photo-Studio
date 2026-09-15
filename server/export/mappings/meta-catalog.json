@@ -1,0 +1,20 @@
+{
+  "id": "meta-catalog",
+  "label": "WhatsApp / Meta commerce catalogue feed",
+  "description": "Meta's product feed format, which is what a WhatsApp Business catalogue imports. Useful as the first online surface before any real e-commerce store exists. NOTE: Meta requires price, availability and condition - price is left blank here because this app does not track live gold pricing, so that column must be filled in before upload. The link column also needs a real product URL once a catalogue page exists.",
+  "columns": [
+    { "header": "id", "field": "cpc" },
+    { "header": "title", "field": "name" },
+    { "header": "description", "field": "description" },
+    { "header": "availability", "const": "in stock" },
+    { "header": "condition", "const": "new" },
+    { "header": "price", "const": "" },
+    { "header": "link", "const": "" },
+    { "header": "image_link", "field": "photoFilename" },
+    { "header": "brand", "const": "RL Jewels" },
+    { "header": "google_product_category", "const": "Apparel & Accessories > Jewelry" },
+    { "header": "product_type", "field": "itemType" },
+    { "header": "custom_label_0", "field": "purity" },
+    { "header": "custom_label_1", "field": "netWeight" }
+  ]
+}

@@ -1,0 +1,83 @@
+{
+  "id": "odoo",
+  "label": "Odoo website (SEO fields only)",
+  "description": "Odoo field names, inherited from v1. IMPORTANT: the store does NOT run Odoo as its ERP - it uses Odoo only for free website hosting, and JewelSoft is the actual ERP. Keep this preset only if product pages are ever published through that Odoo site; for anything going into the ERP, use the jewelsoft mapping instead.",
+  "columns": [
+    {
+      "header": "CPC",
+      "field": "cpc"
+    },
+    {
+      "header": "product_name",
+      "field": "name"
+    },
+    {
+      "header": "product_description",
+      "field": "description"
+    },
+    {
+      "header": "website_meta_title",
+      "field": "metaTitle"
+    },
+    {
+      "header": "website_meta_description",
+      "field": "metaDescription"
+    },
+    {
+      "header": "website_meta_keywords",
+      "field": "metaKeywords"
+    },
+    {
+      "header": "image_alt_text",
+      "field": "imageAltText"
+    },
+    {
+      "header": "suggested_url_slug",
+      "field": "urlSlug"
+    },
+    {
+      "header": "item_type",
+      "field": "itemType"
+    },
+    {
+      "header": "gold_purity",
+      "field": "purity"
+    },
+    {
+      "header": "gender_category",
+      "field": "gender"
+    },
+    {
+      "header": "size",
+      "field": "size"
+    },
+    {
+      "header": "gross_weight_grams",
+      "field": "grossWeight"
+    },
+    {
+      "header": "other_weight_grams",
+      "field": "otherWeight"
+    },
+    {
+      "header": "net_weight_grams",
+      "field": "netWeight"
+    },
+    {
+      "header": "photo_filename",
+      "field": "photoFilename"
+    },
+    {
+      "header": "staff_member",
+      "field": "staffName"
+    },
+    {
+      "header": "overall_status",
+      "field": "status"
+    },
+    {
+      "header": "created_at",
+      "field": "createdAt"
+    }
+  ]
+}

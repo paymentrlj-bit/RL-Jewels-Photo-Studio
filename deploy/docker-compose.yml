@@ -1,0 +1,65 @@
+# Production stack for the Oracle Cloud VM (or any Linux server).
+#
+# Two containers: the app, and Caddy in front of it doing automatic HTTPS.
+# The app is NOT published to the host directly - only Caddy is reachable from
+# the internet, so there is no way to hit the app over plain HTTP by accident.
+
+services:
+  studio:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    # No `ports:` on purpose. Caddy reaches it over the private compose
+    # network; the internet cannot.
+    expose:
+      - "3000"
+    environment:
+      NODE_ENV: production
+      DATA_DIR: /data
+      PORT: 3000
+
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env - a long random string, never changed}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:?set BOOTSTRAP_ADMIN_PASSWORD in .env}
+      BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-admin}
+
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      ERP_MAPPING: ${ERP_MAPPING:-generic}
+      QUEUE_CONCURRENCY: ${QUEUE_CONCURRENCY:-2}
+      OCR_SPACE_API_KEY: ${OCR_SPACE_API_KEY:-}
+
+      GOOGLE_DRIVE_CLIENT_ID: ${GOOGLE_DRIVE_CLIENT_ID:-}
+      GOOGLE_DRIVE_CLIENT_SECRET: ${GOOGLE_DRIVE_CLIENT_SECRET:-}
+      GOOGLE_DRIVE_REFRESH_TOKEN: ${GOOGLE_DRIVE_REFRESH_TOKEN:-}
+      GOOGLE_DRIVE_ROOT_FOLDER_ID: ${GOOGLE_DRIVE_ROOT_FOLDER_ID:-}
+
+      AXIOM_TOKEN: ${AXIOM_TOKEN:-}
+      AXIOM_DATASET: ${AXIOM_DATASET:-rl-jewels-events}
+    volumes:
+      # THE shoot. Every product, every photo, the whole database.
+      # This is the one thing that must be backed up.
+      - studio-data:/data
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      STUDIO_DOMAIN: ${STUDIO_DOMAIN:?set STUDIO_DOMAIN in .env - e.g. studio.yourdomain.com}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates live here. Keeping them on a volume means a restart does
+      # not re-request a certificate and burn Let's Encrypt rate limits.
+      - caddy-data:/data
+      - caddy-config:/config
+      - caddy-logs:/var/log/caddy
+    depends_on:
+      - studio
+
+volumes:
+  studio-data:
+  caddy-data:
+  caddy-config:
+  caddy-logs:

@@ -5,7 +5,6 @@ export interface BrandLogoProps {
   theme?: 'red-on-white' | 'white-on-red' | 'gold-accent';
   className?: string;
   size?: 'xs' | 'sm' | 'md' | 'lg' | 'xl';
-  showSubtitle?: boolean;
 }
 
 export const BrandLogo: React.FC<BrandLogoProps> = ({
@@ -13,7 +12,6 @@ export const BrandLogo: React.FC<BrandLogoProps> = ({
   theme = 'red-on-white',
   className = '',
   size = 'md',
-  showSubtitle = false,
 }) => {
   // Dimension scale map
   const sizeMap = {

@@ -1,0 +1,41 @@
+# Docker deployment, for a VPS or Cloud Run.
+#
+# NOT the recommended path for the shop Lenovo - see RUNNING_ON_THE_LENOVO.md,
+# which runs this with plain Node and no Docker at all. Docker Desktop is extra
+# weight on a Windows 11 Lite machine for no benefit when only one service is
+# involved.
+#
+# For Cloud Run, build this same image and mount a volume at /data - the app
+# needs persistent storage for the database and the photos, and will lose both
+# on a container recycle without it.
+
+services:
+  studio:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      DATA_DIR: /data
+      # Required. The server refuses to start in production without these.
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env - any long random string, kept fixed}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:?set BOOTSTRAP_ADMIN_PASSWORD in .env - used once to create the first admin}
+      BOOTSTRAP_ADMIN_USERNAME: ${BOOTSTRAP_ADMIN_USERNAME:-admin}
+      # Optional - each feature stays switched off until its variables are set.
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      ERP_MAPPING: ${ERP_MAPPING:-generic}
+      OCR_SPACE_API_KEY: ${OCR_SPACE_API_KEY:-}
+      QUEUE_CONCURRENCY: ${QUEUE_CONCURRENCY:-2}
+      GOOGLE_DRIVE_CLIENT_ID: ${GOOGLE_DRIVE_CLIENT_ID:-}
+      GOOGLE_DRIVE_CLIENT_SECRET: ${GOOGLE_DRIVE_CLIENT_SECRET:-}
+      GOOGLE_DRIVE_REFRESH_TOKEN: ${GOOGLE_DRIVE_REFRESH_TOKEN:-}
+      GOOGLE_DRIVE_ROOT_FOLDER_ID: ${GOOGLE_DRIVE_ROOT_FOLDER_ID:-}
+      AXIOM_TOKEN: ${AXIOM_TOKEN:-}
+      AXIOM_DATASET: ${AXIOM_DATASET:-rl-jewels-events}
+    volumes:
+      # The database and every photo live here. Back THIS up - it is the shoot.
+      - studio-data:/data
+
+volumes:
+  studio-data:
