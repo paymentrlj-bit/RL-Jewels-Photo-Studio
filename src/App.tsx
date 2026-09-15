@@ -23,7 +23,6 @@ export default function App() {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [checkingSession, setCheckingSession] = useState(true);
   const [features, setFeatures] = useState<HealthFeatures | null>(null);
-  const [studioCameraAvailable, setStudioCameraAvailable] = useState(false);
 
   const [tab, setTab] = useState<Tab>('shoot');
   const [batch, setBatch] = useState<Batch | null>(null);
@@ -63,7 +62,6 @@ export default function App() {
     if (!user) return;
     void refresh();
     api.currentBatch().then((data) => setBatch(data.batch)).catch(() => undefined);
-    api.dslrStatus().then((s) => setStudioCameraAvailable(s.available)).catch(() => undefined);
 
     const timer = window.setInterval(refresh, POLL_MS);
     return () => window.clearInterval(timer);
@@ -174,7 +172,6 @@ export default function App() {
         {tab === 'shoot' && (
           <ShootView
             batch={batch}
-            studioCameraAvailable={studioCameraAvailable}
             onQueued={refresh}
             recent={recent}
           />

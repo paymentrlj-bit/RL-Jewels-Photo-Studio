@@ -35,6 +35,8 @@ export const DEFAULT_ENHANCE_PROMPT = `You are a professional jewelry product ph
 * Do NOT "idealize" or "upgrade" the design by adding decorative complexity that isn't there - for example, never replace a single center/feature stone with a cluster of multiple smaller stones, and never add facets, motifs, or embellishments a jeweler would consider an enhancement. The design is finished and fixed exactly as photographed, not a draft to be improved.
 * Do NOT force symmetry onto a piece that is intentionally asymmetric in real life - e.g. a pair of earrings whose two sides genuinely end in different decorative elements, or a design with an intentionally off-center motif. Reproduce the exact asymmetry shown; do not "correct" it into a symmetric version that does not exist on the physical piece.
 * For chains, necklaces, and haars: preserve the EXACT number of visible strands. Never merge multiple strands into one, or split a single strand into several.
+* NEVER invent a camera angle that fabricates structure you cannot actually see in the original photo. Re-posing is allowed (see GEOMETRY below), but only to show what is genuinely there from a better viewpoint - never to render a face, side, or interior of the piece the original photo gives you no information about. If an angle would require you to guess what something looks like, it is the wrong angle.
+* NEVER re-render the lighting physics on the metal or stones - do not synthesise specular highlights, starburst glints, or added sparkle as if a different light source or a different stone cut existed. Correcting exposure and white balance on the light that was actually there is enhancement; inventing new reflections is fabrication, and it is the single easiest way to make a plain piece look like a more expensive one it is not.
 
 ===== GEOMETRY: center and straighten, but you choose the best angle =====
 * The piece must be perfectly centered in the frame and not tilted or crooked.
@@ -65,7 +67,7 @@ Look at how this specific piece was actually made - cast or hand-fabricated, mac
 
 If a PRECISE JEWELRY OUTLINE block is provided below, it is real computer-vision data traced from the original photo (not a guess) - use it to confirm the item's true shape (including its interior opening, if any) and to apply the uniform color correction described above with precision across that exact area, including any motifs or engravings inside it.
 
-OUTPUT: square (1:1) composition, the jewelry centered and occupying roughly 65-80% of the frame with clean margin so nothing is cropped, pure white background, ready for an e-commerce product catalogue.`;
+OUTPUT: use the composition and aspect ratio given in the OUTPUT FRAMING block below, with the jewelry centered and occupying roughly 65-80% of the frame with clean margin so nothing is cropped, pure white background, ready for an e-commerce product catalogue.`;
 
 // ---------------------------------------------------------------------------
 // Audit prompt - the self-QA pass that decides whether an enhanced photo is
@@ -85,7 +87,9 @@ export function buildAuditPrompt(context: AuditContext): string {
 IMAGE 1 is the original counter photo. IMAGE 2 is the AI-enhanced result that is about to be published.
 Item: ${context.purity} gold ${context.itemType}.
 
-Compare IMAGE 2 against IMAGE 1 and grade it. Respond ONLY as JSON matching this schema:
+Compare IMAGE 2 against IMAGE 1 and grade it.
+A different camera angle or pose in image 2 is fine and expected - judge the physical design of the piece, never the viewpoint.
+Respond ONLY as JSON matching this schema:
 {
   "sharpFocus": boolean,        // is the jewelry in image 2 in sharp focus, edge to edge?
   "notCropped": boolean,        // is the full piece visible, nothing cut off by the frame?
@@ -94,7 +98,10 @@ Compare IMAGE 2 against IMAGE 1 and grade it. Respond ONLY as JSON matching this
   "neutralWhiteBalance": boolean, // is the metal color neutral/true (not orange or blue-tinted)?
   "colorConsistentAcrossSurface": boolean, // is the color/white-balance correction UNIFORM across the entire piece? Look closely at motifs, engraved details, and recessed/shadowed areas - fail this if any sub-region of the piece (e.g. around a motif) has a visibly different color cast than the open/flat metal surfaces around it. This patchy, inconsistent correction is a common failure - check it carefully.
   "clearlyIdentifiableCategory": boolean, // is the item unmistakably recognizable as a "${context.itemType}" at a glance, with its defining structural features clearly visible (e.g. a ring/bangle's interior opening, a chain's link structure and clasp)?
-  "matchesOriginalDesign": boolean, // CRITICAL: does image 2 show the exact same design as image 1, with no added, removed, or altered engravings, motifs, stones, proportions, or band/chain profile? (Note: a different camera angle/pose than image 1 is fine and expected - only judge the actual design, not the viewpoint.)
+  "stoneCountMatches": boolean, // CRITICAL: does image 2 contain EXACTLY the same number of stones as image 1, each in the same position, cut, and setting style? Fail if any stone was added, removed, split into a cluster, or re-cut. A single centre stone must never have become several smaller ones.
+  "beadDetailPreserved": boolean, // CRITICAL: are all repeated small elements - balls, beads, tassels, granulation, a row of small stones - preserved at the EXACT same count and spacing as image 1? Fail if any were added or dropped, even if a different count would look more even.
+  "chainPatternMatches": boolean, // CRITICAL: is the link/strand structure identical to image 1 - the same number of visible strands, the same link shape and profile, consistent spacing, and the same clasp? Fail if strands were merged or split, or the link pattern changed. Automatically true if the piece has no chain or strand element at all.
+  "engravingPreserved": boolean, // CRITICAL: is every engraving, motif, pattern, hallmark stamp, and surface texture visible in image 1 still present in image 2, unaltered and unsimplified - and is there NO engraving, motif, or decorative element in image 2 that is absent from image 1? Fail in either direction: removing real detail and inventing new detail are both failures.
   "naturalDropPhysics": boolean, // If this piece has hanging chains, mesh, tassels, or ball/bead drops (e.g. jhumka, chandbali, bali, layered haars, charm bracelets): do they fall in smooth, symmetric, gravity-consistent curves - NOT tangled, kinked, flattened, pinched, or bent at an implausible angle? Is the exact number of chain strands, links, balls, or beads the SAME as in image 1 (none added or dropped)? If the two earrings/sides of a pair are both visible, are their drops symmetric to each other? If the item has no hanging/repeated drop elements at all, this is automatically true.
   "overallPass": boolean,       // true only if ALL of the above are true
   "reason": string              // if overallPass is false, a short, specific, staff-facing reason naming which check failed and why (e.g. "The enhanced image added a decorative pattern to the band that isn't on the original piece."). If overallPass is true, a short confirmation.
@@ -138,4 +145,27 @@ Write:
 7. "urlSlug" - a short, lowercase, hyphen-separated URL slug built from the same keywords as "name."
 
 Respond ONLY as JSON: {"name": string, "description": string, "metaTitle": string, "metaDescription": string, "imageAltText": string, "searchKeywords": string, "urlSlug": string}`;
+}
+
+// ---------------------------------------------------------------------------
+// Output framing, branched by category (spec §5 Stage 1).
+//
+// Kept out of the editable master prompt on purpose: the ratio is a mechanical
+// consequence of what kind of object this is, not a stylistic choice an admin
+// should be able to break by editing prose. Forcing an elongated piece into a
+// square is named in the spec as a real shipped bug.
+// ---------------------------------------------------------------------------
+
+export function buildOutputFramingBlock(aspectRatio: '1:1' | '3:4', itemType: string): string {
+  if (aspectRatio === '3:4') {
+    return `
+
+OUTPUT FRAMING:
+This is an elongated piece (${itemType || 'chain/necklace type'}). Produce a PORTRAIT 3:4 composition (taller than wide).
+Show the piece at its full natural length and drape, top to bottom, with clean margin at every edge. Do NOT coil, shorten, fold, or rearrange it to make it fit a squarer frame, and do NOT crop any part of it. The full length is the product.`;
+  }
+  return `
+
+OUTPUT FRAMING:
+This is a compact piece (${itemType || 'ring/pendant type'}). Produce a SQUARE 1:1 composition.`;
 }

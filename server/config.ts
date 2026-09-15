@@ -8,7 +8,7 @@
 // naming exactly what to set, rather than starting a server that looks fine
 // and is trivially broken into.
 //
-// Optional integrations (Gemini, Drive, DSLR, Axiom) deliberately stay
+// Optional integrations (Gemini, Drive, Axiom) deliberately stay
 // optional - the app boots and runs without them, and each feature
 // advertises its own availability to the UI. That behaviour from v1 was
 // right and is preserved.
@@ -96,11 +96,6 @@ export const config = {
     rootFolderId: optional('GOOGLE_DRIVE_ROOT_FOLDER_ID'),
   },
 
-  dslr: {
-    bridgeUrl: optional('DSLR_BRIDGE_URL'),
-    bridgeSecret: optional('DSLR_BRIDGE_SECRET'),
-  },
-
   axiom: {
     token: optional('AXIOM_TOKEN'),
     dataset: process.env.AXIOM_DATASET?.trim() || 'rl-jewels-events',
@@ -115,10 +110,6 @@ export const config = {
 export function isDriveConfigured(): boolean {
   const { clientId, clientSecret, refreshToken, rootFolderId } = config.drive;
   return Boolean(clientId && clientSecret && refreshToken && rootFolderId);
-}
-
-export function isDslrConfigured(): boolean {
-  return Boolean(config.dslr.bridgeUrl && config.dslr.bridgeSecret);
 }
 
 export function isAxiomConfigured(): boolean {

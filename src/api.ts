@@ -99,13 +99,6 @@ export const api = {
   learnCpc: (body: Record<string, unknown>) => post<{ success: boolean }>('/cpc-lookup/learn', body),
   cpcStats: () => request<{ totalRows: number; totalProducts: number; learnedThisSession: number }>('/cpc-stats'),
 
-  // --- studio camera ---
-  dslrStatus: () => request<{ available: boolean; configured: boolean }>('/dslr-capture/status'),
-  dslrCapture: () => post<{ success: boolean; imageBase64: string }>('/dslr-capture'),
-  dslrFocus: () => post<{ success: boolean }>('/dslr-capture/focus'),
-  dslrNudge: (direction: 'near' | 'far', amount: 'small' | 'large') =>
-    post<{ success: boolean }>('/dslr-capture/focus/nudge', { direction, amount }),
-
   // --- export ---
   exportMappings: () =>
     request<{ mappings: { id: string; label: string; description?: string; columnCount: number }[]; active: string }>('/export/mappings'),

@@ -4,23 +4,25 @@ Turns a quick counter photo of a gold piece into a studio-quality catalogue
 image, writes the product copy, and exports both in whatever shape the store's
 ERP wants — at the pace a 3,000-SKU catalogue run actually needs.
 
-Built for one store in Jalgaon: a tethered Canon at a fixed lightbox station,
-counter staff who are not photographers, and a POS catalogue of 3,247 products
-that all need shooting.
+Built for one store in Jalgaon: phone photos taken at the sales counter by
+staff who are not photographers, and a POS catalogue of 3,247 products that all
+need shooting.
 
 ---
 
 ## What it does
 
 1. **Shoot.** Scan the tag, and the CPC auto-fills item type, size, purity and
-   gender from the store's own POS catalogue. Photograph the piece with the
-   tethered studio camera or a phone. Submit — and immediately shoot the next
-   one. Nobody waits for the AI.
-2. **Process.** Background workers segment the piece, enhance it to a clean
-   white-background studio shot, and run a nine-point quality audit on the
-   result. A failure escalates once to a stronger model with the specific
-   failure reason fed back in. Catalogue copy and SEO fields are written
-   separately.
+   gender from the store's own POS catalogue. Photograph the piece. Free
+   on-device checks catch a blurred or flash-blown photo *before* it costs an
+   API call. Submit — and immediately shoot the next one. Nobody waits.
+2. **Process.** Background workers trace the piece's real outline, enhance it
+   to a clean white-background studio shot at the right aspect ratio for its
+   category, and run a twelve-point quality audit. Failures are **classified**:
+   a blurred or cropped photo, or one where the AI altered the design, goes
+   straight back for a reshoot — a stronger model cannot fix either. Only
+   genuine rendering failures earn one escalated retry, re-graded by a stronger
+   auditor.
 3. **Review.** Everything that passed the AI's own QA sits on one screen,
    original next to studio version, to approve or send back for a reshoot.
 4. **Export.** A whole shoot exports as one CSV and one ZIP, or uploads
@@ -59,9 +61,9 @@ makes the three options below equivalent.
 
 | Target | Notes |
 |---|---|
-| **Cloud Run** | Build the image, mount a volume at `/data`. **Without a mounted volume you lose every product and photo on each container recycle.** |
+| **The shop Lenovo** ← *current plan* | **[RUNNING_ON_THE_LENOVO.md](RUNNING_ON_THE_LENOVO.md)** — plain Node, no Docker, no tunnel, no hosting bill. Staff phones reach it over the shop Wi-Fi. |
 | **VPS** | `docker compose up -d`. Put a reverse proxy in front for TLS. |
-| **The Lenovo at the lightbox** | Same image. Worth serious consideration: it removes the Cloudflare Tunnel entirely, and the studio keeps working when the store's internet does not. |
+| **Cloud Run** | Build the image, mount a volume at `/data`. **Without a mounted volume you lose every product and photo on each container recycle.** |
 
 **Back up `DATA_DIR`.** It is the shoot. Copying the directory while the app is
 running is safe enough for this workload (SQLite is in WAL mode), but a nightly
@@ -87,7 +89,6 @@ reports its own availability to the UI.
 |---|---|---|
 | AI processing | `GEMINI_API_KEY` | — |
 | Google Drive export | `GOOGLE_DRIVE_*` | [DRIVE_SETUP.md](DRIVE_SETUP.md) |
-| Tethered studio camera | `DSLR_BRIDGE_URL`, `DSLR_BRIDGE_SECRET` | [DSLR_CAPTURE_SETUP.md](DSLR_CAPTURE_SETUP.md) |
 | Tag text OCR | `OCR_SPACE_API_KEY` | free tier at ocr.space |
 | Axiom log mirror | `AXIOM_TOKEN` | [LOGGING_SETUP.md](LOGGING_SETUP.md) |
 
@@ -95,16 +96,20 @@ reports its own availability to the UI.
 
 ## ERP export
 
-Export column layouts are **data, not code**. Three ship with the app:
+Export column layouts are **data, not code**. Several ship with the app:
 
-- `generic` — every field, plain headers. The default.
-- `odoo` — Odoo `website_sale` field names.
-- `shopify` — Shopify's product import headers.
+- `generic` — every field, plain headers. The current default.
+- `jewelsoft` — **the store's actual ERP.** The right fields, but the column
+  headers are placeholders until JewelSoft sends their sample import file.
+- `meta-catalog` — Meta/WhatsApp Business catalogue feed. The likely first
+  online surface, ahead of any real store.
+- `shopify` — Shopify's product import headers, for later.
+- `odoo` — kept only because the store uses Odoo for **free website hosting**.
+  It is *not* the ERP.
 
-> **Read this before the first real export.** The `odoo` layout exists because
-> v1 hardcoded Odoo's field names. Nobody ever confirmed the store runs Odoo.
-> If it does not, every export needs manual re-entry. Confirm the real system,
-> then either pick the matching preset or write one.
+> **Before the first real export:** switch `ERP_MAPPING` to `jewelsoft` only
+> after replacing the placeholder headers in
+> `server/export/mappings/jewelsoft.json` with JewelSoft's real ones.
 
 To add your own, drop a JSON file into `<DATA_DIR>/mappings/` and set
 `ERP_MAPPING` to its `id`. No rebuild, no redeploy:
@@ -140,7 +145,8 @@ server/
   queue/             job table + background workers (the batch engine)
   storage/           images on disk, referenced by id
   export/            ERP mappings, CSV, JSON-LD
-  integrations/      CPC master, Drive, DSLR bridge
+  catalog/           the one item-category taxonomy (ratio + gender defaults)
+  integrations/      CPC master, Drive
   routes/            the HTTP surface
 src/                 React frontend
 ```
@@ -179,8 +185,9 @@ npm start        # production
 ```
 
 Tests cover the logic where a silent wrong answer is expensive: CPC parsing,
-export mapping validation, password hashing, and the queue's claim and recovery
-semantics.
+category resolution and aspect-ratio branching, escalation classification,
+prompt invariants, export mapping validation, password hashing, and the queue's
+claim and recovery semantics.
 
 ---
 
@@ -188,24 +195,36 @@ semantics.
 
 Honest list of what is not done, so nobody discovers these the hard way:
 
-- **The ERP target is unconfirmed.** See the warning above. This is the single
-  biggest open question and it blocks a clean go-live.
+- **JewelSoft's real import columns are still unknown.** The `jewelsoft`
+  mapping has the right fields with placeholder headers. Swap them when the
+  sample import file arrives — it is a one-file edit, no rebuild.
+- **The house visual standard is not locked in yet.** The enhance prompt
+  produces a generic clean-studio look. Reference photos would pin it to RL
+  Jewels' actual background, shadow and crop.
 - **Cost figures are placeholders.** `COST_*_USD` default to estimates, not
   real Gemini rates. The Insights dashboard labels them as such until set.
-  Calibrate after a pilot run.
-- **Two preview models are on the critical path.** `nano-banana-pro-preview`
+  Calibrate after the first 50 products.
+- **Two preview models sit on the critical path.** `nano-banana-pro-preview`
   (escalation) and `gemini-robotics-er-1.6-preview` (segmentation). Preview
   models get withdrawn. Segmentation fails open, so it degrades safely;
-  escalation is detected and reported distinctly from a bad photo, but there is
-  no automatic fallback model yet.
-- **The DSLR focus commands are unverified.** `DoAutoFocus` and
-  `LiveView_Focus` were never tested against the store's specific
-  digiCamControl install. See the troubleshooting notes in
-  [DSLR_CAPTURE_SETUP.md](DSLR_CAPTURE_SETUP.md).
-- **OCR tag scanning has no UI.** The `/api/ocr-space` and `/api/scan-tag`
-  endpoints work, but the new capture screen uses barcode/QR scanning plus CPC
-  lookup instead, which is more reliable. The endpoints are kept for when
-  someone wants text OCR back.
+  escalation is detected and reported distinctly from a bad photo, but there
+  is no automatic fallback model yet.
+- **Barcode scanning needs HTTPS.** Over plain HTTP on the shop LAN the app
+  hides the scanner and staff type the CPC. Photography is unaffected. See
+  [RUNNING_ON_THE_LENOVO.md](RUNNING_ON_THE_LENOVO.md) for the certificate
+  route if typing gets tiresome.
+- **Tag weight OCR has no UI.** `/api/ocr-space` and `/api/scan-tag` work, but
+  nothing calls them — weights are typed. Reading the back of the tag
+  automatically is the obvious next efficiency win.
+- **No scan auto-advance yet.** The spec's front-scan → back-scan hand-off and
+  the "skip the front scan when the CPC is already certain" shortcut are not
+  built.
+- **Staff correction confirmation is not built.** Corrections to a `certain`
+  CPC match are learned, but without the "please double-check these details"
+  prompt the spec asks for.
 - **Single photo per product.** Multi-angle would be a real change, not a
   toggle.
+- **Shared staff login for now.** The app supports per-person accounts today
+  (Admin → Staff accounts); the store plans to switch to them once the process
+  is settled.
 - **No automated frontend tests.**

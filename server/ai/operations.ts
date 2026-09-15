@@ -26,7 +26,8 @@ export async function enhanceImage(
   model: string,
   imageBase64: string,
   mimeType: string,
-  prompt: string
+  prompt: string,
+  aspectRatio: '1:1' | '3:4' = '1:1'
 ): Promise<EnhanceResult | null> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), ENHANCE_TIMEOUT_MS);
@@ -40,10 +41,14 @@ export async function enhanceImage(
         ],
       },
       config: {
+        // Branched by category, never hardcoded square - forcing an elongated
+        // piece (chain, mangalsutra, haar) into 1:1 either crops it or shrinks
+        // it to a thread in a white field. See server/catalog/taxonomy.ts.
+        //
         // 1K is visually indistinguishable from 2K at normal web/catalogue
         // display sizes and costs roughly 33% less per image - 2K only
         // matters for print or heavy pinch-zoom, neither of which applies here.
-        imageConfig: { aspectRatio: '1:1', imageSize: '1K' },
+        imageConfig: { aspectRatio, imageSize: '1K' },
         abortSignal: controller.signal,
       } as never,
     });
@@ -59,25 +64,80 @@ export async function enhanceImage(
   }
 }
 
-// The checklist keys here are a contract with the analytics dashboard, which
-// aggregates failures per key. Adding a key is fine; renaming one silently
-// breaks the historical trend for that check.
-export const AUDIT_CHECKS = [
+// Checks a STRONGER MODEL CANNOT FIX (spec §5 Stage 3).
+//
+// These are properties of the source photo, or of hallucination risk. A blurry
+// counter photo stays blurry no matter how capable the next model is, and a
+// model that has already invented a stone does not become less likely to
+// invent one by being more expensive. The spec records that escalating on
+// exactly these fields measured WORSE than the default tier on real production
+// data - pure wasted spend.
+//
+// A failure here routes straight to needs_reshoot.
+export const UNFIXABLE_BY_ESCALATION = [
   'sharpFocus',
   'notCropped',
+  'clearlyIdentifiableCategory',
+  'naturalDropPhysics',
+  // The four design-fidelity fields. Fabrication is not a capability problem.
+  'stoneCountMatches',
+  'beadDetailPreserved',
+  'chainPatternMatches',
+  'engravingPreserved',
+] as const;
+
+// Checks a stronger pass plausibly DOES fix: rendering quality, not fidelity
+// and not the source photo. These earn the one escalated retry.
+export const FIXABLE_BY_ESCALATION = [
   'backgroundCleanWhite',
   'noBlownHighlights',
   'neutralWhiteBalance',
   'colorConsistentAcrossSurface',
-  'clearlyIdentifiableCategory',
-  'matchesOriginalDesign',
-  'naturalDropPhysics',
+] as const;
+
+// The checklist keys are a contract with the analytics dashboard, which
+// aggregates failures per key. Adding a key is fine; renaming one silently
+// breaks the historical trend for that check.
+//
+// Note there is no single "matchesOriginalDesign" umbrella field. It was split
+// into four (stone count, bead detail, chain pattern, engraving) because one
+// vague boolean puts every fidelity failure in a bucket nobody can act on -
+// "the design changed" tells you nothing, "bead count changed" tells you where
+// to look.
+export const AUDIT_CHECKS = [
+  ...UNFIXABLE_BY_ESCALATION,
+  ...FIXABLE_BY_ESCALATION,
 ] as const;
 
 export type AuditCheck = (typeof AUDIT_CHECKS)[number];
 
+export type EscalationDecision =
+  | { escalate: true; failedFixable: AuditCheck[] }
+  | { escalate: false; failedUnfixable: AuditCheck[] };
+
+/**
+ * Decides whether a failed audit is worth paying a stronger model for.
+ *
+ * Any unfixable failure vetoes escalation outright, even when a fixable one
+ * failed alongside it: if the piece is cropped AND the background is grey,
+ * fixing the background still leaves a cropped photo that has to be retaken.
+ */
+export function classifyAuditFailure(checklist: Record<AuditCheck, boolean>): EscalationDecision {
+  const failedUnfixable = UNFIXABLE_BY_ESCALATION.filter((check) => checklist[check] === false);
+  if (failedUnfixable.length > 0) {
+    return { escalate: false, failedUnfixable: [...failedUnfixable] };
+  }
+  const failedFixable = FIXABLE_BY_ESCALATION.filter((check) => checklist[check] === false);
+  return { escalate: true, failedFixable: [...failedFixable] };
+}
+
 export interface AuditResult {
+  /** Recomputed server-side as the AND of every checklist field. Authoritative. */
   overallPass: boolean;
+  /** What the model claimed, kept only so disagreement shows up in the logs. */
+  modelClaimedPass: boolean | null;
+  /** True when the model's own verdict contradicted its own checklist. */
+  verdictDisagreed: boolean;
   reason: string;
   checklist: Record<AuditCheck, boolean>;
 }
@@ -88,7 +148,8 @@ export async function auditOutput(
   originalMime: string,
   enhancedBase64: string,
   enhancedMime: string,
-  context: AuditContext
+  context: AuditContext,
+  model: string = MODEL_AUDIT
 ): Promise<AuditResult> {
   const prompt = buildAuditPrompt(context);
 
@@ -96,7 +157,7 @@ export async function auditOutput(
   const timeout = setTimeout(() => controller.abort(), AUDIT_TIMEOUT_MS);
   try {
     const response = await ai.models.generateContent({
-      model: MODEL_AUDIT,
+      model,
       contents: {
         parts: [
           { inlineData: { mimeType: originalMime, data: originalBase64 } },
@@ -115,13 +176,21 @@ export async function auditOutput(
       AUDIT_CHECKS.map((key) => [key, Boolean(parsed[key])])
     ) as Record<AuditCheck, boolean>;
 
-    const overallPass =
-      typeof parsed.overallPass === 'boolean'
-        ? parsed.overallPass
-        : Object.values(checklist).every(Boolean);
+    // The server ALWAYS recomputes the verdict as the logical AND of every
+    // individual field, and ignores whatever the model put in `overallPass`.
+    //
+    // Spec §5 Stage 2 marks this as not optional: a model returning an
+    // internally inconsistent blob - a false sub-check sitting next to
+    // `overallPass: true` - has shipped bad photos in production before this
+    // rule existed. The model's own field is kept only so that disagreement is
+    // visible in the logs.
+    const overallPass = Object.values(checklist).every(Boolean);
+    const modelClaimedPass = typeof parsed.overallPass === 'boolean' ? parsed.overallPass : null;
 
     return {
       overallPass,
+      modelClaimedPass,
+      verdictDisagreed: modelClaimedPass !== null && modelClaimedPass !== overallPass,
       reason:
         (parsed.reason as string) ||
         (overallPass ? 'Passed quality check.' : 'Did not meet catalogue quality standards.'),

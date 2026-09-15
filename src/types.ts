@@ -108,7 +108,6 @@ export interface QueueDepth {
 export interface HealthFeatures {
   ai: boolean;
   driveExport: boolean;
-  studioCamera: boolean;
   axiomMirror: boolean;
 }
 
@@ -122,7 +121,10 @@ export const AUDIT_CHECK_LABELS: Record<string, string> = {
   neutralWhiteBalance: 'Neutral white balance',
   colorConsistentAcrossSurface: 'Even colour across the piece',
   clearlyIdentifiableCategory: 'Clearly identifiable',
-  matchesOriginalDesign: 'Matches the real design',
+  stoneCountMatches: 'Stone count unchanged',
+  beadDetailPreserved: 'Bead and tassel count unchanged',
+  chainPatternMatches: 'Chain and strand pattern unchanged',
+  engravingPreserved: 'Engraving and motifs unchanged',
   naturalDropPhysics: 'Natural drape and drop',
 };
 

@@ -1,0 +1,20 @@
+{
+  "id": "jewelsoft",
+  "label": "JewelSoft ERP (TEMPLATE - headers not yet confirmed)",
+  "description": "The store runs JewelSoft. These column headers are a READABLE PLACEHOLDER, not JewelSoft's real import schema - nobody has seen its import file yet. When JewelSoft sends the sample, replace the header values below with their exact column names and this becomes the live mapping. The field values on the right are already correct; only the headers need changing.",
+  "columns": [
+    { "header": "ItemCode", "field": "cpc" },
+    { "header": "ProductId", "field": "catalogProductId" },
+    { "header": "ItemName", "field": "name" },
+    { "header": "Description", "field": "description" },
+    { "header": "ItemType", "field": "itemType" },
+    { "header": "Purity", "field": "purity" },
+    { "header": "Size", "field": "size" },
+    { "header": "GrossWeight", "field": "grossWeight" },
+    { "header": "OtherWeight", "field": "otherWeight" },
+    { "header": "NetWeight", "field": "netWeight" },
+    { "header": "ImageFile", "field": "photoFilename" },
+    { "header": "CapturedBy", "field": "staffName" },
+    { "header": "CapturedOn", "field": "createdAt" }
+  ]
+}

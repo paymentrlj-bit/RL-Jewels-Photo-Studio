@@ -3,7 +3,7 @@ import { authenticate } from '../auth/users';
 import { setSessionCookie, clearSessionCookie, getSessionUser, requireAuth, type AuthenticatedRequest } from '../auth/session';
 import { checkLockout, recordLoginAttempt } from '../auth/rateLimit';
 import { logEvent, actorFrom } from '../logging';
-import { isGeminiConfigured, isDriveConfigured, isDslrConfigured, isAxiomConfigured, config } from '../config';
+import { isGeminiConfigured, isDriveConfigured, isAxiomConfigured, config } from '../config';
 
 export const authRouter = express.Router();
 
@@ -84,7 +84,6 @@ authRouter.get('/health', (_req, res) => {
     features: {
       ai: isGeminiConfigured(),
       driveExport: isDriveConfigured(),
-      studioCamera: isDslrConfigured(),
       axiomMirror: isAxiomConfigured(),
     },
     erpMapping: config.erpMapping,

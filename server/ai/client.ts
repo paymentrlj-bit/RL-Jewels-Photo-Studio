@@ -28,6 +28,11 @@ export function getGeminiClient(): GoogleGenAI {
 export const MODEL_ENHANCE_DEFAULT = 'gemini-3.1-flash-image';
 export const MODEL_ENHANCE_ESCALATED = 'nano-banana-pro-preview';
 export const MODEL_AUDIT = 'gemini-3.1-flash-lite';
+// The grader used for the re-audit AFTER an escalated retry. That audit is the
+// last gate before a photo ships, so it is worth a better grader than the
+// first-pass tier - a cheap model waving through a still-broken escalation is
+// the most expensive possible mistake, having already paid for both passes.
+export const MODEL_AUDIT_STRONG = 'gemini-3.1-pro-preview';
 // Product copy (name + description) only runs once per staff-approved photo,
 // not on every pipeline attempt, so it can afford a stronger model than the
 // audit's flash-lite tier - bland, generic copy was traced to that model
@@ -59,6 +64,9 @@ export const COST_PER_CALL_USD: Record<string, number> = {
   [MODEL_ENHANCE_ESCALATED]: Number(process.env.COST_ENHANCE_ESCALATED_USD) || 0.13,
   [MODEL_AUDIT]: Number(process.env.COST_AUDIT_USD) || 0.001,
   [MODEL_SEGMENT]: Number(process.env.COST_SEGMENT_USD) || 0.001,
+  // MODEL_AUDIT_STRONG and MODEL_COPY are currently the same model id, so this
+  // one entry prices both. If they ever diverge, add a second entry - the map
+  // is keyed by model id, not by the role the model is playing.
   [MODEL_COPY]: Number(process.env.COST_COPY_USD) || 0.01,
 };
 

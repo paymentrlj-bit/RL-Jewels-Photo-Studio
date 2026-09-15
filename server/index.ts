@@ -13,7 +13,7 @@
 
 import express from 'express';
 import path from 'path';
-import { config, ensureDataDirs, isGeminiConfigured, isDriveConfigured, isDslrConfigured } from './config';
+import { config, ensureDataDirs, isGeminiConfigured, isDriveConfigured } from './config';
 import { initDatabase, getDb, closeDatabase } from './db';
 import { ensureBootstrapAdmin } from './auth/users';
 import { initCpcMaster } from './integrations/cpcMaster';
@@ -24,7 +24,6 @@ import { allMappings, getMapping } from './export/mappings';
 import { authRouter } from './routes/auth';
 import { productsRouter } from './routes/products';
 import { catalogRouter } from './routes/catalog';
-import { captureRouter } from './routes/capture';
 import { exportRouter } from './routes/exports';
 import { adminRouter, clientRouter } from './routes/admin';
 
@@ -48,7 +47,6 @@ async function main(): Promise<void> {
   app.use('/api', authRouter);
   app.use('/api', productsRouter);
   app.use('/api', catalogRouter);
-  app.use('/api', captureRouter);
   app.use('/api', exportRouter);
   app.use('/api', clientRouter);
   app.use('/api/admin', adminRouter);
@@ -117,13 +115,13 @@ async function main(): Promise<void> {
     console.log(`  mode         ${config.isProduction ? 'production' : 'development'}`);
     console.log(`  data dir     ${config.dataDir}`);
     console.log(`  erp mapping  ${activeMapping.label} (${activeMapping.id})`);
-    console.log(`  features     ai=${isGeminiConfigured()} drive=${isDriveConfigured()} studioCamera=${isDslrConfigured()}`);
+    console.log(`  features     ai=${isGeminiConfigured()} drive=${isDriveConfigured()}`);
     console.log('');
     logEvent('server.started', {
       port: config.port,
       isProduction: config.isProduction,
       erpMapping: activeMapping.id,
-      features: { ai: isGeminiConfigured(), drive: isDriveConfigured(), dslr: isDslrConfigured() },
+      features: { ai: isGeminiConfigured(), drive: isDriveConfigured() },
     });
   });
 

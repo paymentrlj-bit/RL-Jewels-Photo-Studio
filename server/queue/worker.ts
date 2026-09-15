@@ -18,6 +18,7 @@ import {
   MODEL_ENHANCE_DEFAULT,
   MODEL_ENHANCE_ESCALATED,
   MODEL_AUDIT,
+  MODEL_AUDIT_STRONG,
   MODEL_SEGMENT,
   MODEL_COPY,
   ENABLE_SEGMENTATION_GROUNDING,
@@ -31,9 +32,13 @@ import {
   generateCopy,
   buildContextBlock,
   buildSegmentationBlock,
+  classifyAuditFailure,
   type EnhanceResult,
   type AuditResult,
 } from '../ai/operations';
+import { buildOutputFramingBlock } from '../ai/prompts';
+import { aspectRatioFor } from '../catalog/taxonomy';
+import { cachedSegmentation } from './segmentationCache';
 import { getEnhancePrompt } from '../settings';
 import { logEvent, newRequestId } from '../logging';
 import {
@@ -245,6 +250,11 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
     gender: product.gender,
     weight: product.netWeightGrams || product.grossWeightGrams,
   });
+
+  // Branched by category. An elongated piece forced into a square is either
+  // cropped or shrunk to a thread in a white field - see taxonomy.ts.
+  const aspectRatio = aspectRatioFor(product.itemType);
+  const framingBlock = buildOutputFramingBlock(aspectRatio, product.itemType);
   const auditContext = {
     itemType: product.itemType || 'jewellery',
     purity: product.purity || '22kt',
@@ -257,12 +267,20 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
   if (ENABLE_SEGMENTATION_GROUNDING) {
     setJobStage(job.id, 'segmenting');
     const segmentStartedAt = Date.now();
-    const segmentation = await segmentJewelry(ai, cleanBase64, mimeType);
-    apiCallCount++;
-    estimatedCostUsd += COST_PER_CALL_USD[MODEL_SEGMENT] || 0;
+    // Deduped by image hash: a "regenerate" or a requeue on the same photo
+    // re-uses the outline instead of paying for it again.
+    const { result: segmentation, cacheHit } = await cachedSegmentation(
+      cleanBase64,
+      () => segmentJewelry(ai, cleanBase64, mimeType)
+    );
+    if (!cacheHit) {
+      apiCallCount++;
+      estimatedCostUsd += COST_PER_CALL_USD[MODEL_SEGMENT] || 0;
+    }
     logEvent('pipeline.segmentation', {
       requestId,
       found: Boolean(segmentation),
+      cacheHit,
       latencyMs: Date.now() - segmentStartedAt,
     });
     if (segmentation) segmentationBlock = buildSegmentationBlock(segmentation);
@@ -273,7 +291,7 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
   try {
     setJobStage(job.id, 'enhancing');
     enhanced = await withTransientRetry(
-      () => enhanceImage(ai, MODEL_ENHANCE_DEFAULT, cleanBase64, mimeType, promptTemplate + contextBlock + segmentationBlock),
+      () => enhanceImage(ai, MODEL_ENHANCE_DEFAULT, cleanBase64, mimeType, promptTemplate + contextBlock + segmentationBlock + framingBlock, aspectRatio),
       3,
       deadline,
       recordAttempt('enhance', MODEL_ENHANCE_DEFAULT)
@@ -322,11 +340,40 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
     overallPass: audit.overallPass,
     reason: audit.reason,
     checklist: audit.checklist,
+    // Surfaced so a model that contradicts its own checklist is visible in the
+    // data rather than silently overridden.
+    modelClaimedPass: audit.modelClaimedPass,
+    verdictDisagreed: audit.verdictDisagreed,
   });
 
-  // --- Escalation: one retry on the stronger model, fed the failure reason ---
+  // --- Classified escalation (spec §5 Stage 3) ---
+  //
+  // Not every audit failure is worth paying a stronger model for. Failures of
+  // the source photo (blurry, cropped) or of design fidelity (a stone was
+  // invented) are not capability problems: a better model does not un-blur a
+  // photo, and one that already hallucinated a stone is not less likely to do
+  // it again for being more expensive. Escalating on exactly those fields
+  // measured WORSE than the default tier on real production data.
+  //
+  // So: classify first, and only spend on the failures a stronger pass can
+  // actually fix.
   if (!audit.overallPass) {
-    const correctivePrompt = `${promptTemplate}${contextBlock}${segmentationBlock}
+    const decision = classifyAuditFailure(audit.checklist);
+
+    if (!decision.escalate) {
+      logEvent('pipeline.escalation_skipped', {
+        requestId,
+        reason: audit.reason,
+        failedChecks: decision.failedUnfixable,
+        why: 'source-photo or design-fidelity failure - a stronger model cannot fix this',
+      });
+      finish('needs_reshoot', { reason: audit.reason, checklist: audit.checklist, attemptCount });
+      setProductStatus(product.id, 'needs_reshoot');
+      completeJob(job.id, 'needs_reshoot', { reason: audit.reason, escalated: false });
+      return;
+    }
+
+    const correctivePrompt = `${promptTemplate}${contextBlock}${segmentationBlock}${framingBlock}
 
 IMPORTANT: A previous attempt at this edit failed quality review for this specific reason:
 "${audit.reason}"
@@ -335,6 +382,7 @@ Correct this specific issue while still following every rule above.`;
     logEvent('pipeline.escalated', {
       requestId,
       reason: audit.reason,
+      failedChecks: decision.failedFixable,
       fromModel: MODEL_ENHANCE_DEFAULT,
       toModel: MODEL_ENHANCE_ESCALATED,
     });
@@ -342,7 +390,7 @@ Correct this specific issue while still following every rule above.`;
     try {
       setJobStage(job.id, 'escalating');
       const retryEnhanced = await withTransientRetry(
-        () => enhanceImage(ai, MODEL_ENHANCE_ESCALATED, cleanBase64, mimeType, correctivePrompt),
+        () => enhanceImage(ai, MODEL_ENHANCE_ESCALATED, cleanBase64, mimeType, correctivePrompt, aspectRatio),
         3,
         deadline,
         recordAttempt('enhance-escalated', MODEL_ENHANCE_ESCALATED)
@@ -351,18 +399,23 @@ Correct this specific issue while still following every rule above.`;
 
       if (retryEnhanced) {
         setJobStage(job.id, 'auditing');
+        // Stronger grader for the re-audit: this is the last gate before a
+        // photo ships, and both passes have already been paid for.
         const retryAudit = await withTransientRetry(
-          () => auditOutput(ai, cleanBase64, mimeType, retryEnhanced.imageBase64, retryEnhanced.mimeType, auditContext),
+          () => auditOutput(ai, cleanBase64, mimeType, retryEnhanced.imageBase64, retryEnhanced.mimeType, auditContext, MODEL_AUDIT_STRONG),
           3,
           deadline,
-          recordAttempt('audit', MODEL_AUDIT)
+          recordAttempt('audit-strong', MODEL_AUDIT_STRONG)
         );
         logEvent('pipeline.audit_verdict', {
           requestId,
           attempt: 2,
+          auditModel: MODEL_AUDIT_STRONG,
           overallPass: retryAudit.overallPass,
           reason: retryAudit.reason,
           checklist: retryAudit.checklist,
+          modelClaimedPass: retryAudit.modelClaimedPass,
+          verdictDisagreed: retryAudit.verdictDisagreed,
         });
 
         if (retryAudit.overallPass) {
