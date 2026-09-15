@@ -163,12 +163,8 @@ On Windows, use PowerShell with the same `ssh -i ...` command, or PuTTY.
 Then run the setup script:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/paymentrlj-bit/RL-Jewels-Photo-Studio/claude/lucid-hypatia-webju3/deploy/setup.sh | bash
+curl -fsSL https://raw.githubusercontent.com/paymentrlj-bit/RL-Jewels-Photo-Studio/main/deploy/setup.sh | bash
 ```
-
-> ⚠️ Note the branch in that URL. Right now `main` still holds **v1**, which
-> has no database and no persistence — deploying it would lose photos. Once
-> PR #36 is merged, this becomes the shorter `.../main/deploy/setup.sh`.
 
 It installs Docker, opens the server-side firewall, clones the app, and writes
 a settings file with a strong `SESSION_SECRET` already generated.

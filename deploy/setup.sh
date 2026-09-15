@@ -4,19 +4,17 @@
 #
 # Installs Docker, opens the firewall, and clones the app. Safe to re-run.
 #
-#   curl -fsSL https://raw.githubusercontent.com/paymentrlj-bit/RL-Jewels-Photo-Studio/claude/lucid-hypatia-webju3/deploy/setup.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/paymentrlj-bit/RL-Jewels-Photo-Studio/main/deploy/setup.sh | bash
 #
 # or, if you have already cloned:  bash deploy/setup.sh
 #
-# NOTE ON THE BRANCH: this defaults to the branch carrying v2, because at the
-# time of writing `main` still holds v1 - which has no database, no queue and
-# no persistence, and would quietly lose every photo. Once the pull request is
-# merged, change BRANCH below to `main` (or run with BRANCH=main).
+# Override the branch with BRANCH=some-branch if you ever need to deploy
+# something other than main.
 
 set -euo pipefail
 
 REPO_URL="${REPO_URL:-https://github.com/paymentrlj-bit/RL-Jewels-Photo-Studio.git}"
-BRANCH="${BRANCH:-claude/lucid-hypatia-webju3}"
+BRANCH="${BRANCH:-main}"
 APP_DIR="${APP_DIR:-$HOME/rl-studio}"
 
 say() { printf '\n\033[1;33m==> %s\033[0m\n' "$1"; }
