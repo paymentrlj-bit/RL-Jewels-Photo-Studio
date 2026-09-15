@@ -1,4 +1,10 @@
-import { PreflightIssue } from '../types';
+// Owned here rather than in the shared types file: these codes are produced
+// by this module and consumed by whoever calls it, and nothing else needs to
+// know about them.
+export interface PreflightIssue {
+  code: 'blurry' | 'too_dark' | 'too_bright' | 'subject_too_small' | 'flash_fired';
+  message: string;
+}
 
 /**
  * Client-side, zero-cost checks that run before a photo is ever sent to Gemini.

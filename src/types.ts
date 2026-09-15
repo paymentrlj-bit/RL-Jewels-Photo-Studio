@@ -1,760 +1,138 @@
-export type GoldPurity = '18kt' | '22kt' | '24kt';
+// Client-side types, mirroring what the API actually returns.
+//
+// Much smaller than v1's: most of what lived here was UI state for a
+// single in-flight product held in React. The server owns that state now,
+// so these are mostly response shapes.
 
+export type GoldPurity = '18kt' | '22kt' | '24kt';
 export type ProductGender = "women's" | "men's" | 'unisex' | "kids'";
 
-// One photo per product: staff capture a single "decent" counter shot and the
-// AI pipeline does the rest (straighten, clean background, correct color).
-export type PhotoStatus =
-  | 'idle'
+export type ProductStatus =
+  | 'draft'
+  | 'queued'
   | 'processing'
+  | 'awaiting_review'
   | 'approved'
-  | 'needs_reshoot' // the photo itself is the problem (blurry/cropped/tag overlap) - staff must retake
-  | 'failed'; // a transient network/API failure - safe to just retry, no retake needed
+  | 'exported'
+  | 'needs_reshoot'
+  | 'failed';
 
-export type ReviewDecision = 'pending' | 'approved' | 'regenerating' | 'discarded';
+export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'needs_reshoot';
 
-export interface PreflightIssue {
-  code: 'blurry' | 'too_dark' | 'too_bright' | 'subject_too_small' | 'flash_fired';
-  message: string;
+export interface JobSummary {
+  id: string;
+  status: JobStatus;
+  stage: string;
+  attempts: number;
+  maxAttempts: number;
+  lastError: string;
 }
 
-export interface PhotoItem {
+export interface Product {
   id: string;
-  title: string;
-  originalImage: string; // base64 data URL
-  mimeType: string;
-  status: PhotoStatus;
-  reshootReason?: string;
-  failureReason?: string;
-  // Short, sanitized underlying error string from the server for a 'failed'
-  // status - shown to admins so an incident is diagnosable without server log
-  // access, which isn't available on most hosting dashboards.
-  debugDetail?: string;
-  confidenceScore?: number;
-  processedImage?: string; // base64 data URL
-  reviewDecision: ReviewDecision;
-  processedAt?: string;
-  modelUsed?: string;
-  attemptCount?: number;
-  // True only for the "Load Sample" demo mockup - never sent to the Gemini API,
-  // so testing/demoing the flow never costs a real API call.
-  isSample?: boolean;
-  // Live stage name streamed from the server while status is 'processing' -
-  // drives the real progress bar instead of a plain spinner.
-  processingStage?: ProcessingStage;
-}
-
-export type ProcessingStage = 'segmenting' | 'enhancing' | 'auditing' | 'escalating';
-
-export interface ProductRecord {
-  id: string;
-  sku: string; // CPC Number (e.g. RLJ-RN-8821)
-  cpc: string; // Primary Counter Product Code
+  batchId: string | null;
+  cpc: string;
+  catalogProductId: string | null;
   name: string;
-  description?: string;
-  seoMetaTitle?: string;
-  seoMetaDescription?: string;
-  seoKeywords?: string;
-  imageAltText?: string;
-  urlSlug?: string;
+  description: string;
+  seoMetaTitle: string;
+  seoMetaDescription: string;
+  seoKeywords: string;
+  imageAltText: string;
+  urlSlug: string;
   itemType: string;
-  purity: GoldPurity;
-  gender: ProductGender;
-  size?: string;
+  purity: string;
+  gender: string;
+  size: string;
   grossWeightGrams: string;
   otherWeightGrams: string;
   netWeightGrams: string;
-  weightGrams?: string; // Legacy fallback
-  staffName: string;
+  status: ProductStatus;
+  reviewNote: string;
+  auditChecklist: Record<string, boolean> | null;
+  auditReason: string;
+  modelUsed: string;
+  attemptCount: number;
+  estimatedCostUsd: number;
   createdAt: string;
-  photo: PhotoItem;
-  overallStatus: 'draft' | 'processing' | 'reviewed' | 'exported';
+  approvedAt: string | null;
+  staffName: string;
+  originalPhotoId: string | null;
+  processedPhotoId: string | null;
+  job: JobSummary | null;
 }
 
-export interface UserSession {
+export interface Batch {
+  id: string;
+  name: string;
+  createdBy: string;
+  createdAt: string;
+  closedAt: string | null;
+  productCount?: number;
+}
+
+export interface SessionUser {
+  id: string;
   username: string;
+  displayName: string;
   isAdmin: boolean;
-  loggedInAt: string;
 }
 
-export const ITEM_TYPE_SUGGESTIONS = [
-  'Abhishekpatra',
-  'Agarbati Stand',
-  'Akda',
-  'Akshada',
-  'Alloy',
-  'Alloy Rornaments',
-  'Amethyst',
-  'Anguthi Gents',
-  'Anguthi Ladies',
-  'Anguthi Pure',
-  'Annapurnaji',
-  'Antic Har Set',
-  'Ardhpaan',
-  'Ashtapailu Mala',
-  'Attar Dani',
-  'Baccha Anguthi',
-  'Baccha Kada',
-  'Baccha Kada Pure',
-  'Baccha Patli Pure',
-  'Baccha Payal',
-  'Baccha Vala Pure',
-  'Baccha Yeli Pure',
-  'Bacha Kada',
-  'Bachcha Anguthi Pure',
-  'Badam',
-  'Bajuband',
-  'Bajubandh',
-  'Bakuli Har',
-  'Balaji',
-  'Balaji Frames',
-  'Bali',
-  'Balkrishna',
-  'Bangal',
-  'Bangels',
-  'Bangle',
-  'Bangle Pure',
-  'Bangle Silvers',
-  'Bangles',
-  'Bangles 92.50',
-  'Bangles Fancy',
-  'Bangles Machine',
-  'Banu Nath',
-  'Basuri',
-  'Baul',
-  'Baul Fancy',
-  'Bauti',
-  'Bedi',
-  'Bela',
-  'Belpaan',
-  'Bhangsal',
-  'Bhanu Nath',
-  'Bichudi Silver',
-  'Bindi',
-  'Blue Sapphire',
-  'Blue Sapphire Stone',
-  'Box Chain',
-  'Bracelate G 92.50',
-  'Bracelate L 92.50',
-  'Bracelate Silver',
-  'Bracelet Baby',
-  'Bracelet Fancy Silver',
-  'Bracelet Gents',
-  'Bracelet Ladies',
-  'Braclet',
-  'Braclet Gents',
-  'Braclet Ladies',
-  'Broad Meena Payal',
-  'Broad Plain Payal',
-  'Broad Stone Payal',
-  'Bugadi',
-  'Bunch Pote Long',
-  'Bunch Pote Short',
-  'Casting Chain',
-  'Cats Eye',
-  'Cats Eye Stone',
-  'Chaap Nath',
-  'Chain',
-  'Chain 92.50',
-  'Chain Fancy',
-  'Chain Machine',
-  'Chain Padak',
-  'Chain Padak Pure',
-  'Chain Pure',
-  'Chandi Tukda',
-  'Chandrakanta',
-  'Channi',
-  'Chap',
-  'Chap Nath',
-  'Chapalahar Fancy',
-  'Chape',
-  'Chape Fancy',
-  'Chape Pure',
-  'Chaplahar',
-  'Chhatra',
-  'Chik Bijasan',
-  'Chiplya',
-  'Chittang',
-  'Chokar Set',
-  'Coin Silver',
-  'Coral',
-  'Coral Stone',
-  'Cristal',
-  'Crystal Figure Stone',
-  'Crystal Mala',
-  'Cuban Chain',
-  'Cutwork Bangles',
-  'Cutwork Patli',
-  'Dabbi',
-  'Dasarapan',
-  'Datkorne',
-  'Dattaguru',
-  'Deeva',
-  'Designer Chain',
-  'Designer Set',
-  'Dev Tak',
-  'Devtak',
-  'Dhal',
-  'Dhanvantari',
-  'Diamond',
-  'Diamond Loose Ornaments 75',
-  'Diamond Stone',
-  'Dorla',
-  'Dull Harset',
-  'Durgamata',
-  'Durwamal',
-  'Earing',
-  'Earings',
-  'Earrings 92.50',
-  'Ekdani',
-  'Emerald',
-  'Emerald Stone',
-  'Facny Mohanmala',
-  'Fancy Anguthi',
-  'Fancy Bali',
-  'Fancy Bracelate',
-  'Fancy Chain',
-  'Fancy Chain & Anguthi',
-  'Fancy Chain Pote Short',
-  'Fancy Designer Pote Long',
-  'Fancy Designer Pote Short',
-  'Fancy Earrings',
-  'Fancy Gold Nath',
-  'Fancy Harset',
-  'Fancy Jewellery',
-  'Fancy Kada',
-  'Fancy Kandora',
-  'Fancy Kandora Baccha',
-  'Fancy Long Set',
-  'Fancy Meena Kandora',
-  'Fancy Nano Pote Long',
-  'Fancy Nano Pote Short',
-  'Fancy Pinjra Long Pote',
-  'Fancy Plain Kandora',
-  'Fancy Puneri',
-  'Fancy Short Tukda Pote',
-  'Fancy Stone Nath',
-  'Fancy Tukda Pote Long',
-  'Fancy Vertical Mala',
-  'Fancy Zumka',
-  'Ferva',
-  'Firki',
-  'Fish',
-  'Flower Pot',
-  'Fmg Antique Harset',
-  'Fmg Bachha Bangles',
-  'Fmg Bajuband',
-  'Fmg Bangles',
-  'Fmg Bombay Harset',
-  'Fmg Bunch Pote',
-  'Fmg Chain Bracelet',
-  'Fmg Chain Pote',
-  'Fmg Chapalahar',
-  'Fmg Choker Harset',
-  'Fmg Cnc Bangles',
-  'Fmg Designer Pote',
-  'Fmg Diamond Kada',
-  'Fmg Earrings',
-  'Fmg Fancy Bangles',
-  'Fmg Fancy Chain',
-  'Fmg Fancy Harset',
-  'Fmg Fancy Tops',
-  'Fmg Frames',
-  'Fmg Gents Bracelet',
-  'Fmg Halfround Bangles',
-  'Fmg Kanas Bangles',
-  'Fmg Kandora',
-  'Fmg Kansakhali',
-  'Fmg Kolkata Bangles',
-  'Fmg Ladies Bracelet',
-  'Fmg Ladies Ring',
-  'Fmg Long Pendant Harset',
-  'Fmg Long Ranihar',
-  'Fmg Machine Bangles',
-  'Fmg Mohanmala',
-  'Fmg Nano Pote',
-  'Fmg Patli Bangles',
-  'Fmg Patti Pote',
-  'Fmg Pendant Set',
-  'Fmg Plain Bangles',
-  'Fmg Plain Harset',
-  'Fmg Plain Kada',
-  'Fmg Plaster Bangles',
-  'Fmg Pote',
-  'Fmg Pote Padak',
-  'Fmg Set',
-  'Fmg Short Chain Pote',
-  'Fmg Short Fancy Pote',
-  'Fmg Short Patti Pote',
-  'Fmg Short Ranihar',
-  'Fmg Step Ranihar',
-  'Fmg Stone Harset',
-  'Fmg Suidhaga',
-  'Fmg Toda Bangles',
-  'Fmg Tops',
-  'Fmg Traditional Harset',
-  'Fmg Tukda Pote',
-  'Fmg Turkey Set',
-  'Fmg Turkish Pote',
-  'Fmg Zumka',
-  'Frame',
-  'Fuli',
-  'Fulpatra',
-  'Fultoda',
-  'Fultoda Baccha',
-  'Gada',
-  'Gahu Mani Pure',
-  'Gahu Padak Pure',
-  'Gahupadak',
-  'Gahupatli Fancy',
-  'Gahutoda Fancy',
-  'Gaivasaru',
-  'Gajere',
-  'Gajrabali',
-  'Ganeshji',
-  'Ganeshji Frames',
-  'Gay Vasaru Frames',
-  'Gents Bali',
-  'Ghantee',
-  'Ghilodi',
-  'Ghungaru Vala',
-  'Glass',
-  'Glass Eaching',
-  'Gof Chain',
-  'Gofe Pure',
-  'Gokarn',
-  'Gokhroo',
-  'Gold Loose Ornament',
-  'Gold Mani',
-  'Gold Ornaments 14ct',
-  'Gold Ornaments-12ct',
-  'Gold Ornaments-16ct',
-  'Gold Ornaments-18ct',
-  'Gold Ornaments-22ct',
-  'Gold Ornaments-24ct',
-  'Gold Plated Frems',
-  'Gold Rornament',
-  'Golden Frames',
-  'Goldmani',
-  'Gote Pure',
-  'Goth',
-  'Gplated Frem',
-  'Gplatedfrem',
-  'Gulab Dani',
-  'Haathi',
-  'Har',
-  'Har Chain',
-  'Har Set',
-  'Harchain',
-  'Harset',
-  'Hessonite',
-  'Hessonite Stone',
-  'Hollo Chain',
-  'Hollo Murti',
-  'Huk',
-  'It Kada Bracelet',
-  'It. Bracelet',
-  'It. Chain',
-  'It. Hollow Chain',
-  'It. Pendant Set',
-  'It. Ring',
-  'It. Stiff Chain',
-  'It.earring',
-  'It.necklace Set',
-  'Italian Chain',
-  'Jaanva',
-  'Jaddandi',
-  'Jadi Dandi',
-  'Janwa',
-  'Jaswand Phul',
-  'Jewellery Imitation',
-  'Jibhi',
-  'Jondhali Mala',
-  'Jug',
-  'Kada',
-  'Kada 92.50',
-  'Kada Baby',
-  'Kada Flexible',
-  'Kada Sardar',
-  'Kada Sardar Silver',
-  'Kadi',
-  'Kadla',
-  'Kaju',
-  'Kalash',
-  'Kalash Eaching',
-  'Kalkatta Bangles',
-  'Kalkatta Patli',
-  'Kalkatta Set',
-  'Kanas Bangles',
-  'Kanas Patli',
-  'Kanchain Pure',
-  'Kangan Fancy',
-  'Kansakali',
-  'Kansakli Kadi',
-  'Karanda',
-  'Karandaplate',
-  'Karda',
-  'Karlavel',
-  'Kasav',
-  'Katyar',
-  'Kayamat Chain',
-  'Keli',
-  'Kelipaan',
-  'Kevda',
-  'Kharik',
-  'Khutalya',
-  'Kolhapuri Nath',
-  'Kolhapuri Stone Nath',
-  'Kuber Yantra',
-  'Kuberji',
-  'Kuhiri',
-  'Kundan Jewellery',
-  'Kundan Polaki Earring',
-  'Kundan Polaki Necklace',
-  'Kundan Tops',
-  'Laddoo',
-  'Laghter',
-  'Latkan',
-  'Laxmi Ganesh Frames',
-  'Laxmi Har',
-  'Laxmiji',
-  'Laxmiji Frames',
-  'Laxminarayanji',
-  'Lota',
-  'Lota Eaching',
-  'Lotibhandi',
-  'Lucky Stone',
-  'Lucky Stones',
-  'Machine Bangles',
-  'Maltya',
-  'Manchine Patli',
-  'Mangalgaur',
-  'Mangalpote',
-  'Mangalsutra',
-  'Mani Ashtapailu',
-  'Mani Gol',
-  'Mani Machine',
-  'Mani Mangalsutra',
-  'Mani Mohan',
-  'Mani Peti',
-  'Mani Pipe',
-  'Mantramandir',
-  'Meena Firki',
-  'Meena Taar',
-  'Mehendi Silver',
-  'Mekhala Fancy',
-  'Modak',
-  'Mohan Mal',
-  'Moti Anguthi',
-  'Moti Pendant',
-  'Motikudi',
-  'Murti Mukut',
-  'N Set 92.50',
-  'Naag',
-  'Nag',
-  'Nath',
-  'Nath Pure',
-  'Natth',
-  'Navgrah',
-  'Navkar Mantra Frames',
-  'Necklace',
-  'Necklace Set',
-  'Necklace Set 92.50',
-  'Neckles Earing',
-  'Nilam Mala',
-  'Nose Pin',
-  'Nosepin',
-  'Nosepin & Nath',
-  'Om Padak Pure',
-  'Om Pendant',
-  'Opel Stone',
-  'P Set 92.50',
-  'Paan',
-  'Padak',
-  'Paduka',
-  'Pali',
-  'Palna',
-  'Panchali',
-  'Panchapatra',
-  'Pancharti',
-  'Pandan',
-  'Pankhya',
-  'Panti',
-  'Panti Pure',
-  'Para Figure Stone',
-  'Parshwanathji',
-  'Patki Pure',
-  'Patkya',
-  'Patli',
-  'Patli Machine',
-  'Patli Pure',
-  'Patti',
-  'Patti Pote Long',
-  'Patti Pote Short',
-  'Payal 92.50',
-  'Payal Fancy',
-  'Payal Hook',
-  'Payal Sadi',
-  'Payal Silver',
-  'Peacock Nath',
-  'Pearl',
-  'Pearl Stone',
-  'Pechava Gol',
-  'Pelachya Ringa',
-  'Pendant',
-  'Pendant 92.50',
-  'Pendant Earing',
-  'Pendant Gents',
-  'Pendant Ladies',
-  'Pendant Meena Ranihar',
-  'Pendant Rani Har',
-  'Pendant Set',
-  'Pendant Set Diamond',
-  'Peshvai Bali',
-  'Phul',
-  'Pimpalpan',
-  'Plain',
-  'Plain Anguthi',
-  'Plain Firki',
-  'Plain Nath',
-  'Plain Taar',
-  'Plate',
-  'Plate Eaching',
-  'Plati Chain',
-  'Platinum',
-  'Platinum Chain',
-  'Platinum Ornament',
-  'Platinum Ring',
-  'Platinum Ring G',
-  'Platinum Ring Gents',
-  'Platinum Ring Ladies',
-  'Platinum Rornament',
-  'Pooja Naral',
-  'Pote',
-  'Pote 18ct',
-  'Pote 92.50',
-  'Pote Antique',
-  'Pote Black Beads',
-  'Pote Braclet',
-  'Pote Chain',
-  'Pote Designer',
-  'Pote Nano',
-  'Pote Patti',
-  'Pote Taramandal',
-  'Precious Stone Mala',
-  'Precious Stones',
-  'Puja Samai',
-  'Puja Thali',
-  'Puneri',
-  'Puneri Nath',
-  'Punerii',
-  'Pure',
-  'Pure Kansakali',
-  'Pure Ornament',
-  'Putali',
-  'Putali Pure',
-  'Radhakrishna Frames',
-  'Rakhi',
-  'Ram Darbar',
-  'Ram Darbar Frames',
-  'Ram Pan',
-  'Ram Pan Pure',
-  'Rani Har',
-  'Rassi Chain',
-  'Rath',
-  'Red Onex',
-  'Renukamata',
-  'Ring',
-  'Ring G',
-  'Ring Gents 92.50',
-  'Ring Hujur',
-  'Ring Huzur',
-  'Ring L',
-  'Ring Ladies 92.50',
-  'Ringa',
-  'Ringa U Shape',
-  'Rose Gold Chain',
-  'Ruby',
-  'Ruby Stone',
-  'Ruby(manik) Stone',
-  'Rudrakshya Mala',
-  'S Hook',
-  'S Huk',
-  'S Huk Silver',
-  'Saibaba',
-  'Saniya Bali',
-  'Santoshimata',
-  'Saptshrungi',
-  'Saraswatiji',
-  'Sarswatiji',
-  'Sarswatiji Frame',
-  'Sati',
-  'Sati Pure',
-  'Savat',
-  'Savat Pure',
-  'Semi Precious Stones',
-  'Set',
-  'Set Earing',
-  'Set Long',
-  'Shamipatra',
-  'Shankarni',
-  'Shimpla',
-  'Ship',
-  'Shivpind',
-  'Short Ranihar',
-  'Shree Yantra',
-  'Shreeyantra',
-  'Shri Balaji',
-  'Shri Balkrishana',
-  'Shri Datta',
-  'Shri Gajanan',
-  'Shri Ganeshji',
-  'Shri Mahavir',
-  'Shri Om',
-  'Shri Radha Krushna',
-  'Shri Radhakrishana',
-  'Shri Radhakrusha',
-  'Shri Radhakrusnaji',
-  'Shri Ramdarbar',
-  'Shri Saibaba',
-  'Shri Shankarji',
-  'Shri Shrinathji',
-  'Shri Trimurti',
-  'Shriambamaa',
-  'Shriashtvinayak',
-  'Shribalaji',
-  'Shribuddh',
-  'Shribuddha',
-  'Shridurgadevi',
-  'Shriganeshji',
-  'Shrihanuman',
-  'Shrikrishnaji',
-  'Shrilaxmiji',
-  'Shrimahavir',
-  'Shriparshwanath',
-  'Shriparshwnath',
-  'Shriramdev',
-  'Shritrimurti',
-  'Sihasan',
-  'Sikka',
-  'Sikka Patti',
-  'Silver',
-  'Silver Coin',
-  'Silver Loose Ornament',
-  'Silver Loose Ornaments',
-  'Silver Orn 24ct',
-  'Silver Patti',
-  'Silver Patti Sikka',
-  'Silver Rornament',
-  'Silver.patti',
-  'Singapore Tops',
-  'Snake Chain',
-  'Spoon',
-  'Step Rani Har',
-  'Sterling Silver',
-  'Stone',
-  'Stone Anguthi',
-  'Stone Bugadi',
-  'Stone Firki',
-  'Stone Harset',
-  'Stone Nath',
-  'Stone Nosepin Naka (tar)',
-  'Stone Nosepin Naka(firki)',
-  'Stone Nosepin Star (firki)',
-  'Stone Nosepin Star (tar)',
-  'Stone Nosepin Vaati (firki)',
-  'Stone Nosepin Vaati (tar)',
-  'Stone Pendant',
-  'Stone Taar',
-  'Stones',
-  'Suidhaga',
-  'Supari',
-  'Suryapratima',
-  'Swami Samarth Frames',
-  'Swamisamarth',
-  'Swastik Paan',
-  'Swastik Patti',
-  'Swastikpatti',
-  'Tabak',
-  'Tabkadi',
-  'Talwar',
-  'Tamhan',
-  'Tamhan Eaching',
-  'Tanmaniya',
-  'Tar',
-  'Tendulkar Chain',
-  'Thali Eaching',
-  'Thali Plain',
-  'Thumb Anguthi',
-  'Thushi',
-  'Tilak',
-  'Toda',
-  'Tops',
-  'Tops 92.50',
-  'Tops Kadi',
-  'Tops Stone',
-  'Toranmal',
-  'Tourmaline Kundan Necklace',
-  'Tourmaline Kundan Ring',
-  'Traditional Long Set',
-  'Tray',
-  'Trimurti Frames',
-  'Trimurti(lgs)',
-  'Trishul',
-  'Tukdams',
-  'Tukdashort',
-  'Tuljabhawani',
-  'Tulshi Mala',
-  'Tulsi Paan',
-  'Turkish Set',
-  'Turmaline Kundan Bracelet',
-  'Turmaline Kundan Earring',
-  'Turmaline Kundan Ring',
-  'Turmulin',
-  'U Ad Set',
-  'U Adbangals',
-  'U Akada',
-  'U Anguti',
-  'U Bangals',
-  'U Chain',
-  'U Earing',
-  'U Ferva',
-  'U Kada',
-  'U Kada Braclet',
-  'U P Set',
-  'U Patli',
-  'U Pendent',
-  'U Ringa',
-  'U Set Earing',
-  'U Tops',
-  'V Tar',
-  'Vaastupurush',
-  'Vaati',
-  'Vaati Eaching',
-  'Vati',
-  'Vati Fancy',
-  'Vati Plain',
-  'Vati Set',
-  'Vati+shimpla',
-  'Vatimanims',
-  'Vatimanishort',
-  'Vedha',
-  'Veldoda',
-  'Vertical Mala',
-  'Virodya Pure',
-  'Watch',
-  'Yeli Fit Kadi',
-  'Yeli Sadi',
-  'Yellow Saphire Stone',
-  'Yellow Sapphire',
-  'Zumka',
-  'Zumka Kadi',
-] as const;
+export interface CpcMasterRecord {
+  productId: string;
+  styleName: string;
+  sizeName: string;
+  designName: string;
+  groupName: string;
+  purity: string;
+  sellByPiece: string;
+  lotCount: string;
+}
 
-export const STAFF_MEMBERS = [
-  'Rahul Sharma (Counter 1)',
-  'Priya Patel (Counter 2)',
-  'Anand Verma (Counter 3)',
-  'Sunita Rao (Manager)',
-  'Counter Staff (Default)'
-];
+export interface CpcLookupResult {
+  matchType: 'certain' | 'guess' | 'none';
+  cpcNumber: string;
+  productId: string | null;
+  record: CpcMasterRecord | null;
+  normalizedPurity: GoldPurity | null;
+  genderGuess: ProductGender | null;
+  previousShoots: Product[];
+}
+
+export interface QueueDepth {
+  queued: number;
+  running: number;
+  failed: number;
+}
+
+export interface HealthFeatures {
+  ai: boolean;
+  driveExport: boolean;
+  studioCamera: boolean;
+  axiomMirror: boolean;
+}
+
+// Human-readable labels for the audit checklist keys the server returns.
+// Keys must match AUDIT_CHECKS in server/ai/operations.ts.
+export const AUDIT_CHECK_LABELS: Record<string, string> = {
+  sharpFocus: 'Sharp focus',
+  notCropped: 'Nothing cropped',
+  backgroundCleanWhite: 'Clean white background',
+  noBlownHighlights: 'No blown highlights',
+  neutralWhiteBalance: 'Neutral white balance',
+  colorConsistentAcrossSurface: 'Even colour across the piece',
+  clearlyIdentifiableCategory: 'Clearly identifiable',
+  matchesOriginalDesign: 'Matches the real design',
+  naturalDropPhysics: 'Natural drape and drop',
+};
+
+export const STATUS_LABELS: Record<ProductStatus, string> = {
+  draft: 'Draft',
+  queued: 'Queued',
+  processing: 'Processing',
+  awaiting_review: 'Ready to review',
+  approved: 'Approved',
+  exported: 'Exported',
+  needs_reshoot: 'Needs reshoot',
+  failed: 'Failed',
+};

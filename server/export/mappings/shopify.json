@@ -1,0 +1,23 @@
+{
+  "id": "shopify",
+  "label": "Shopify product import",
+  "description": "Shopify's standard product CSV headers. Included as a worked example of a second mapping - it is NOT wired to any live store. Price and inventory columns are left blank on purpose: this app does not track either, and Shopify accepts a product row without them.",
+  "columns": [
+    { "header": "Handle", "field": "urlSlug" },
+    { "header": "Title", "field": "name" },
+    { "header": "Body (HTML)", "field": "description" },
+    { "header": "Vendor", "const": "RL Jewels" },
+    { "header": "Type", "field": "itemType" },
+    { "header": "Tags", "field": "metaKeywords" },
+    { "header": "Published", "const": "FALSE" },
+    { "header": "Option1 Name", "const": "Size" },
+    { "header": "Option1 Value", "field": "size" },
+    { "header": "Variant SKU", "field": "cpc" },
+    { "header": "Variant Grams", "field": "netWeight" },
+    { "header": "Variant Inventory Qty", "const": "1" },
+    { "header": "Image Src", "field": "photoFilename" },
+    { "header": "Image Alt Text", "field": "imageAltText" },
+    { "header": "SEO Title", "field": "metaTitle" },
+    { "header": "SEO Description", "field": "metaDescription" }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "id": "odoo",
+  "label": "Odoo (website_sale)",
+  "description": "The exact column set v1 exported. Headers match Odoo's website_sale SEO fields (website_meta_title, website_meta_description, website_meta_keywords) so they can be mapped directly on import. Kept byte-identical to v1 so nothing already imported into an Odoo instance breaks - but note that nobody has confirmed the store actually runs Odoo. Confirm before relying on this.",
+  "columns": [
+    { "header": "CPC", "field": "cpc" },
+    { "header": "product_name", "field": "name" },
+    { "header": "product_description", "field": "description" },
+    { "header": "website_meta_title", "field": "metaTitle" },
+    { "header": "website_meta_description", "field": "metaDescription" },
+    { "header": "website_meta_keywords", "field": "metaKeywords" },
+    { "header": "image_alt_text", "field": "imageAltText" },
+    { "header": "suggested_url_slug", "field": "urlSlug" },
+    { "header": "item_type", "field": "itemType" },
+    { "header": "gold_purity", "field": "purity" },
+    { "header": "gender_category", "field": "gender" },
+    { "header": "size", "field": "size" },
+    { "header": "gross_weight_grams", "field": "grossWeight" },
+    { "header": "other_weight_grams", "field": "otherWeight" },
+    { "header": "net_weight_grams", "field": "netWeight" },
+    { "header": "photo_filename", "field": "photoFilename" },
+    { "header": "staff_member", "field": "staffName" },
+    { "header": "overall_status", "field": "status" },
+    { "header": "created_at", "field": "createdAt" }
+  ]
+}
