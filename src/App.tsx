@@ -125,13 +125,13 @@ export default function App() {
           </div>
         </div>
 
-        <nav className="mx-auto flex max-w-7xl gap-1 px-4 pb-2">
+        <nav className="mx-auto flex max-w-7xl gap-1 overflow-x-auto px-4 pb-2">
           {tabs.filter((t) => !t.adminOnly || user.isAdmin).map(({ key, label, icon: Icon, badge }) => (
             <button
               key={key}
               type="button"
               onClick={() => setTab(key)}
-              className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+              className={`flex shrink-0 items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
                 tab === key ? 'bg-stone-900 text-white' : 'text-stone-600 hover:bg-stone-100'
               }`}
             >

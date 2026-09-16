@@ -251,38 +251,43 @@ const StaffPanel: React.FC = () => {
       </section>
 
       <section className="overflow-hidden rounded-2xl border border-stone-200 bg-white">
-        <table className="w-full text-sm">
-          <thead className="bg-stone-50 text-left text-xs uppercase tracking-wide text-stone-500">
-            <tr>
-              <th className="px-4 py-3">Name</th><th className="px-4 py-3">Role</th>
-              <th className="px-4 py-3">Last signed in</th><th className="px-4 py-3" />
-            </tr>
-          </thead>
-          <tbody>
-            {users.map((user) => (
-              <tr key={user.id} className="border-t border-stone-100">
-                <td className="px-4 py-3">
-                  <span className="font-medium text-stone-900">{user.displayName}</span>
-                  <span className="ml-2 text-xs text-stone-500">{user.username}</span>
-                  {!user.isActive && <span className="ml-2 rounded-full bg-stone-100 px-2 py-0.5 text-xs text-stone-600">disabled</span>}
-                </td>
-                <td className="px-4 py-3 text-stone-600">{user.isAdmin ? 'Admin' : 'Staff'}</td>
-                <td className="px-4 py-3 text-stone-500">
-                  {user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleString('en-IN') : 'Never'}
-                </td>
-                <td className="px-4 py-3 text-right">
-                  <button
-                    type="button"
-                    onClick={() => toggleActive(user)}
-                    className="text-xs text-stone-600 underline hover:text-stone-900"
-                  >
-                    {user.isActive ? 'Disable' : 'Enable'}
-                  </button>
-                </td>
+        {/* min-w forces horizontal scroll on a phone-width screen instead of
+            clipping columns - the outer section's overflow-hidden is only for
+            the rounded corners and must not be what contains this table. */}
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[560px] text-sm">
+            <thead className="bg-stone-50 text-left text-xs uppercase tracking-wide text-stone-500">
+              <tr>
+                <th className="px-4 py-3">Name</th><th className="px-4 py-3">Role</th>
+                <th className="px-4 py-3">Last signed in</th><th className="px-4 py-3" />
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {users.map((user) => (
+                <tr key={user.id} className="border-t border-stone-100">
+                  <td className="px-4 py-3">
+                    <span className="font-medium text-stone-900">{user.displayName}</span>
+                    <span className="ml-2 text-xs text-stone-500">{user.username}</span>
+                    {!user.isActive && <span className="ml-2 rounded-full bg-stone-100 px-2 py-0.5 text-xs text-stone-600">disabled</span>}
+                  </td>
+                  <td className="px-4 py-3 text-stone-600">{user.isAdmin ? 'Admin' : 'Staff'}</td>
+                  <td className="px-4 py-3 text-stone-500">
+                    {user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleString('en-IN') : 'Never'}
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <button
+                      type="button"
+                      onClick={() => toggleActive(user)}
+                      className="-my-2 min-h-[44px] px-2 py-2 text-xs text-stone-600 underline hover:text-stone-900"
+                    >
+                      {user.isActive ? 'Disable' : 'Enable'}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </section>
     </div>
   );

@@ -15,7 +15,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Camera, ScanLine, AlertTriangle, CheckCircle2,
-  RotateCcw, Upload, History, Eye,
+  RotateCcw, Video, History, Eye,
 } from 'lucide-react';
 import { api, ApiError } from '../api';
 import { ITEM_TYPE_SUGGESTIONS } from '../itemTypes';
@@ -329,7 +329,7 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent })
                   onClick={() => setCameraOpen(true)}
                   className="flex min-h-[44px] flex-col items-center gap-2 rounded-xl border-2 border-stone-200 px-4 py-6 hover:bg-stone-50"
                 >
-                  <Upload className="w-6 h-6 text-stone-700" />
+                  <Video className="w-6 h-6 text-stone-700" />
                   <span className="text-sm font-medium text-stone-800">Live camera view</span>
                 </button>
               )}

@@ -202,7 +202,7 @@ export const CameraModal: React.FC<CameraModalProps> = ({
             }`}
           >
             <Sparkles className="w-3.5 h-3.5" />
-            <span className="hidden xs:inline">Guide</span>
+            <span>Guide</span>
           </button>
           <button
             onClick={onClose}
