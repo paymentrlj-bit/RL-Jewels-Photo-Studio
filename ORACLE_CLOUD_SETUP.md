@@ -206,6 +206,24 @@ Admin → Staff accounts → create a real account for each person.
 
 ---
 
+## Part 5b — Automatic updates (~1 min, optional but recommended)
+
+Without this, getting a code change live means SSH-ing in and running the
+"Updating later" commands below by hand every time. With it, the server
+checks GitHub for new commits every 10 minutes and redeploys itself the
+moment one lands - no one needs to connect to the server at all.
+
+```bash
+bash ~/rl-studio/deploy/auto-update.sh --install
+```
+
+It only ever pulls from `main` and only ever deploys a fast-forward - nothing
+runs unless a real commit landed, and it never invents or reconciles history
+on the server. Check `~/rl-studio-auto-update.log` if you ever want to see
+what it has deployed and when.
+
+---
+
 ## Part 6 — Backups (~2 min, do not skip)
 
 Everything the store has shot lives in one Docker volume. Schedule a nightly
@@ -230,6 +248,16 @@ There is no other copy of this work.
 
 ## Updating later
 
+If you set up Part 5b, this happens on its own within 10 minutes of a change
+landing on `main` - nothing to do. To force it immediately instead of
+waiting for the next check:
+
+```bash
+bash ~/rl-studio/deploy/auto-update.sh
+```
+
+If you never set up Part 5b, update by hand instead:
+
 ```bash
 cd ~/rl-studio
 git pull
@@ -237,7 +265,7 @@ cd deploy
 sudo docker compose up -d --build
 ```
 
-The data volume is untouched. The database migrates itself on start.
+Either way, the data volume is untouched. The database migrates itself on start.
 
 ---
 
