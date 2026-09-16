@@ -141,7 +141,7 @@ const ReviewCard: React.FC<{
           <button
             type="button"
             onClick={() => setShowChecks((s) => !s)}
-            className="flex items-center gap-1 text-xs text-stone-500 hover:text-stone-800"
+            className="-my-2 flex min-h-[44px] items-center gap-1 py-2 text-xs text-stone-500 hover:text-stone-800"
           >
             {failedChecks.length === 0 ? 'All quality checks passed' : `${failedChecks.length} check(s) flagged`}
             {showChecks ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
@@ -173,21 +173,21 @@ const ReviewCard: React.FC<{
               value={note}
               onChange={(e) => setNote(e.target.value)}
               placeholder="What is wrong with it?"
-              className="w-full rounded-lg border border-stone-300 px-2 py-1.5 text-xs"
+              className="w-full min-h-[44px] rounded-lg border border-stone-300 px-2 py-1.5 text-xs"
             />
             <div className="flex gap-2">
               <button
                 type="button"
                 onClick={() => onReject(note)}
                 disabled={busy}
-                className="flex-1 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-60"
+                className="min-h-[44px] flex-1 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-60"
               >
                 Send for reshoot
               </button>
               <button
                 type="button"
                 onClick={() => setRejecting(false)}
-                className="rounded-lg px-3 py-1.5 text-xs text-stone-600 hover:bg-stone-100"
+                className="min-h-[44px] rounded-lg px-3 py-1.5 text-xs text-stone-600 hover:bg-stone-100"
               >
                 Cancel
               </button>
@@ -199,7 +199,7 @@ const ReviewCard: React.FC<{
               type="button"
               onClick={onApprove}
               disabled={busy}
-              className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
+              className="flex min-h-[44px] flex-1 items-center justify-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
             >
               <CheckCircle2 className="w-4 h-4" /> Approve
             </button>
@@ -207,7 +207,7 @@ const ReviewCard: React.FC<{
               type="button"
               onClick={() => setRejecting(true)}
               disabled={busy}
-              className="rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-700 hover:bg-stone-50 disabled:opacity-60"
+              className="min-h-[44px] rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-700 hover:bg-stone-50 disabled:opacity-60"
             >
               Reshoot
             </button>
@@ -244,7 +244,7 @@ const ProblemRow: React.FC<{ product: Product; busy: boolean; onRequeue: () => v
       type="button"
       onClick={onRequeue}
       disabled={busy}
-      className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-700 hover:bg-stone-50 disabled:opacity-60"
+      className="inline-flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-700 hover:bg-stone-50 disabled:opacity-60"
     >
       <RefreshCw className={`w-4 h-4 ${busy ? 'animate-spin' : ''}`} /> Retry
     </button>
