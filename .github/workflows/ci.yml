@@ -65,4 +65,4 @@ jobs:
       - name: Shellcheck deploy scripts
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
-          shellcheck --severity=warning deploy/setup.sh deploy/backup.sh
+          shellcheck --severity=warning deploy/setup.sh deploy/backup.sh deploy/auto-update.sh
