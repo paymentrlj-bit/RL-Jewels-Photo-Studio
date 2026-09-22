@@ -144,9 +144,13 @@ NEXT, in this order:
   3. Start it:
 
        cd $APP_DIR/deploy
-       sudo docker compose up -d --build
+       sudo docker compose pull
+       sudo docker compose up -d
 
-     First build takes 3-5 minutes. Then open https://studio.yourdomain.com
+     Pulls the image CI already built - no local build. If it fails with
+     "unauthorized" or "not found", the GHCR package still needs to be made
+     public once (see ORACLE_CLOUD_SETUP.md Part 5). Then open
+     https://studio.yourdomain.com
 
   4. Set up nightly backups:
 

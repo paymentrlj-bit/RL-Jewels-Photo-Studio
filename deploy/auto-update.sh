@@ -8,6 +8,17 @@
 # another inbound endpoint and managing a shared secret for a single-store
 # app where a few minutes' delay costs nothing.
 #
+# Source (git) and the running app image are tracked separately on purpose.
+# .github/workflows/publish.yml builds and pushes the image to GHCR on the
+# same push that advances origin/main, but that build takes a minute or two
+# - so on the cron tick that first sees the new commit, the image often
+# isn't there yet. If this script only redeployed on a git-SHA change, that
+# race would mean it deploys stale code once and then never retries, because
+# the next tick sees git already caught up and stops looking. Instead the
+# image pull runs unconditionally every tick, and Compose recreates the
+# container only when the pulled image digest actually differs from what is
+# running - so a slow CI build just means it lands one tick later, silently.
+#
 #   bash deploy/auto-update.sh            check once, deploy if behind
 #   bash deploy/auto-update.sh --install  also schedule it every 10 minutes
 
@@ -32,20 +43,26 @@ git fetch origin "$BRANCH" --quiet
 LOCAL="$(git rev-parse HEAD)"
 REMOTE="$(git rev-parse "origin/$BRANCH")"
 
-if [ "$LOCAL" = "$REMOTE" ]; then
-  # The common case on every run - stay silent rather than filling the log
-  # with a line every ten minutes forever.
-  exit 0
+if [ "$LOCAL" != "$REMOTE" ]; then
+  echo "[$(date -Is)] new commit(s) on $BRANCH: $LOCAL -> $REMOTE"
+  # Fast-forward only. Nothing ever commits on the server itself, so a merge
+  # that is not a fast-forward means something unexpected happened here and
+  # is worth failing loudly on rather than silently reconciling. This also
+  # picks up any deploy/*.yml, Caddyfile, or script changes, not just the
+  # app image.
+  git merge --ff-only "origin/$BRANCH"
 fi
 
-echo "[$(date -Is)] new commit(s) on $BRANCH: $LOCAL -> $REMOTE"
-
-# Fast-forward only. Nothing ever commits on the server itself, so a merge
-# that is not a fast-forward means something unexpected happened here and is
-# worth failing loudly on rather than silently reconciling.
-git merge --ff-only "origin/$BRANCH"
-
 cd "$REPO_DIR/deploy"
-docker compose up -d --build
 
-echo "[$(date -Is)] deployed $REMOTE"
+BEFORE="$(docker compose images -q studio 2>/dev/null || true)"
+docker compose pull --quiet studio
+AFTER="$(docker compose images -q studio 2>/dev/null || true)"
+
+# up -d only recreates a container whose config or image actually changed,
+# so this is cheap to run every tick even when nothing is new.
+docker compose up -d
+
+if [ "$BEFORE" != "$AFTER" ]; then
+  echo "[$(date -Is)] deployed new studio image ($BEFORE -> $AFTER)"
+fi

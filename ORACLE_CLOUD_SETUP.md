@@ -189,10 +189,23 @@ Start it:
 
 ```bash
 cd ~/rl-studio/deploy
-sudo docker compose up -d --build
+sudo docker compose pull
+sudo docker compose up -d
 ```
 
-The first build takes 3–5 minutes. Watch it come up:
+This pulls a ready-built image from GitHub's registry (GHCR) instead of
+compiling the app on the server — the 1–2 OCPU box never has to run `npm run
+build` itself. GitHub builds that image automatically on every push to `main`
+(`.github/workflows/publish.yml`).
+
+> **First time only:** the GHCR package starts **private**, so this pull will
+> fail with `unauthorized` until you make it public — a one-time click, not a
+> credential to manage on the server. On GitHub: your repo → right sidebar
+> **Packages** → the `rl-jewels-photo-studio` package → **Package settings** →
+> **Change visibility** → **Public**. After that, no server ever needs to
+> authenticate to pull it again.
+
+Watch it come up:
 
 ```bash
 sudo docker compose logs -f
@@ -211,7 +224,9 @@ Admin → Staff accounts → create a real account for each person.
 Without this, getting a code change live means SSH-ing in and running the
 "Updating later" commands below by hand every time. With it, the server
 checks GitHub for new commits every 10 minutes and redeploys itself the
-moment one lands - no one needs to connect to the server at all.
+moment one lands - no one needs to connect to the server at all. It pulls the
+image GitHub already built rather than rebuilding on the server, so a deploy
+takes seconds of downtime instead of minutes.
 
 ```bash
 bash ~/rl-studio/deploy/auto-update.sh --install
@@ -262,7 +277,8 @@ If you never set up Part 5b, update by hand instead:
 cd ~/rl-studio
 git pull
 cd deploy
-sudo docker compose up -d --build
+sudo docker compose pull
+sudo docker compose up -d
 ```
 
 Either way, the data volume is untouched. The database migrates itself on start.
@@ -298,6 +314,10 @@ sudo docker compose logs caddy | tail -30
 ```
 
 If your DNS is on Cloudflare, confirm the record is grey-cloud, not orange.
+
+**`docker compose pull` fails with "unauthorized" or "not found".**
+The GHCR package is still private. See the note in Part 5 — make it public
+once from the repo's Packages settings, then pull again.
 
 **"Photos queue but never process."**
 `GEMINI_API_KEY` is missing or wrong. The app says so on screen. Fix `.env`
