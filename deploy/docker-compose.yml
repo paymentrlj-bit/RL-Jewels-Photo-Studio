@@ -6,9 +6,11 @@
 
 services:
   studio:
-    build:
-      context: ..
-      dockerfile: Dockerfile
+    # Built once by .github/workflows/publish.yml on every push to main and
+    # pulled ready-made - the server never compiles TypeScript on its own
+    # 1 GB box. Override with STUDIO_IMAGE=... in .env to build locally
+    # instead (e.g. for testing an unmerged branch).
+    image: ${STUDIO_IMAGE:-ghcr.io/paymentrlj-bit/rl-jewels-photo-studio:latest}
     restart: unless-stopped
     # No `ports:` on purpose. Caddy reaches it over the private compose
     # network; the internet cannot.
