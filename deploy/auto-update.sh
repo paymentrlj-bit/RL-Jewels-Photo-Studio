@@ -66,3 +66,16 @@ docker compose up -d
 if [ "$BEFORE" != "$AFTER" ]; then
   echo "[$(date -Is)] deployed new studio image ($BEFORE -> $AFTER)"
 fi
+
+# Dead-man's-switch: reached only if every command above succeeded, thanks to
+# `set -e`. This is the direct answer to 2026-09-22, where the server hung at
+# the OS level and cron itself would have simply stopped firing - a missed
+# ping here is what healthchecks.io alerts on, which is a more precise signal
+# of "the box is frozen" than anything that pings the site from outside ever
+# could be. Reads the URL straight out of .env rather than sourcing the whole
+# file, so this never pulls unrelated secrets into the cron job's environment.
+# Optional: silently skipped if HEALTHCHECKS_PING_URL is not set.
+HEALTHCHECKS_PING_URL="$(grep -m1 '^HEALTHCHECKS_PING_URL=' .env 2>/dev/null | cut -d= -f2-)"
+if [ -n "$HEALTHCHECKS_PING_URL" ]; then
+  curl -fsS -m 10 --retry 3 -o /dev/null "$HEALTHCHECKS_PING_URL" || echo "[$(date -Is)] healthchecks.io ping failed (non-fatal)"
+fi

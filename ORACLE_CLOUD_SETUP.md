@@ -261,9 +261,35 @@ One-time setup:
 **Honest limitation:** GitHub's scheduled workflows are best-effort and can
 run several minutes late under platform load - this is "found within
 ~15 minutes instead of whenever someone happens to check," not real-time
-paging. If that ever stops being good enough, a dedicated free service like
-[UptimeRobot](https://uptimerobot.com) (5-minute checks, email/SMS alerts)
-is worth the five minutes to add on top of this, not instead of it.
+paging.
+
+### Also set up healthchecks.io (~2 min, recommended alongside the above)
+
+The GitHub check above pings the site *from outside* - it catches the app or
+network being unreachable, but says nothing about whether the box itself is
+actually alive. healthchecks.io works the other way around: **your server**
+pings *it* every 10 minutes, and it alerts you the moment a ping fails to
+arrive. That is the more precise signal for exactly what happened on
+2026-09-22 - the OS itself hung, which would have silently stopped cron (and
+this ping) from firing at all, well before any HTTP-level check could have
+told you anything was wrong.
+
+1. Create a free account at [healthchecks.io](https://healthchecks.io) (no
+   card required) and add a check.
+2. Set its **period** to 10 minutes and **grace time** to a few minutes -
+   matching `auto-update.sh`'s own schedule.
+3. Copy the ping URL it gives you (`https://hc-ping.com/...`) into
+   `~/rl-studio/deploy/.env`:
+   ```
+   HEALTHCHECKS_PING_URL=https://hc-ping.com/your-actual-id-here
+   ```
+4. That's it - `auto-update.sh` pings it automatically at the end of every
+   successful run, already scheduled from Part 5b. No server restart needed;
+   it's picked up on the next cron tick within 10 minutes.
+
+The two checks are complementary, not redundant - keep both. GitHub's tells
+you the site is unreachable from outside; healthchecks.io tells you the box
+itself has stopped responding, even before that shows up anywhere else.
 
 ---
 

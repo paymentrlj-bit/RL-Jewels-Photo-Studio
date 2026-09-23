@@ -115,6 +115,16 @@ GOOGLE_DRIVE_REFRESH_TOKEN=
 GOOGLE_DRIVE_ROOT_FOLDER_ID=
 
 AXIOM_TOKEN=
+
+# ---- OPS ----
+# Dead-man's-switch monitoring (optional but recommended): auto-update.sh
+# pings this URL at the end of every successful run. If a run is ever missed
+# - most notably because the server itself hung, which is exactly what
+# happened on 2026-09-22 - healthchecks.io notices the ping didn't arrive and
+# emails you. Get a free ping URL (no card needed) at https://healthchecks.io
+# - create a check, set its expected period to 10 minutes with a few minutes
+# of grace, and paste the ping URL here.
+HEALTHCHECKS_PING_URL=
 ENVEOF
   chmod 600 "$ENV_FILE"
   echo "  created $ENV_FILE with a generated SESSION_SECRET"
