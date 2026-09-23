@@ -1,7 +1,7 @@
 // Admin: staff accounts, the enhance prompt, and the numbers worth acting on.
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { Users, Wand2, BarChart3, AlertTriangle, Check, UserPlus, RotateCcw } from 'lucide-react';
+import { Users, Wand2, BarChart3, AlertTriangle, Check, UserPlus, RotateCcw, KeyRound } from 'lucide-react';
 import { api, ApiError, type AnalyticsSummary } from '../api';
 import type { SessionUser } from '../types';
 import { AUDIT_CHECK_LABELS } from '../types';
@@ -158,6 +158,8 @@ const StaffPanel: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [form, setForm] = useState({ username: '', password: '', displayName: '', isAdmin: false });
+  const [resettingId, setResettingId] = useState<string | null>(null);
+  const [resetPassword, setResetPassword] = useState('');
 
   const load = useCallback(async () => {
     try {
@@ -191,6 +193,18 @@ const StaffPanel: React.FC = () => {
       setError(err instanceof ApiError ? err.message : 'Could not update that account.');
     }
   }, [load]);
+
+  const submitReset = useCallback(async (user: SessionUser) => {
+    setError(null);
+    try {
+      await api.updateUser(user.id, { password: resetPassword });
+      setNotice(`Password reset for ${user.username}.`);
+      setResettingId(null);
+      setResetPassword('');
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not reset that password.');
+    }
+  }, [resetPassword]);
 
   return (
     <div className="space-y-5">
@@ -264,26 +278,71 @@ const StaffPanel: React.FC = () => {
             </thead>
             <tbody>
               {users.map((user) => (
-                <tr key={user.id} className="border-t border-stone-100">
-                  <td className="px-4 py-3">
-                    <span className="font-medium text-stone-900">{user.displayName}</span>
-                    <span className="ml-2 text-xs text-stone-500">{user.username}</span>
-                    {!user.isActive && <span className="ml-2 rounded-full bg-stone-100 px-2 py-0.5 text-xs text-stone-600">disabled</span>}
-                  </td>
-                  <td className="px-4 py-3 text-stone-600">{user.isAdmin ? 'Admin' : 'Staff'}</td>
-                  <td className="px-4 py-3 text-stone-500">
-                    {user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleString('en-IN') : 'Never'}
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <button
-                      type="button"
-                      onClick={() => toggleActive(user)}
-                      className="-my-2 min-h-[44px] px-2 py-2 text-xs text-stone-600 underline hover:text-stone-900"
-                    >
-                      {user.isActive ? 'Disable' : 'Enable'}
-                    </button>
-                  </td>
-                </tr>
+                <React.Fragment key={user.id}>
+                  <tr className="border-t border-stone-100">
+                    <td className="px-4 py-3">
+                      <span className="font-medium text-stone-900">{user.displayName}</span>
+                      <span className="ml-2 text-xs text-stone-500">{user.username}</span>
+                      {!user.isActive && <span className="ml-2 rounded-full bg-stone-100 px-2 py-0.5 text-xs text-stone-600">disabled</span>}
+                    </td>
+                    <td className="px-4 py-3 text-stone-600">{user.isAdmin ? 'Admin' : 'Staff'}</td>
+                    <td className="px-4 py-3 text-stone-500">
+                      {user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleString('en-IN') : 'Never'}
+                    </td>
+                    <td className="px-4 py-3 text-right whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setResettingId(resettingId === user.id ? null : user.id);
+                          setResetPassword('');
+                        }}
+                        className="-my-2 min-h-[44px] px-2 py-2 text-xs text-stone-600 underline hover:text-stone-900"
+                      >
+                        Reset password
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => toggleActive(user)}
+                        className="-my-2 min-h-[44px] px-2 py-2 text-xs text-stone-600 underline hover:text-stone-900"
+                      >
+                        {user.isActive ? 'Disable' : 'Enable'}
+                      </button>
+                    </td>
+                  </tr>
+                  {resettingId === user.id && (
+                    <tr className="border-t border-stone-100 bg-stone-50">
+                      <td colSpan={4} className="px-4 py-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <KeyRound className="w-4 h-4 text-stone-400" />
+                          <input
+                            type="password"
+                            autoFocus
+                            value={resetPassword}
+                            onChange={(e) => setResetPassword(e.target.value)}
+                            placeholder="New password (10+ characters)"
+                            aria-label={`New password for ${user.username}`}
+                            className="min-h-[44px] flex-1 min-w-[200px] rounded-lg border border-stone-300 px-3 py-2 text-sm"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => submitReset(user)}
+                            disabled={resetPassword.length < 10}
+                            className="min-h-[44px] rounded-lg bg-stone-900 px-4 text-sm text-white hover:bg-stone-800 disabled:bg-stone-300"
+                          >
+                            Save
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { setResettingId(null); setResetPassword(''); }}
+                            className="min-h-[44px] px-3 text-sm text-stone-600 hover:text-stone-900"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
               ))}
             </tbody>
           </table>
