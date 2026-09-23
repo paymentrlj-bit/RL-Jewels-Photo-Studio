@@ -315,6 +315,17 @@ sudo docker compose logs caddy | tail -30
 
 If your DNS is on Cloudflare, confirm the record is grey-cloud, not orange.
 
+**Someone forgot their password.**
+If at least one admin can still sign in: Admin → Staff accounts → **Reset
+password** next to that person's name — no server access needed.
+
+If *every* admin is locked out: SSH in and run
+`bash ~/rl-studio/deploy/reset-password.sh --list` to see the accounts, then
+`bash ~/rl-studio/deploy/reset-password.sh <username> '<new password>'`.
+This app deliberately has no email/SMS "forgot password" flow — it is a
+single-store tool with a handful of accounts, and the SSH-level fix costs
+less than building and maintaining that infrastructure.
+
 **`docker compose pull` fails with "unauthorized" or "not found".**
 The GHCR package is still private. See the note in Part 5 — make it public
 once from the repo's Packages settings, then pull again.
