@@ -239,6 +239,34 @@ what it has deployed and when.
 
 ---
 
+## Part 5c — Uptime monitoring (~2 min, recommended)
+
+On 2026-09-22 the server hung at the OS level and nothing noticed until
+someone happened to check by hand. This closes that gap for free, using
+GitHub itself rather than a new account anywhere:
+`.github/workflows/uptime.yml` pings the site every 10 minutes and, on
+failure, opens a GitHub issue - which GitHub emails you about automatically,
+same as any other issue on a repo you own.
+
+One-time setup:
+
+1. On GitHub: this repo → **Settings** → **Secrets and variables** → **Actions**
+   → **Variables** tab → **New repository variable**.
+2. Name: `STUDIO_HEALTH_URL`. Value: `https://studio.yourdomain.com/api/health`
+   (your real domain, with `/api/health` on the end).
+3. Done. It starts checking on its next scheduled run (within 10 minutes), or
+   trigger it immediately from the **Actions** tab → **Uptime check** →
+   **Run workflow**.
+
+**Honest limitation:** GitHub's scheduled workflows are best-effort and can
+run several minutes late under platform load - this is "found within
+~15 minutes instead of whenever someone happens to check," not real-time
+paging. If that ever stops being good enough, a dedicated free service like
+[UptimeRobot](https://uptimerobot.com) (5-minute checks, email/SMS alerts)
+is worth the five minutes to add on top of this, not instead of it.
+
+---
+
 ## Part 6 — Backups (~2 min, do not skip)
 
 Everything the store has shot lives in one Docker volume. Schedule a nightly
@@ -314,6 +342,30 @@ sudo docker compose logs caddy | tail -30
 ```
 
 If your DNS is on Cloudflare, confirm the record is grey-cloud, not orange.
+
+**Server appears hung / SSH unresponsive / uptime check filed an issue.**
+This happened for real on 2026-09-22. Diagnosis, in order:
+1. `ping <ip>` failing tells you **nothing** - Oracle's default security list
+   never opened ICMP, so this fails even when the server is perfectly healthy.
+   Don't use it to decide anything.
+2. Try SSH again first - a single dropped session isn't the server, and a
+   fresh attempt a minute later often just works.
+3. If SSH still won't connect: Oracle Console → **Compute → Instances →
+   rl-studio → Metrics** tab → **CPU Utilization** / **Memory Utilization**
+   over the last hour. The tell is not high CPU - it's the **graph line
+   stopping entirely** partway through, with no data after that point even
+   though real time has moved on. That means the guest OS itself stopped
+   responding, not just the app - Oracle's own monitoring agent went silent
+   because the box did.
+4. If you see that: **Compute → Instances → rl-studio → More Actions →
+   Reboot.** Safe - your data lives in a separate Docker volume the VM reboot
+   never touches, only the hung OS state gets cleared. Give it 1-2 minutes,
+   then SSH back in and check `docker compose ps` - containers normally come
+   back up on their own (`restart: unless-stopped`).
+5. Once back in, check `rl-jewels-events` in Axiom (or Admin → Insights) for
+   `system.heartbeat` events around the time it hung - a gap in that stream
+   confirms the timeline and, over several incidents, whether memory usage is
+   trending toward this before it happens again.
 
 **Someone forgot their password.**
 If at least one admin can still sign in: Admin → Staff accounts → **Reset

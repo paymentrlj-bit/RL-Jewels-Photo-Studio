@@ -1,0 +1,101 @@
+name: Uptime check
+
+# Pings the live site every 10 minutes and files a GitHub issue the moment it
+# stops answering - which is exactly what nothing did on 2026-09-22, when the
+# server hung and nobody found out until someone happened to check by hand.
+#
+# Deliberately built on this repo rather than a third-party uptime service:
+# it needs no new account, no new credential, and GitHub already emails the
+# repo owner on a new issue by default - so "alerting" is free and requires
+# no extra setup beyond the one repo variable below.
+#
+# Known limitation, stated plainly: GitHub's scheduled workflows are
+# best-effort and can run several minutes late under platform load, so this
+# is not a substitute for a dedicated uptime service if minute-level alerting
+# ever actually matters here. At this store's scale, "found within ~15
+# minutes instead of whenever someone happens to check" is the entire point,
+# and this gets that for free.
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping the health endpoint
+        id: ping
+        run: |
+          set +e
+          URL="${{ vars.STUDIO_HEALTH_URL }}"
+          if [ -z "$URL" ]; then
+            echo "status=skipped" >> "$GITHUB_OUTPUT"
+            echo "::warning::STUDIO_HEALTH_URL repository variable is not set - see ORACLE_CLOUD_SETUP.md. Skipping this run."
+            exit 0
+          fi
+          HTTP_CODE=$(curl -s -o /tmp/body -w '%{http_code}' --max-time 15 "$URL")
+          echo "http_code=$HTTP_CODE" >> "$GITHUB_OUTPUT"
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "status=up" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=down" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: File or update the down issue
+        if: steps.ping.outputs.status == 'down'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = '🔴 Site unreachable: studio is down';
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'uptime',
+            });
+            const existing = issues.find((i) => i.title === title);
+            const httpCode = '${{ steps.ping.outputs.http_code }}' || 'no response';
+            const body = `The health check got HTTP \`${httpCode}\` at ${new Date().toISOString()}.\n\n` +
+              `This issue stays open until a check succeeds again - it will auto-close then.\n\n` +
+              `If the server is actually hung (not just the app), see the "Server appears hung / SSH unresponsive" ` +
+              `section of ORACLE_CLOUD_SETUP.md - check the instance's CPU/Memory metrics in the Oracle console and ` +
+              `reboot from there if the monitoring graph itself has gone flat.`;
+            if (existing) {
+              await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: existing.number, body });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ['uptime'],
+              });
+            }
+
+      - name: Close the down issue if it recovered
+        if: steps.ping.outputs.status == 'up'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = '🔴 Site unreachable: studio is down';
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'uptime',
+            });
+            const existing = issues.find((i) => i.title === title);
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body: `Recovered - the health check succeeded again at ${new Date().toISOString()}.`,
+              });
+              await github.rest.issues.update({ owner: context.repo.owner, repo: context.repo.repo, issue_number: existing.number, state: 'closed' });
+            }
