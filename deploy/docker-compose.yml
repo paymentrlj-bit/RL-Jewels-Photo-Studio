@@ -40,6 +40,8 @@ services:
 
       DETAIL_INVENTORY: ${DETAIL_INVENTORY:-on}
       ANGLE_REQUESTS: ${ANGLE_REQUESTS:-on}
+      FAITHFUL_MODE: ${FAITHFUL_MODE:-on}
+      DESIGN_MEMORY: ${DESIGN_MEMORY:-on}
     volumes:
       # THE shoot. Every product, every photo, the whole database.
       # This is the one thing that must be backed up.

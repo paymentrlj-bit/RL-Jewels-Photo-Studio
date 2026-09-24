@@ -36,7 +36,7 @@ afterAll(() => {
 // one test can't bleed into the next.
 beforeEach(() => {
   const db = getDb();
-  db.exec('DELETE FROM jobs; DELETE FROM photos; DELETE FROM products; DELETE FROM batches; DELETE FROM users; DELETE FROM login_attempts; DELETE FROM events;');
+  db.exec('DELETE FROM fix_requests; DELETE FROM jobs; DELETE FROM photos; DELETE FROM products; DELETE FROM batches; DELETE FROM users; DELETE FROM login_attempts; DELETE FROM events;');
 });
 
 async function loginAs(username: string, password: string) {
@@ -212,5 +212,110 @@ describe('extra angle photos', () => {
     expect(res.status).toBe(202);
     const job = getDb().prepare("SELECT payload FROM jobs WHERE product_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1").get(id) as { payload: string };
     expect(JSON.parse(job.payload)).toEqual({ skipAngleRequest: true });
+  });
+});
+
+describe('net weight is worked out, never typed', () => {
+  async function staff() {
+    await createUser({ username: 'staffer', password: 'a-real-password-1', isAdmin: false });
+    return (await loginAs('staffer', 'a-real-password-1')).cookie!;
+  }
+
+  it('saves gross minus other, ignoring any net sent with it', async () => {
+    const cookie = await staff();
+    const res = await request(app).post('/api/products').set('Cookie', cookie)
+      .send({ itemType: 'Ring', grossWeightGrams: '12.345', otherWeightGrams: '0.345', netWeightGrams: '99' });
+    expect(res.status).toBe(201);
+    expect(res.body.product.netWeightGrams).toBe('12.000');
+  });
+
+  it('uses the gross as the net when there is no other weight', async () => {
+    const cookie = await staff();
+    const res = await request(app).post('/api/products').set('Cookie', cookie).send({ itemType: 'Ring', grossWeightGrams: '5.5' });
+    expect(res.body.product.netWeightGrams).toBe('5.500');
+  });
+
+  it('recomputes the net when either weight is edited later', async () => {
+    const cookie = await staff();
+    const created = await request(app).post('/api/products').set('Cookie', cookie)
+      .send({ itemType: 'Ring', grossWeightGrams: '10', otherWeightGrams: '1' });
+    const id = created.body.product.id;
+    const res = await request(app).patch(`/api/products/${id}`).set('Cookie', cookie).send({ grossWeightGrams: '11' });
+    expect(res.body.product.netWeightGrams).toBe('10.000');
+    const hand = await request(app).patch(`/api/products/${id}`).set('Cookie', cookie).send({ netWeightGrams: '1' });
+    expect(hand.body.product.netWeightGrams).toBe('10.000');
+  });
+
+  it('refuses an other weight above the gross', async () => {
+    const cookie = await staff();
+    const res = await request(app).post('/api/products').set('Cookie', cookie)
+      .send({ itemType: 'Ring', grossWeightGrams: '1', otherWeightGrams: '2' });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('one-tap fix', () => {
+  const tinyJpeg = 'data:image/jpeg;base64,' + Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString('base64');
+
+  async function pieceInReview() {
+    await createUser({ username: 'staffer', password: 'a-real-password-1', isAdmin: false });
+    const cookie = (await loginAs('staffer', 'a-real-password-1')).cookie!;
+    const created = await request(app).post('/api/products').set('Cookie', cookie).send({ itemType: 'ATTACHED CHAIN POTE' });
+    const id = created.body.product.id as string;
+    await request(app).post(`/api/products/${id}/photo`).set('Cookie', cookie).send({ imageBase64: tinyJpeg });
+    getDb().prepare("UPDATE products SET status = 'awaiting_review' WHERE id = ?").run(id);
+    return { cookie, id };
+  }
+
+  const latestJobPayload = (id: string) =>
+    JSON.parse((getDb().prepare('SELECT payload FROM jobs WHERE product_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(id) as { payload: string }).payload);
+
+  it('requeues the piece with exactly the fixes asked for, and remembers them for the style', async () => {
+    const { cookie, id } = await pieceInReview();
+    const res = await request(app).post(`/api/products/${id}/fix`).set('Cookie', cookie)
+      .send({ issues: ['black_beads', 'made-up-code'], note: ' 7 drops,\n not 5 ' });
+    expect(res.status).toBe(202);
+    expect(res.body.product.status).toBe('queued');
+    expect(latestJobPayload(id)).toEqual({ fix: { issues: ['black_beads'], note: '7 drops, not 5' }, skipAngleRequest: true });
+    const memory = getDb().prepare('SELECT style_key, category, issues, source FROM fix_requests WHERE product_id = ?').get(id);
+    expect(memory).toEqual({ style_key: 'attached chain pote', category: 'Mangalsutra', issues: '["black_beads"]', source: 'staff' });
+  });
+
+  it('"use my real photo" queues a cut-out instead of an AI render', async () => {
+    const { cookie, id } = await pieceInReview();
+    const res = await request(app).post(`/api/products/${id}/fix`).set('Cookie', cookie).send({ issues: ['real_photo'] });
+    expect(res.status).toBe(202);
+    expect(latestJobPayload(id)).toEqual({ mode: 'faithful' });
+  });
+
+  it('needs to be told what is wrong', async () => {
+    const { cookie, id } = await pieceInReview();
+    const res = await request(app).post(`/api/products/${id}/fix`).set('Cookie', cookie).send({ issues: [] });
+    expect(res.status).toBe(400);
+  });
+
+  it('does not stack a fix on a piece that is already processing', async () => {
+    const { cookie, id } = await pieceInReview();
+    getDb().prepare("UPDATE products SET status = 'processing' WHERE id = ?").run(id);
+    const res = await request(app).post(`/api/products/${id}/fix`).set('Cookie', cookie).send({ issues: ['motif'] });
+    expect(res.status).toBe(409);
+  });
+
+  it('remembers the reason given when a piece is sent for reshoot', async () => {
+    const { cookie, id } = await pieceInReview();
+    await request(app).post(`/api/products/${id}/reject`).set('Cookie', cookie).send({ note: 'hook is missing' });
+    const row = getDb().prepare('SELECT note, source FROM fix_requests WHERE product_id = ?').get(id);
+    expect(row).toEqual({ note: 'hook is missing', source: 'reject' });
+  });
+});
+
+describe('client event logging', () => {
+  it('keeps the fields the browser sends', async () => {
+    await createUser({ username: 'staffer', password: 'a-real-password-1', isAdmin: false });
+    const cookie = (await loginAs('staffer', 'a-real-password-1')).cookie!;
+    await request(app).post('/api/log-event').set('Cookie', cookie)
+      .send({ events: [{ type: 'js_error', data: { message: 'boom', line: 12 } }] });
+    const row = getDb().prepare("SELECT payload FROM events WHERE type = 'client.js_error'").get() as { payload: string };
+    expect(JSON.parse(row.payload)).toMatchObject({ message: 'boom', line: 12 });
   });
 });

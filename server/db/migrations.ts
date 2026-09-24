@@ -161,6 +161,43 @@ const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    version: 2,
+    name: 'fix requests; net weight always gross minus other',
+    up: `
+      -- Every correction staff ask for (the one-tap fixes in Review, and the
+      -- reasons given when sending a piece for reshoot), plus the audit's own
+      -- fidelity failures. Kept per POS style name so the next piece of the
+      -- same style is warned about the mistakes made on the last ones - the
+      -- "design memory" the enhance prompt reads from.
+      CREATE TABLE fix_requests (
+        id          TEXT PRIMARY KEY,
+        product_id  TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+        style_key   TEXT NOT NULL DEFAULT '',
+        category    TEXT NOT NULL DEFAULT '',
+        issues      TEXT NOT NULL DEFAULT '[]',
+        note        TEXT NOT NULL DEFAULT '',
+        source      TEXT NOT NULL DEFAULT 'staff',
+        created_by  TEXT,
+        created_at  TEXT NOT NULL
+      );
+      CREATE INDEX idx_fix_requests_style    ON fix_requests (style_key, created_at);
+      CREATE INDEX idx_fix_requests_category ON fix_requests (category, created_at);
+
+      -- Net weight used to be typed, or filled once and then left stale when
+      -- the gross changed. It is now always gross minus other; bring every
+      -- existing row into line. Rows whose weights are not plain numbers, or
+      -- whose other weight exceeds the gross, are left for a person to fix.
+      UPDATE products
+         SET net_weight_grams = printf('%.3f',
+               (ROUND(CAST(TRIM(gross_weight_grams) AS REAL) * 1000)
+                - ROUND(COALESCE(CAST(NULLIF(TRIM(other_weight_grams), '') AS REAL), 0) * 1000)) / 1000.0)
+       WHERE TRIM(gross_weight_grams) <> ''
+         AND TRIM(gross_weight_grams) NOT GLOB '*[^0-9.]*'
+         AND TRIM(other_weight_grams) NOT GLOB '*[^0-9.]*'
+         AND COALESCE(CAST(NULLIF(TRIM(other_weight_grams), '') AS REAL), 0) <= CAST(TRIM(gross_weight_grams) AS REAL);
+    `,
+  },
 ];
 
 export function runMigrations(db: BetterSqlite3.Database): void {

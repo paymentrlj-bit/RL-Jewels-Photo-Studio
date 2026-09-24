@@ -89,6 +89,8 @@ export const api = {
   reject: (id: string, note: string) => post<{ product: Product }>(`/products/${id}/reject`, { note }),
   requeue: (id: string, options: { proceedWithoutAngle?: boolean } = {}) =>
     post<{ product: Product }>(`/products/${id}/requeue`, options),
+  fix: (id: string, body: { issues: string[]; note?: string }) =>
+    post<{ product: Product; jobId: string }>(`/products/${id}/fix`, body),
   addAngle: (id: string, imageBase64: string) =>
     post<{ product: Product; photoId: string; jobId: string }>(`/products/${id}/angle`, { imageBase64 }),
 

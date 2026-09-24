@@ -7,7 +7,8 @@ import {
   buildContextBlock,
   type AuditCheck,
 } from '../ai/operations';
-import { aspectRatioFor, resolveCategory, defaultGenderFor, isElongated } from '../catalog/taxonomy';
+import { aspectRatioFor, resolveCategory, defaultGenderFor, isElongated, describeItemType } from '../catalog/taxonomy';
+import { segmentJewelry } from '../ai/operations';
 import { cachedSegmentation, clearSegmentationCache, segmentationCacheSize } from '../queue/groundingCache';
 import { DEFAULT_ENHANCE_PROMPT, buildOutputFramingBlock, buildAuditPrompt } from '../ai/prompts';
 
@@ -298,5 +299,64 @@ describe('segmentation cache', () => {
     expect(calls).toBe(1);
     expect(second.cacheHit).toBe(true);
     expect(second.result).toBeNull();
+  });
+});
+
+describe('names the owner and the POS list corrected', () => {
+  it('does not read "thali" (a plate here) as a mangalsutra', () => {
+    expect(resolveCategory('PUJA THALI')).toBeNull();
+    expect(resolveCategory('.THALI PLAIN-1')).toBeNull();
+  });
+
+  it('does not read "lucky stone" (a gemstone) as a bracelet', () => {
+    expect(resolveCategory('LUCKY STONE')).toBeNull();
+  });
+
+  it('reads "pote chain" as a mangalsutra, like "chain pote"', () => {
+    expect(resolveCategory('POTE CHAIN')?.type).toBe('Mangalsutra');
+  });
+
+  it('frames a haar sold with its pendant tall, not as a square pendant', () => {
+    expect(resolveCategory('PENDANT RANI HAR')?.type).toBe('Haar');
+    expect(resolveCategory('PENDANT MEENA RANIHAR')?.type).toBe('Haar');
+    expect(aspectRatioFor('FMG LONG PENDANT HARSET')).toBe('3:4');
+  });
+
+  it('carries the black-bead rule to any piece with pote in its name', () => {
+    expect(describeItemType('SHORT BRACLET POTE').notes).toMatch(/black glass beads/);
+    expect(describeItemType('FMG POTE PADAK').notes).toMatch(/black glass beads/);
+    // Not added twice on a mangalsutra, whose own notes already say it.
+    expect(describeItemType('ATTACHED CHAIN POTE').notes).not.toContain('This piece includes pote');
+    expect(describeItemType('GENTS ANGUTHI').notes).not.toMatch(/black glass beads/);
+  });
+});
+
+describe('segmentation outline', () => {
+  const fakeAi = (text: string) => ({ models: { generateContent: async () => ({ text }) } }) as never;
+
+  it('reads the outline and the things to blank for a cut-out', async () => {
+    const result = await segmentJewelry(fakeAi(JSON.stringify({
+      box_2d: [100, 100, 900, 900],
+      mask: [[100, 100], [100, 900], [900, 500]],
+      label: 'pendant',
+      exclusions: [
+        { box_2d: [0, 0, 100, 300], kind: 'tag' },
+        { box_2d: [950, 0, 1000, 300], kind: 'watermark' },
+        { box_2d: [1, 2, 3], kind: 'tag' },
+        { box_2d: [10, 10, 20, 20], kind: 'mystery' },
+      ],
+    })), 'aW1n', 'image/jpeg');
+    expect(result?.polygon).toHaveLength(3);
+    expect(result?.exclusions).toEqual([
+      { box: [0, 0, 100, 300], kind: 'tag' },
+      { box: [950, 0, 1000, 300], kind: 'watermark' },
+      { box: [10, 10, 20, 20], kind: 'other' },
+    ]);
+  });
+
+  it('still reads the older one-entry list answer', async () => {
+    const result = await segmentJewelry(fakeAi(JSON.stringify([{ box_2d: [0, 0, 10, 10], mask: [[0, 0], [0, 10], [10, 10]] }])), 'aW1n', 'image/jpeg');
+    expect(result?.boxTwoD).toEqual([0, 0, 10, 10]);
+    expect(result?.exclusions).toEqual([]);
   });
 });

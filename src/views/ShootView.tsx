@@ -12,7 +12,7 @@
 // testing at the store it never worked the way it needed to, and keeping a
 // half-working second capture route around is worse than not having one.
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   Camera, ScanLine, AlertTriangle, CheckCircle2,
   RotateCcw, Video, History, Eye,
@@ -26,6 +26,7 @@ import { AngleCaptureButton } from '../components/AngleCaptureButton';
 import { ScannerModal } from '../components/ScannerModal';
 import { downscaleImage, analyzeImageQuality, checkFlashFired, type PreflightIssue } from '../utils/imagePreflight';
 import { logClientEvent } from '../utils/analytics';
+import { computeNetWeight } from '../../server/catalog/weights';
 
 // getUserMedia - the in-app live camera and the barcode scanner - is blocked
 // by browsers outside a secure context. On the shop LAN that means plain
@@ -33,9 +34,8 @@ import { logClientEvent } from '../utils/analytics';
 //
 // The file input below is the way round it: `capture="environment"` opens the
 // phone's OWN camera app, which needs no secure context at all. So capture
-// keeps working over plain HTTP; only the live preview and the barcode scanner
-// need HTTPS. See the README for how to get a certificate when the scanner is
-// wanted.
+// keeps working over plain HTTP; only the live preview and the live tag
+// scanner need HTTPS (without it, the scanner reads a photo of the tag).
 const IS_SECURE_CONTEXT =
   typeof window !== 'undefined' &&
   (window.isSecureContext || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
@@ -51,7 +51,6 @@ interface FormState {
   size: string;
   grossWeightGrams: string;
   otherWeightGrams: string;
-  netWeightGrams: string;
 }
 
 const EMPTY_FORM: FormState = {
@@ -62,7 +61,6 @@ const EMPTY_FORM: FormState = {
   size: 'DEFAULT',
   grossWeightGrams: '',
   otherWeightGrams: '',
-  netWeightGrams: '',
 };
 
 interface ShootViewProps {
@@ -96,16 +94,12 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, n
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm((f) => ({ ...f, [key]: value }));
 
-  // Net weight is gross minus other, and staff should not have to do that sum
-  // at the counter. Typed values still win - this only fills a blank.
-  useEffect(() => {
-    const gross = parseFloat(form.grossWeightGrams);
-    const other = parseFloat(form.otherWeightGrams || '0');
-    if (Number.isFinite(gross) && Number.isFinite(other) && !form.netWeightGrams) {
-      const net = gross - other;
-      if (net > 0) set('netWeightGrams', net.toFixed(3));
-    }
-  }, [form.grossWeightGrams, form.otherWeightGrams, form.netWeightGrams]);
+  // Net is never typed: Gross - Other, or Gross when Other is blank or 0.
+  // Recomputed on every keystroke so it can never go stale.
+  const netWeight = useMemo(
+    () => computeNetWeight(form.grossWeightGrams, form.otherWeightGrams),
+    [form.grossWeightGrams, form.otherWeightGrams]
+  );
 
   const runLookup = useCallback(async (cpc: string) => {
     if (!cpc.trim()) {
@@ -139,7 +133,6 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, n
     setScannerOpen(false);
     set('cpc', code);
     void runLookup(code);
-    logClientEvent('cpc_scanned', { length: code.length });
   }, [runLookup]);
 
   // Accepts a freshly captured photo: downscale, then run the free local
@@ -202,7 +195,7 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, n
   // A flagged photo is not blocked outright - staff sometimes know better than
   // a heuristic - but it does need an explicit acknowledgement first.
   const needsAcknowledgement = preflightIssues.length > 0 && !issuesAcknowledged;
-  const canSubmit = Boolean(photo && form.itemType.trim() && !isSubmitting && !isChecking && !needsAcknowledgement);
+  const canSubmit = Boolean(photo && form.itemType.trim() && netWeight.ok && !isSubmitting && !isChecking && !needsAcknowledgement);
 
   const handleSubmit = useCallback(async () => {
     if (!photo || !form.itemType.trim()) return;
@@ -399,22 +392,16 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, n
                 placeholder="e.g. 1265L1051"
                 className="flex-1 rounded-lg border border-stone-300 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-400 focus:border-amber-400"
               />
-              {IS_SECURE_CONTEXT && (
-                <button
-                  type="button"
-                  onClick={() => setScannerOpen(true)}
-                  className="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-stone-900 px-4 py-2 text-sm text-white hover:bg-stone-800"
-                >
-                  <ScanLine className="w-4 h-4" /> Scan
-                </button>
-              )}
+              {/* Always offered: without HTTPS there is no live view, but
+                  the scanner can still read a photo of the tag. */}
+              <button
+                type="button"
+                onClick={() => setScannerOpen(true)}
+                className="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-stone-900 px-4 py-2 text-sm text-white hover:bg-stone-800"
+              >
+                <ScanLine className="w-4 h-4" /> Scan
+              </button>
             </div>
-
-            {!IS_SECURE_CONTEXT && (
-              <p className="mt-2 text-xs text-stone-500">
-                Barcode scanning needs a secure (https) connection, so type the code for now. Photos still work normally.
-              </p>
-            )}
 
             {lookup && <LookupBanner lookup={lookup} />}
           </div>
@@ -476,7 +463,6 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, n
             {([
               ['grossWeightGrams', 'Gross (g)'],
               ['otherWeightGrams', 'Other (g)'],
-              ['netWeightGrams', 'Net (g)'],
             ] as const).map(([key, label]) => (
               <div key={key}>
                 <label htmlFor={key} className="block text-sm font-medium text-stone-700 mb-1">{label}</label>
@@ -490,7 +476,22 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, n
                 />
               </div>
             ))}
+            <div>
+              <label htmlFor="netWeight" className="block text-sm font-medium text-stone-700 mb-1">Net (g)</label>
+              <output
+                id="netWeight"
+                aria-live="polite"
+                className="flex min-h-[38px] w-full items-center rounded-lg border border-stone-200 bg-stone-100 px-3 py-2 text-sm font-medium text-stone-900"
+              >
+                {netWeight.ok && netWeight.net ? netWeight.net : <span className="text-stone-400">auto</span>}
+              </output>
+            </div>
           </div>
+          {netWeight.ok ? (
+            <p className="text-xs text-stone-500">Net is worked out for you: Gross − Other.</p>
+          ) : (
+            <p className="text-xs text-red-700">{netWeight.error}</p>
+          )}
         </section>
 
         <button
@@ -506,6 +507,7 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, n
             {!photo ? 'Take a photo to continue.'
               : isChecking ? 'Checking the photo…'
               : needsAcknowledgement ? 'Check the photo warnings above first.'
+              : !netWeight.ok ? netWeight.error
               : 'Item type is required.'}
           </p>
         )}

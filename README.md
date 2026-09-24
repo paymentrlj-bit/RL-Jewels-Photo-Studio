@@ -216,10 +216,11 @@ Honest list of what is not done, so nobody discovers these the hard way:
   models get withdrawn. Segmentation fails open, so it degrades safely;
   escalation is detected and reported distinctly from a bad photo, but there
   is no automatic fallback model yet.
-- **Barcode scanning needs HTTPS.** Over plain HTTP on the shop LAN the app
-  hides the scanner and staff type the CPC. Photography is unaffected. See
+- **Live tag scanning needs HTTPS.** Over plain HTTP on the shop LAN there is
+  no live camera view, so the scanner reads a photo of the tag instead
+  ("Photograph the tag"). See
   [RUNNING_ON_THE_LENOVO.md](RUNNING_ON_THE_LENOVO.md) for the certificate
-  route if typing gets tiresome.
+  route.
 - **Tag weight OCR has no UI.** `/api/ocr-space` and `/api/scan-tag` work, but
   nothing calls them — weights are typed. Reading the back of the tag
   automatically is the obvious next efficiency win.
