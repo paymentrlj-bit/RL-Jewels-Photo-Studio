@@ -7,10 +7,11 @@
 
 import React, { useCallback, useState } from 'react';
 import {
-  CheckCircle2, XCircle, RefreshCw, AlertTriangle, Sparkles, ChevronDown, ChevronUp,
+  CheckCircle2, XCircle, RefreshCw, AlertTriangle, Sparkles, ChevronDown, ChevronUp, Wand2, Image as ImageIcon,
 } from 'lucide-react';
 import { api, ApiError } from '../api';
 import { AngleCaptureButton } from '../components/AngleCaptureButton';
+import { FixPanel } from '../components/FixPanel';
 import type { Product } from '../types';
 import { AUDIT_CHECK_LABELS, STATUS_LABELS } from '../types';
 
@@ -64,6 +65,8 @@ export const ReviewView: React.FC<ReviewViewProps> = ({ products, onChanged }) =
                 busy={busyId === product.id}
                 onApprove={() => act(product.id, () => api.approve(product.id))}
                 onReject={(note) => act(product.id, () => api.reject(product.id, note))}
+                onChanged={onChanged}
+                onError={setError}
               />
             ))}
           </div>
@@ -99,10 +102,13 @@ const ReviewCard: React.FC<{
   busy: boolean;
   onApprove: () => void;
   onReject: (note: string) => void;
-}> = ({ product, busy, onApprove, onReject }) => {
+  onChanged: () => void;
+  onError: (message: string) => void;
+}> = ({ product, busy, onApprove, onReject, onChanged, onError }) => {
   const [showChecks, setShowChecks] = useState(false);
-  const [rejecting, setRejecting] = useState(false);
+  const [mode, setMode] = useState<'idle' | 'rejecting' | 'fixing'>('idle');
   const [note, setNote] = useState('');
+  const isFaithful = product.renderMode === 'faithful';
 
   const failedChecks = Object.entries(product.auditChecklist || {}).filter(([, passed]) => !passed);
 
@@ -119,7 +125,9 @@ const ReviewCard: React.FC<{
           {product.processedPhotoId && (
             <img src={api.photoUrl(product.processedPhotoId)} alt="Studio-finished photo" className="aspect-square w-full object-contain bg-stone-50" />
           )}
-          <figcaption className="px-2 py-1 text-center text-[11px] uppercase tracking-wide text-amber-700">Studio</figcaption>
+          <figcaption className={`px-2 py-1 text-center text-[11px] uppercase tracking-wide ${isFaithful ? 'text-emerald-700' : 'text-amber-700'}`}>
+            {isFaithful ? 'Real photo, cut out' : 'Studio'}
+          </figcaption>
         </figure>
       </div>
 
@@ -128,6 +136,15 @@ const ReviewCard: React.FC<{
         <p className="text-xs text-stone-500">
           {product.cpc || 'No CPC'} · {product.purity} · {product.netWeightGrams || '—'}g · {product.staffName}
         </p>
+
+        {isFaithful && (
+          // A cut-out skips the AI's own checks, so the reviewer is the check:
+          // say plainly what they are looking at and why.
+          <p className="flex items-start gap-1.5 rounded-lg bg-emerald-50 p-2 text-xs text-emerald-900">
+            <ImageIcon className="mt-0.5 w-3 h-3 shrink-0" />
+            <span>{product.auditReason || 'Your own photo, cut out onto white. Nothing in it was redrawn.'} Check the edges and that no tag is left.</span>
+          </p>
+        )}
 
         {product.description && (
           <p className="text-xs leading-relaxed text-stone-600 line-clamp-3">{product.description}</p>
@@ -169,7 +186,14 @@ const ReviewCard: React.FC<{
       </div>
 
       <div className="border-t border-stone-200 p-3">
-        {rejecting ? (
+        {mode === 'fixing' ? (
+          <FixPanel
+            product={product}
+            onDone={onChanged}
+            onCancel={() => setMode('idle')}
+            onError={onError}
+          />
+        ) : mode === 'rejecting' ? (
           <div className="space-y-2">
             <label htmlFor={`note-${product.id}`} className="sr-only">Reason for reshoot</label>
             <input
@@ -190,7 +214,7 @@ const ReviewCard: React.FC<{
               </button>
               <button
                 type="button"
-                onClick={() => setRejecting(false)}
+                onClick={() => setMode('idle')}
                 className="min-h-[44px] rounded-lg px-3 py-1.5 text-xs text-stone-600 hover:bg-stone-100"
               >
                 Cancel
@@ -209,7 +233,15 @@ const ReviewCard: React.FC<{
             </button>
             <button
               type="button"
-              onClick={() => setRejecting(true)}
+              onClick={() => setMode('fixing')}
+              disabled={busy}
+              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-700 hover:bg-stone-50 disabled:opacity-60"
+            >
+              <Wand2 className="w-4 h-4" /> Fix
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('rejecting')}
               disabled={busy}
               className="min-h-[44px] rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-700 hover:bg-stone-50 disabled:opacity-60"
             >
@@ -229,56 +261,78 @@ const ProblemRow: React.FC<{
   onProceed: () => void;
   onChanged: () => void;
   onError: (message: string) => void;
-}> = ({ product, busy, onRequeue, onProceed, onChanged, onError }) => (
-  <div className="flex flex-wrap items-center gap-4 rounded-xl border border-stone-200 bg-white p-4">
-    {product.originalPhotoId && (
-      <img src={api.photoUrl(product.originalPhotoId)} alt="" className="h-16 w-16 rounded-lg object-cover bg-stone-100" />
-    )}
-    <div className="min-w-0 flex-1">
-      <p className="text-sm font-medium text-stone-900">
-        {product.cpc || product.itemType || 'Untitled'}
-        <span className={`ml-2 rounded-full px-2 py-0.5 text-xs ${
-          product.status === 'failed' ? 'bg-orange-100 text-orange-800'
-          : product.status === 'needs_angle' ? 'bg-amber-100 text-amber-800'
-          : 'bg-red-100 text-red-800'}`}>
-          {STATUS_LABELS[product.status]}
-        </span>
-      </p>
-      <p className="mt-0.5 text-xs text-stone-600">
-        {product.auditReason || product.reviewNote || product.job?.lastError || 'No reason recorded.'}
-      </p>
-      {product.status === 'failed' && (
-        // The distinction matters: needs_reshoot means go and rephotograph
-        // the piece; failed means the photo is fine and something went wrong
-        // on our side, so retrying costs nothing but a moment.
-        <p className="mt-1 text-xs text-stone-400">This was a processing error, not a problem with the photo. Retrying is usually enough.</p>
+}> = ({ product, busy, onRequeue, onProceed, onChanged, onError }) => {
+  const [fixing, setFixing] = useState(false);
+  return (
+    <div className="rounded-xl border border-stone-200 bg-white p-4">
+      <div className="flex flex-wrap items-center gap-4">
+        {product.originalPhotoId && (
+          <img src={api.photoUrl(product.originalPhotoId)} alt="" className="h-16 w-16 rounded-lg object-cover bg-stone-100" />
+        )}
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium text-stone-900">
+            {product.cpc || product.itemType || 'Untitled'}
+            <span className={`ml-2 rounded-full px-2 py-0.5 text-xs ${
+              product.status === 'failed' ? 'bg-orange-100 text-orange-800'
+              : product.status === 'needs_angle' ? 'bg-amber-100 text-amber-800'
+              : 'bg-red-100 text-red-800'}`}>
+              {STATUS_LABELS[product.status]}
+            </span>
+          </p>
+          <p className="mt-0.5 text-xs text-stone-600">
+            {product.auditReason || product.reviewNote || product.job?.lastError || 'No reason recorded.'}
+          </p>
+          {product.status === 'failed' && (
+            // The distinction matters: needs_reshoot means go and rephotograph
+            // the piece; failed means the photo is fine and something went wrong
+            // on our side, so retrying costs nothing but a moment.
+            <p className="mt-1 text-xs text-stone-400">This was a processing error, not a problem with the photo. Retrying is usually enough.</p>
+          )}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {/* A failed audit is often a detail the first photo showed badly -
+              another angle fixes that without redoing the whole shoot. */}
+          {product.status !== 'failed' && (
+            <AngleCaptureButton productId={product.id} onAdded={onChanged} onError={onError} />
+          )}
+          {/* Before a full reshoot: say what went wrong and have it redone,
+              or use the real photo cut out. */}
+          {product.status === 'needs_reshoot' && !fixing && (
+            <button
+              type="button"
+              onClick={() => setFixing(true)}
+              disabled={busy}
+              className="inline-flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-700 hover:bg-stone-50 disabled:opacity-60"
+            >
+              <Wand2 className="w-4 h-4" /> Fix
+            </button>
+          )}
+          {product.status === 'needs_angle' ? (
+            <button
+              type="button"
+              onClick={onProceed}
+              disabled={busy}
+              className="min-h-[44px] shrink-0 rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-700 hover:bg-stone-50 disabled:opacity-60"
+            >
+              Process anyway
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onRequeue}
+              disabled={busy}
+              className="inline-flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-700 hover:bg-stone-50 disabled:opacity-60"
+            >
+              <RefreshCw className={`w-4 h-4 ${busy ? 'animate-spin' : ''}`} /> Retry
+            </button>
+          )}
+        </div>
+      </div>
+      {fixing && (
+        <div className="mt-4 border-t border-stone-200 pt-4">
+          <FixPanel product={product} onDone={onChanged} onCancel={() => setFixing(false)} onError={onError} />
+        </div>
       )}
     </div>
-    <div className="flex flex-wrap gap-2">
-      {/* A failed audit is often a detail the first photo showed badly -
-          another angle fixes that without redoing the whole shoot. */}
-      {product.status !== 'failed' && (
-        <AngleCaptureButton productId={product.id} onAdded={onChanged} onError={onError} />
-      )}
-      {product.status === 'needs_angle' ? (
-        <button
-          type="button"
-          onClick={onProceed}
-          disabled={busy}
-          className="min-h-[44px] shrink-0 rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-700 hover:bg-stone-50 disabled:opacity-60"
-        >
-          Process anyway
-        </button>
-      ) : (
-        <button
-          type="button"
-          onClick={onRequeue}
-          disabled={busy}
-          className="inline-flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-700 hover:bg-stone-50 disabled:opacity-60"
-        >
-          <RefreshCw className={`w-4 h-4 ${busy ? 'animate-spin' : ''}`} /> Retry
-        </button>
-      )}
-    </div>
-  </div>
-);
+  );
+};

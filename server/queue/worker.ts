@@ -35,6 +35,8 @@ import {
   classifyAuditFailure,
   type EnhanceResult,
   type AuditResult,
+  type AuditCheck,
+  type SegmentationResult,
 } from '../ai/operations';
 import { buildOutputFramingBlock } from '../ai/prompts';
 import {
@@ -49,6 +51,9 @@ import {
   type ReferenceImage,
 } from '../ai/inventory';
 import { aspectRatioFor, describeItemType } from '../catalog/taxonomy';
+import { buildFixBlock, AUDIT_CHECK_TO_FIX, isFixCode } from '../catalog/fixes';
+import { designMemoryFor, buildDesignMemoryBlock, recordFixRequest } from '../db/fixRequests';
+import { buildFaithfulImage, FaithfulUnavailableError } from '../imaging/faithful';
 import { cachedSegmentation, cachedInventory } from './groundingCache';
 import { getEnhancePrompt } from '../settings';
 import { logEvent, newRequestId } from '../logging';
@@ -201,6 +206,12 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
     .slice(-MAX_ANGLE_PHOTOS)
     .map((p) => ({ base64: readImageBase64(p), mimeType: p.mimeType, label: 'another angle of the same piece', kind: 'angle' as const }));
 
+  // Set when staff asked for specific fixes in Review (routes/products.ts).
+  const fixPayload = (job.payload.fix ?? {}) as { issues?: unknown; note?: unknown };
+  const fixCodes = Array.isArray(fixPayload.issues) ? fixPayload.issues.map(String).filter(isFixCode) : [];
+  const fixNote = typeof fixPayload.note === 'string' ? fixPayload.note : '';
+  let memoryLessonCount = 0;
+
   logEvent('pipeline.started', {
     requestId,
     jobId: job.id,
@@ -241,7 +252,15 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
 
   const finish = (
     status: 'awaiting_review' | 'needs_angle' | 'needs_reshoot' | 'failed',
-    detail: { reason: string; checklist?: AuditResult['checklist'] | null; modelUsed?: string; attemptCount?: number; retryable?: boolean }
+    detail: {
+      reason: string;
+      checklist?: AuditResult['checklist'] | null;
+      modelUsed?: string;
+      attemptCount?: number;
+      retryable?: boolean;
+      /** 'faithful' when the photo is a cut-out of the original, not generated. */
+      renderMode?: 'ai' | 'faithful';
+    }
   ) => {
     logEvent('pipeline.completed', {
       requestId,
@@ -260,6 +279,11 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
       detailInventoryUsed,
       referenceImageCount,
       anglePhotos: angles.length,
+      // Separates a cut-out from an AI render, so reshoot and approval rates
+      // can be reported with and without faithful mode.
+      renderMode: detail.renderMode ?? (status === 'awaiting_review' ? 'ai' : null),
+      designMemoryLessons: memoryLessonCount,
+      fixRequested: fixCodes.length > 0 || Boolean(fixNote),
     });
 
     recordAuditResult(product.id, {
@@ -292,8 +316,8 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
   // Non-blocking grounding call. Fails open: if it errors or times out,
   // segmentationBlock stays empty and the pipeline behaves exactly as it
   // would have without the feature.
-  const runSegmentation = async (): Promise<string> => {
-    if (!ENABLE_SEGMENTATION_GROUNDING) return '';
+  const runSegmentation = async (): Promise<SegmentationResult | null> => {
+    if (!ENABLE_SEGMENTATION_GROUNDING) return null;
     const segmentStartedAt = Date.now();
     // Deduped by image hash: a "regenerate" or a requeue on the same photo
     // re-uses the outline instead of paying for it again.
@@ -311,7 +335,7 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
       cacheHit,
       latencyMs: Date.now() - segmentStartedAt,
     });
-    return segmentation ? buildSegmentationBlock(segmentation) : '';
+    return segmentation;
   };
 
   // The detail inventory (ai/inventory.ts): close-ups of the intricate areas
@@ -366,8 +390,103 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
     }
   };
 
+  // Filled by the grounding stage below; faithful mode reuses it.
+  let segmentation: SegmentationResult | null = null;
+
+  // Faithful mode: the piece cut out of the original's own pixels. Used when
+  // the AI's version failed on something a redraw keeps getting wrong, and
+  // when staff ask for it directly. Returns false when the photo will not
+  // separate cleanly, and the caller falls back to what it did before.
+  const tryFaithful = async (why: { reason: string; attemptCount: number; trigger: 'audit_failed' | 'staff_request' }): Promise<boolean> => {
+    if (!config.faithfulMode && why.trigger !== 'staff_request') return false;
+    const startedAt = Date.now();
+    setJobStage(job.id, 'cutting_out');
+    try {
+      // The outline is needed even when segmentation grounding is switched
+      // off for the enhance prompt. Cached by image, so usually free here.
+      let outline = segmentation;
+      if (!outline) {
+        const { result, cacheHit } = await cachedSegmentation(cleanBase64, () => segmentJewelry(ai, cleanBase64, mimeType));
+        if (!cacheHit) {
+          apiCallCount++;
+          estimatedCostUsd += COST_PER_CALL_USD[MODEL_SEGMENT] || 0;
+        }
+        outline = result;
+      }
+      if (!outline) throw new FaithfulUnavailableError('no_outline', 'The piece could not be outlined in the photo.');
+
+      const cutOut = await buildFaithfulImage({
+        image: originalBuffer,
+        polygon: outline.polygon,
+        box: outline.boxTwoD,
+        exclusions: outline.exclusions,
+        aspectRatio,
+      });
+      const processedPhoto = saveImage({
+        productId: product.id,
+        kind: 'processed',
+        data: cutOut.buffer.toString('base64'),
+        mimeType: cutOut.mimeType,
+        source: 'faithful',
+      });
+      logEvent('pipeline.faithful_built', {
+        requestId,
+        productId: product.id,
+        trigger: why.trigger,
+        latencyMs: Date.now() - startedAt,
+        coverage: cutOut.coverage,
+        backgroundSpread: cutOut.backgroundSpread,
+        exclusions: outline.exclusions?.length ?? 0,
+        itemType: product.itemType || null,
+      });
+      const reason = why.trigger === 'staff_request'
+        ? 'Your own photo, cut out onto white. Nothing in it was redrawn.'
+        : `The AI version was not true to the piece (${why.reason.replace(/\.$/, '')}), so this is your own photo cut out onto white instead. Nothing in it was redrawn - check it and approve, or reshoot.`;
+      // No checklist: the audit's verdict was about the AI version, not this.
+      finish('awaiting_review', { reason, checklist: null, modelUsed: 'faithful', attemptCount: why.attemptCount, renderMode: 'faithful' });
+      setProductStatus(product.id, 'awaiting_review');
+      completeJob(job.id, 'succeeded', { processedPhotoId: processedPhoto.id, modelUsed: 'faithful', reason });
+      enqueueJob({ productId: product.id, type: 'copy', priority: -1 });
+      return true;
+    } catch (err) {
+      logEvent('pipeline.faithful_unavailable', {
+        requestId,
+        productId: product.id,
+        trigger: why.trigger,
+        code: err instanceof FaithfulUnavailableError ? err.code : 'error',
+        errorMessage: debugDetail(err),
+        latencyMs: Date.now() - startedAt,
+      });
+      return false;
+    }
+  };
+
+  // Every route to "reshoot" goes through here, so faithful mode gets its
+  // chance first. A blurred or cropped original is the one thing a cut-out
+  // cannot help with - it would be just as blurred or cropped.
+  const reshootOrFaithful = async (reason: string, checklist: AuditResult['checklist'] | null, attempts: number, extra: Record<string, unknown> = {}) => {
+    const sourcePhotoProblem = checklist ? checklist.sharpFocus === false || checklist.notCropped === false : false;
+    if (!sourcePhotoProblem && (await tryFaithful({ reason, attemptCount: attempts, trigger: 'audit_failed' }))) return;
+    finish('needs_reshoot', { reason, checklist, attemptCount: attempts });
+    setProductStatus(product.id, 'needs_reshoot');
+    completeJob(job.id, 'needs_reshoot', { reason, ...extra });
+  };
+
+  // Staff tapped "use my real photo" in Review: no AI render at all.
+  if (job.payload.mode === 'faithful') {
+    if (!(await tryFaithful({ reason: 'staff request', attemptCount: 0, trigger: 'staff_request' }))) {
+      const reason = 'This photo could not be cut out cleanly (the background is too busy or too close to the piece\'s colour). Reshoot it on the plain velvet.';
+      finish('needs_reshoot', { reason, attemptCount: 0 });
+      setProductStatus(product.id, 'needs_reshoot');
+      completeJob(job.id, 'needs_reshoot', { reason: 'faithful_unavailable' });
+    }
+    return;
+  }
+
   setJobStage(job.id, config.detailInventory ? 'inspecting' : 'segmenting');
-  const [segmentationBlock, detail] = await Promise.all([runSegmentation(), runInventory()]);
+  const [segmentationFound, detail] = await Promise.all([runSegmentation(), runInventory()]);
+  segmentation = segmentationFound;
+  const segmentationBlock = segmentation ? buildSegmentationBlock(segmentation) : '';
 
   detailInventoryUsed = Boolean(detail);
 
@@ -398,8 +517,27 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
   const allRefs: ReferenceImage[] = [...angles, ...(detail?.crops ?? [])];
   const auditGrounding = detail ? { inventory: detail.inventory, crops: allRefs } : undefined;
   let enhanceRefs: ReferenceImage[] = allRefs.slice(0, 4);
+
+  // Design memory: the mistakes staff (and the audit) keep correcting on this
+  // style, so this piece is warned about them before its first attempt.
+  const memory = config.designMemory ? designMemoryFor(product.itemType, product.id) : null;
+  const memoryBlock = memory ? buildDesignMemoryBlock(product.itemType, memory) : '';
+  memoryLessonCount = memory?.lessons.length ?? 0;
+  if (memory && memoryLessonCount + memory.notes.length > 0) {
+    logEvent('pipeline.design_memory', {
+      requestId,
+      productId: product.id,
+      scope: memory.scope,
+      lessons: memory.lessons.map((l) => l.code),
+      notes: memory.notes.length,
+    });
+  }
+  // Staff asked for these exact fixes in Review. Last in the prompt, so it
+  // is the final thing the model reads.
+  const fixBlock = buildFixBlock(fixCodes, fixNote);
+
   const buildEnhancePrompt = (refs: ReferenceImage[]) =>
-    promptTemplate + contextBlock + segmentationBlock + inventoryBlock + buildReferenceImagesBlock(refs) + framingBlock;
+    promptTemplate + contextBlock + segmentationBlock + inventoryBlock + memoryBlock + buildReferenceImagesBlock(refs) + framingBlock + fixBlock;
 
   const runEnhance = (model: string, stage: string, prompt: string, refs: ReferenceImage[]) =>
     withTransientRetry(
@@ -492,6 +630,15 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
   // So: classify first, and only spend on the failures a stronger pass can
   // actually fix.
   if (!audit.overallPass) {
+    // Fed to design memory: a fidelity check the audit failed is a mistake
+    // the next piece of this style should be warned about.
+    const auditFixes = (Object.keys(AUDIT_CHECK_TO_FIX) as AuditCheck[])
+      .filter((check) => audit.checklist[check] === false)
+      .map((check) => AUDIT_CHECK_TO_FIX[check]!);
+    if (auditFixes.length > 0) {
+      recordFixRequest({ productId: product.id, itemType: product.itemType, issues: auditFixes, source: 'audit' });
+    }
+
     const decision = classifyAuditFailure(audit.checklist);
 
     if (!decision.escalate) {
@@ -501,9 +648,7 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
         failedChecks: decision.failedUnfixable,
         why: 'source-photo or design-fidelity failure - a stronger model cannot fix this',
       });
-      finish('needs_reshoot', { reason: audit.reason, checklist: audit.checklist, attemptCount });
-      setProductStatus(product.id, 'needs_reshoot');
-      completeJob(job.id, 'needs_reshoot', { reason: audit.reason, escalated: false });
+      await reshootOrFaithful(audit.reason, audit.checklist, attemptCount, { escalated: false });
       return;
     }
 
@@ -552,15 +697,11 @@ Correct this specific issue while still following every rule above.`;
           audit = retryAudit;
           modelUsed = MODEL_ENHANCE_ESCALATED;
         } else {
-          finish('needs_reshoot', { reason: retryAudit.reason, checklist: retryAudit.checklist, attemptCount });
-          setProductStatus(product.id, 'needs_reshoot');
-          completeJob(job.id, 'needs_reshoot', { reason: retryAudit.reason });
+          await reshootOrFaithful(retryAudit.reason, retryAudit.checklist, attemptCount);
           return;
         }
       } else {
-        finish('needs_reshoot', { reason: audit.reason, checklist: audit.checklist, attemptCount });
-        setProductStatus(product.id, 'needs_reshoot');
-        completeJob(job.id, 'needs_reshoot', { reason: audit.reason });
+        await reshootOrFaithful(audit.reason, audit.checklist, attemptCount);
         return;
       }
     } catch (err) {
@@ -576,9 +717,7 @@ Correct this specific issue while still following every rule above.`;
         return;
       }
       console.error('Escalated retry failed:', (err as Error)?.message || err);
-      finish('needs_reshoot', { reason: audit.reason, checklist: audit.checklist, attemptCount });
-      setProductStatus(product.id, 'needs_reshoot');
-      completeJob(job.id, 'needs_reshoot', { reason: audit.reason });
+      await reshootOrFaithful(audit.reason, audit.checklist, attemptCount);
       return;
     }
   }

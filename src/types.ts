@@ -60,6 +60,8 @@ export interface Product {
   staffName: string;
   originalPhotoId: string | null;
   processedPhotoId: string | null;
+  /** 'faithful' = the piece cut out of the real photo, nothing generated. */
+  renderMode: 'ai' | 'faithful' | null;
   /** Extra photos of this piece from other angles, for the current original. */
   anglePhotoIds: string[];
   job: JobSummary | null;

@@ -118,6 +118,13 @@ DETAIL_INVENTORY=on
 # hidden in the first one, before paying for the enhancement. "off" skips it.
 ANGLE_REQUESTS=on
 
+# When the AI's version changes the design, cut the piece out of the real
+# photo onto white instead of asking for a reshoot. "off" goes back to reshoots.
+FAITHFUL_MODE=on
+
+# Warns the AI about mistakes staff keep correcting on the same style.
+DESIGN_MEMORY=on
+
 GOOGLE_DRIVE_CLIENT_ID=
 GOOGLE_DRIVE_CLIENT_SECRET=
 GOOGLE_DRIVE_REFRESH_TOKEN=

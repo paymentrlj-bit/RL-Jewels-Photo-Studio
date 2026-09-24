@@ -17,6 +17,7 @@ import {
 import { buildAuditPrompt, buildCopyPrompt, type AuditContext, type CopyContext } from './prompts';
 import { buildAuditInventoryBlock, type DetailInventory, type ReferenceImage } from './inventory';
 import { describeItemType } from '../catalog/taxonomy';
+import type { Exclusion } from '../imaging/faithful';
 
 export interface EnhanceResult {
   imageBase64: string;
@@ -216,6 +217,25 @@ export interface SegmentationResult {
   boxTwoD: number[];
   polygon: number[][];
   label: string;
+  /**
+   * Things in the photo that are not the jewellery: tags, hands, watermarks.
+   * Used by faithful mode to blank them from the cut-out. Absent on results
+   * cached before this field existed.
+   */
+  exclusions?: Exclusion[];
+}
+
+const EXCLUSION_KINDS = ['tag', 'hand', 'watermark', 'other'] as const;
+
+function parseExclusions(raw: unknown): Exclusion[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((e) => Array.isArray(e?.box_2d) && e.box_2d.length === 4 && e.box_2d.every((v: unknown) => typeof v === 'number'))
+    .map((e) => ({
+      box: e.box_2d as number[],
+      kind: (EXCLUSION_KINDS as readonly string[]).includes(e.kind) ? e.kind : 'other',
+    }))
+    .slice(0, 12);
 }
 
 // Traces the jewelry's real silhouette in the ORIGINAL photo only, via a
@@ -232,10 +252,16 @@ export async function segmentJewelry(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), SEGMENT_TIMEOUT_MS);
   try {
-    const prompt = `Give the precise segmentation outline of the single jewelry item in this image.
-Output a JSON list with exactly one entry:
-{ "box_2d": [ymin, xmin, ymax, xmax], "mask": [[y, x], [y, x], ...polygon points tracing the item's actual silhouette in order...], "label": "short description of the item" }
-All coordinates normalized 0-1000. Trace the jewelry's real outline closely, including any visible interior opening (e.g. a ring or bangle's finger/wrist hole) as part of the silhouette, not as a filled solid.`;
+    const prompt = `Give the precise segmentation outline of the single jewelry item in this image, and list everything in the photo that is NOT the jewelry but could be mistaken for part of it.
+Output one JSON object:
+{
+  "box_2d": [ymin, xmin, ymax, xmax],
+  "mask": [[y, x], [y, x], ...polygon points tracing the item's actual silhouette in order...],
+  "label": "short description of the item",
+  "exclusions": [ { "box_2d": [ymin, xmin, ymax, xmax], "kind": "tag" | "hand" | "watermark" | "other" } ]
+}
+All coordinates normalized 0-1000. Trace the jewelry's real outline closely, including any visible interior opening (e.g. a ring or bangle's finger/wrist hole) as part of the silhouette, not as a filled solid. A pair (two earrings) is one item: outline both.
+In "exclusions" give a tight box for each price tag or label together with its string ("tag"), each finger or hand ("hand"), and any text printed on the photo by the camera such as "Shot on ..." ("watermark"). Use "other" for anything else that is not jewelry but touches or overlaps it. Use an empty list if there is nothing.`;
 
     const response = await ai.models.generateContent({
       model: MODEL_SEGMENT,
@@ -251,8 +277,10 @@ All coordinates normalized 0-1000. Trace the jewelry's real outline closely, inc
       } as never,
     });
 
-    const parsed = JSON.parse(response.text?.trim() || '[]');
-    const first = Array.isArray(parsed) ? parsed[0] : null;
+    const parsed = JSON.parse(response.text?.trim() || '{}');
+    // An object is what is asked for; a one-entry list is what the older
+    // prompt asked for, and models sometimes still answer that way.
+    const first = Array.isArray(parsed) ? parsed[0] : parsed;
     if (
       !first ||
       !Array.isArray(first.box_2d) || first.box_2d.length !== 4 ||
@@ -260,7 +288,12 @@ All coordinates normalized 0-1000. Trace the jewelry's real outline closely, inc
     ) {
       return null;
     }
-    return { boxTwoD: first.box_2d, polygon: first.mask, label: String(first.label || 'jewelry item') };
+    return {
+      boxTwoD: first.box_2d,
+      polygon: first.mask,
+      label: String(first.label || 'jewelry item'),
+      exclusions: parseExclusions(first.exclusions),
+    };
   } catch (err) {
     console.error('Segmentation grounding (non-blocking) failed:', (err as Error)?.message || err);
     return null;

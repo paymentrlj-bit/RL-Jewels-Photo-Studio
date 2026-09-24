@@ -87,7 +87,12 @@ export const CATEGORIES: Category[] = [
   // repeated small elements (the owner described one as a "3-strand EKDANI
   // design throughout the entire necklace").
   { type: 'Necklace',    defaultGender: "women's", aspectRatio: '3:4', synonyms: ['neckless', 'nekless', 'neckles', 'ekdani', 'mohanmala', 'mohan mal'] },
-  { type: 'Haar',        defaultGender: "women's", aspectRatio: '3:4', synonyms: ['haram', 'rani haar', 'ranihar', 'long haar', 'har', 'harset', 'chaplahar', 'chapalahar'] },
+  // The "pendant ..." names are a haar sold with its pendant. Listed so they
+  // outrank the bare "pendant" match, which would frame a long haar square.
+  {
+    type: 'Haar', defaultGender: "women's", aspectRatio: '3:4',
+    synonyms: ['haram', 'rani haar', 'ranihar', 'long haar', 'har', 'harset', 'chaplahar', 'chapalahar', 'pendant rani har', 'meena ranihar', 'pendant harset'],
+  },
   { type: 'Choker',      defaultGender: "women's", aspectRatio: '3:4', synonyms: ['kanthi', 'kantha', 'chokar', 'thushi'] },
   {
     // "Pote" is the Marathi name for the black-bead string of a mangalsutra, and
@@ -98,10 +103,13 @@ export const CATEGORIES: Category[] = [
     // with black beads repeatedly rendered as gold. "chain pote" is listed so it
     // outranks the bare "chain" match.
     // "PBB" (as in "LONG PBB") is short for pote black beads.
-    type: 'Mangalsutra', defaultGender: "women's", aspectRatio: '3:4', synonyms: ['mangalsutram', 'mangal sutra', 'thali', 'pote', 'chain pote', 'pbb', 'mangalpote'],
+    // Not "thali": in this store's POS a thali is a plate ("PUJA THALI",
+    // ".THALI PLAIN-1" in silver), and matching it sent those to Mangalsutra.
+    type: 'Mangalsutra', defaultGender: "women's", aspectRatio: '3:4', synonyms: ['mangalsutram', 'mangal sutra', 'pote', 'chain pote', 'pote chain', 'pbb', 'mangalpote'],
     modelNotes: 'A mangalsutra: gold chain combined with strings or sections of small black glass beads (pote / kaala mani), usually with a gold pendant or two small cup-shaped vati. The black beads are its defining feature: they must stay black, at the same count and positions, and must never be rendered as gold beads. Black beads set inside small gold cages must keep both the cage and the black bead inside it. Any black enamel (meena) on the vati or pendant must stay.',
   },
-  { type: 'Bracelet',    defaultGender: 'unisex',  aspectRatio: '3:4', synonyms: ['brasslet', 'braclet', 'bracelate', 'lucky', 'charm bracelet'] },
+  // Not "lucky": the store's "LUCKY STONE" is a loose gemstone, not a bracelet.
+  { type: 'Bracelet',    defaultGender: 'unisex',  aspectRatio: '3:4', synonyms: ['brasslet', 'braclet', 'bracelate', 'charm bracelet'] },
   {
     // "Kansakali" is the store's name for an ear chain (confirmed by the owner).
     // Elongated: it runs the full height of the ear.
@@ -189,9 +197,17 @@ export const CATEGORY_TYPES = CATEGORIES.map((c) => c.type);
 export function describeItemType(itemType: string | undefined): { line: string; notes: string | null } {
   const raw = (itemType || '').trim();
   const category = resolveCategory(raw);
+  // "Pote" means black beads whatever the piece is - "SHORT BRACLET POTE" is
+  // a black-bead bracelet and "FMG POTE PADAK" a mangalsutra pendant. Those
+  // resolve to Bracelet and Pendant, which say nothing about beads, so the
+  // black-bead rule rides along with any name that carries the word.
+  const blackBeads = category?.type !== 'Mangalsutra' && /(^| )(pote|pbb)( |$)/.test(normalize(raw)) ? BLACK_BEAD_NOTE : null;
   if (!category) {
-    return { line: raw ? `"${raw}" (the store's own style name)` : 'jewellery', notes: null };
+    return { line: raw ? `"${raw}" (the store's own style name)` : 'jewellery', notes: blackBeads };
   }
   const line = normalize(raw) === normalize(category.type) ? category.type : `${category.type} (store tag name: "${raw}")`;
-  return { line, notes: category.modelNotes ?? null };
+  const notes = [category.modelNotes, blackBeads].filter(Boolean).join(' ');
+  return { line, notes: notes || null };
 }
+
+const BLACK_BEAD_NOTE = 'This piece includes pote: small black glass beads. They must stay black, at the same count and positions, and must never be rendered as gold beads.';

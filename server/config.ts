@@ -112,6 +112,16 @@ export const config = {
   // another angle. ANGLE_REQUESTS=off processes everything straight through.
   angleRequests: process.env.ANGLE_REQUESTS?.trim().toLowerCase() !== 'off',
 
+  // Faithful mode (server/imaging/faithful.ts): when the AI's version fails on
+  // fidelity, cut the piece out of the real photo onto white instead of
+  // sending it for a reshoot. FAITHFUL_MODE=off goes back to reshoots.
+  faithfulMode: process.env.FAITHFUL_MODE?.trim().toLowerCase() !== 'off',
+
+  // Design memory (server/db/fixRequests.ts): warn the enhance prompt about
+  // the mistakes staff keep correcting on this style. DESIGN_MEMORY=off to
+  // compare without it.
+  designMemory: process.env.DESIGN_MEMORY?.trim().toLowerCase() !== 'off',
+
   // Which ERP column mapping to use when exporting. See server/export/mappings/.
   // Config, not code, specifically so pointing this at the store's real ERP
   // is a one-line change rather than a rewrite of the export module.

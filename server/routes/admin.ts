@@ -38,7 +38,12 @@ clientRouter.post('/log-event', (req: AuthenticatedRequest, res) => {
   const events = Array.isArray(req.body?.events) ? req.body.events : [];
   for (const event of events.slice(0, 50)) {
     if (!event?.type || typeof event.type !== 'string') continue;
-    logEvent(`client.${event.type}`, (event.payload || {}) as EventPayload, actorFrom(req.user));
+    // The client sends its fields as `data` (src/utils/analytics.ts). This
+    // used to read `payload` only, which silently dropped every field - the
+    // js_error events in Axiom arrived with no message or stack at all.
+    const data = event.data ?? event.payload;
+    const payload = data && typeof data === 'object' && !Array.isArray(data) ? (data as EventPayload) : {};
+    logEvent(`client.${event.type}`, payload, actorFrom(req.user));
   }
   res.json({ success: true });
 });

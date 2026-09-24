@@ -38,6 +38,9 @@ import {
 import { enqueueJob, getLatestJobForProduct, queueDepth, requeueJob, getJob } from '../queue/jobs';
 import { findUserById } from '../auth/users';
 import { deriveProductIdFromCpc } from '../integrations/cpcMaster';
+import { computeNetWeight } from '../catalog/weights';
+import { isFixCode, cleanNote, USE_REAL_PHOTO } from '../catalog/fixes';
+import { recordFixRequest } from '../db/fixRequests';
 
 export const productsRouter = express.Router();
 
@@ -64,6 +67,8 @@ function decorate(productId: string) {
     staffName: creator?.displayName || creator?.username || 'Unknown',
     originalPhotoId: original?.id || null,
     processedPhotoId: processed?.id || null,
+    // 'faithful' = the piece cut out of the real photo, nothing generated.
+    renderMode: processed ? (processed.source === 'faithful' ? 'faithful' : 'ai') : null,
     anglePhotoIds: angles.map((p) => p.id),
     job: job
       ? {
@@ -145,6 +150,13 @@ productsRouter.post('/products', (req: AuthenticatedRequest, res) => {
   const body = req.body || {};
 
   const cpc = String(body.cpc || '').trim();
+  // Net is derived, never taken from the request: Gross - Other, or Gross
+  // when there is no other weight.
+  const weights = computeNetWeight(body.grossWeightGrams, body.otherWeightGrams);
+  if (!weights.ok) {
+    res.status(400).json({ error: weights.error });
+    return;
+  }
   const product = createProduct({
     createdBy: user.id,
     batchId: body.batchId ? String(body.batchId) : findOpenBatchFor(user.id)?.id ?? null,
@@ -156,7 +168,7 @@ productsRouter.post('/products', (req: AuthenticatedRequest, res) => {
     size: String(body.size || 'DEFAULT'),
     grossWeightGrams: String(body.grossWeightGrams || ''),
     otherWeightGrams: String(body.otherWeightGrams || ''),
-    netWeightGrams: String(body.netWeightGrams || ''),
+    netWeightGrams: weights.net,
     name: String(body.name || ''),
   });
 
@@ -191,9 +203,23 @@ productsRouter.patch('/products/:id', (req: AuthenticatedRequest, res) => {
   for (const key of [
     'cpc', 'name', 'description', 'seoMetaTitle', 'seoMetaDescription', 'seoKeywords',
     'imageAltText', 'urlSlug', 'itemType', 'purity', 'gender', 'size',
-    'grossWeightGrams', 'otherWeightGrams', 'netWeightGrams', 'reviewNote',
+    'grossWeightGrams', 'otherWeightGrams', 'reviewNote',
   ]) {
     if (key in body) fields[key] = String(body[key] ?? '');
+  }
+
+  // Any change to either weight recomputes net from the merged values; a net
+  // sent on its own is ignored, since it is never entered by hand.
+  if ('grossWeightGrams' in fields || 'otherWeightGrams' in fields) {
+    const weights = computeNetWeight(
+      (fields.grossWeightGrams as string | undefined) ?? existing.grossWeightGrams,
+      (fields.otherWeightGrams as string | undefined) ?? existing.otherWeightGrams
+    );
+    if (!weights.ok) {
+      res.status(400).json({ error: weights.error });
+      return;
+    }
+    fields.netWeightGrams = weights.net;
   }
 
   // Keep the derived catalog id in step with the CPC, so the duplicate-shoot
@@ -367,8 +393,60 @@ productsRouter.post('/products/:id/reject', (req: AuthenticatedRequest, res) => 
 
   const note = String(req.body?.note || '').trim();
   setProductStatus(product.id, 'needs_reshoot', { reviewNote: note });
+  // The reason is design memory for the next piece of this style.
+  recordFixRequest({ productId: product.id, itemType: product.itemType, issues: [], note, source: 'reject', createdBy: req.user?.id });
   logEvent('product.rejected', { productId: product.id, cpc: product.cpc, note }, actorFrom(req.user));
   res.json({ product: decorate(product.id) });
+});
+
+// One-tap fix: staff say what is wrong with the photo ("black beads turned
+// gold") and it is redone with that exact instruction - or, for "use my real
+// photo", cut out of the original instead (faithful mode). Cheaper than a
+// reshoot, and it uses the eye of someone who knows the piece. Every fix is
+// also remembered against the style (design memory).
+productsRouter.post('/products/:id/fix', (req: AuthenticatedRequest, res) => {
+  const product = getProduct(req.params.id);
+  if (!product) {
+    res.status(404).json({ error: 'Product not found.' });
+    return;
+  }
+  if (!getLatestPhoto(product.id, 'original')) {
+    res.status(400).json({ error: 'This product has no photo to fix.' });
+    return;
+  }
+  if (product.status === 'queued' || product.status === 'processing') {
+    res.status(409).json({ error: 'This piece is already being processed.' });
+    return;
+  }
+
+  const requested: string[] = Array.isArray(req.body?.issues) ? req.body.issues.map(String) : [];
+  const useRealPhoto = requested.includes(USE_REAL_PHOTO);
+  const issues = [...new Set(requested.filter(isFixCode))];
+  const note = cleanNote(req.body?.note);
+  if (!useRealPhoto && issues.length === 0 && !note) {
+    res.status(400).json({ error: 'Pick what is wrong with the photo, or write a short note.' });
+    return;
+  }
+
+  recordFixRequest({ productId: product.id, itemType: product.itemType, issues, note, source: 'staff', createdBy: req.user?.id });
+  // The piece is usually still on the reviewer's screen - jump the queue.
+  const job = enqueueJob({
+    productId: product.id,
+    type: 'enhance',
+    priority: 10,
+    payload: useRealPhoto ? { mode: 'faithful' } : { fix: { issues, note }, skipAngleRequest: true },
+  });
+  setProductStatus(product.id, 'queued');
+  logEvent('product.fix_requested', {
+    productId: product.id,
+    jobId: job.id,
+    issues,
+    useRealPhoto,
+    hasNote: Boolean(note),
+    previousStatus: product.status,
+    itemType: product.itemType || null,
+  }, actorFrom(req.user));
+  res.status(202).json({ product: decorate(product.id), jobId: job.id });
 });
 
 // Re-runs the pipeline on the photo already on file - for a transient failure,
