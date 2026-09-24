@@ -21,6 +21,7 @@ import {
   MultiFormatReader,
 } from '@zxing/library';
 import { HTMLCanvasElementLuminanceSource } from '@zxing/browser';
+import { extractCpc } from '../../server/catalog/tagCode';
 
 export type ReaderKind = 'native' | 'fallback';
 
@@ -32,7 +33,11 @@ export interface CodeReader {
   readImage(image: ImageBitmap): Promise<string | null>;
 }
 
-const NATIVE_FORMATS = ['qr_code', 'code_128', 'code_39', 'ean_13', 'data_matrix'];
+// Formats with a real checksum only. The old scanner also tried the
+// checksum-less 1D formats (Code 39, ITF, Codabar), which "read" short random
+// numbers out of velvet texture and tag print - at the store it returned
+// 411152, 32382 and 144608 for a tag whose QR holds 1516L387.
+const NATIVE_FORMATS = ['qr_code', 'data_matrix', 'code_128', 'ean_13'];
 
 interface DetectedBarcode { rawValue: string; boundingBox?: DOMRectReadOnly }
 interface NativeDetector { detect(source: CanvasImageSource | ImageBitmap): Promise<DetectedBarcode[]> }
@@ -50,12 +55,12 @@ async function createNativeDetector(): Promise<NativeDetector | null> {
   }
 }
 
-// When a frame holds more than one code (the tag's QR and a price barcode, or
-// two tags), the biggest is the one the phone is pointed at.
+// When a frame holds more than one code, one that carries a CPC wins; after
+// that, the biggest is the one the phone is pointed at.
 function pickLargest(codes: DetectedBarcode[]): string | null {
   const readable = codes.filter((c) => c.rawValue?.trim());
   if (readable.length === 0) return null;
-  readable.sort((a, b) => area(b) - area(a));
+  readable.sort((a, b) => Number(extractCpc(b.rawValue).matched) - Number(extractCpc(a.rawValue).matched) || area(b) - area(a));
   return readable[0].rawValue.trim();
 }
 const area = (c: DetectedBarcode) => (c.boundingBox ? c.boundingBox.width * c.boundingBox.height : 0);
@@ -63,7 +68,7 @@ const area = (c: DetectedBarcode) => (c.boundingBox ? c.boundingBox.width * c.bo
 const zxingHints = (tryHarder: boolean) => {
   const hints = new Map<DecodeHintType, unknown>();
   hints.set(DecodeHintType.POSSIBLE_FORMATS, [
-    BarcodeFormat.QR_CODE, BarcodeFormat.DATA_MATRIX, BarcodeFormat.CODE_128, BarcodeFormat.CODE_39, BarcodeFormat.EAN_13,
+    BarcodeFormat.QR_CODE, BarcodeFormat.DATA_MATRIX, BarcodeFormat.CODE_128, BarcodeFormat.EAN_13,
   ]);
   if (tryHarder) hints.set(DecodeHintType.TRY_HARDER, true);
   return hints;

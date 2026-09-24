@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Camera, ClipboardCheck, PackageOpen, Settings, LogOut, WifiOff, AlertTriangle } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Camera, ClipboardCheck, PackageOpen, Settings, LogOut, WifiOff, AlertTriangle, RefreshCw } from 'lucide-react';
 import { api, ApiError, setUnauthorizedHandler } from './api';
 import type { Batch, HealthFeatures, Product, QueueDepth, SessionUser } from './types';
 import { ShootView } from './views/ShootView';
@@ -16,6 +16,10 @@ type Tab = 'shoot' | 'review' | 'export' | 'admin';
 // enough that a finished photo appears while the staff member is still
 // looking at the screen, and light enough that a day of polling is nothing.
 const POLL_MS = 3000;
+
+// How often an open tab checks whether the server has a newer build. Staff
+// keep the app open all day, so without this a deploy never reaches them.
+const VERSION_CHECK_MS = 60_000;
 
 export default function App() {
   const { isOnline } = useNetworkStatus();
@@ -36,10 +40,53 @@ export default function App() {
     setUnauthorizedHandler(() => setUser(null));
   }, []);
 
+  // The build this tab loaded, and whether the server now serves a newer one.
+  const loadedBuild = useRef<string | null>(null);
+  const [updateReady, setUpdateReady] = useState(false);
+
   useEffect(() => {
     api.session().then(setUser).catch(() => setUser(null)).finally(() => setCheckingSession(false));
-    api.health().then((h) => setFeatures(h.features)).catch(() => undefined);
+    api.health().then((h) => {
+      setFeatures(h.features);
+      loadedBuild.current = h.build ?? null;
+    }).catch(() => undefined);
+
+    const timer = window.setInterval(() => {
+      api.health().then((h) => {
+        if (!h.build) return;
+        if (!loadedBuild.current) loadedBuild.current = h.build;
+        else if (h.build !== loadedBuild.current) setUpdateReady(true);
+      }).catch(() => undefined);
+    }, VERSION_CHECK_MS);
+    return () => window.clearInterval(timer);
   }, []);
+
+  // Forces a real update rather than trusting the service worker to notice
+  // on its own - it should, but the browser's own timing for that is opaque
+  // and not something to build reliability on. Unregistering means the very
+  // next load is a plain, uncached fetch: guaranteed fresh, regardless of
+  // whatever the old worker did or didn't detect.
+  const forceUpdate = useCallback(() => {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations()
+        .then((regs) => Promise.all(regs.map((r) => r.unregister())))
+        .finally(() => window.location.reload());
+    } else {
+      window.location.reload();
+    }
+  }, []);
+
+  // Applied automatically the next time the phone comes back to the app, so
+  // nobody has to know to tap anything. The banner below covers a tab that
+  // stays in view.
+  useEffect(() => {
+    if (!updateReady) return;
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') forceUpdate();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [updateReady, forceUpdate]);
 
   const refresh = useCallback(async () => {
     if (!user) return;
@@ -148,6 +195,20 @@ export default function App() {
       </header>
 
       <main className="mx-auto max-w-7xl px-4 py-6">
+        {updateReady && (
+          <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl bg-sky-50 border border-sky-200 px-4 py-3 text-sm text-sky-900">
+            <RefreshCw className="w-4 h-4 shrink-0" />
+            <span className="flex-1">A new version of the app is ready.</span>
+            <button
+              type="button"
+              onClick={forceUpdate}
+              className="min-h-[44px] rounded-lg bg-sky-700 px-4 py-2 font-medium text-white hover:bg-sky-800"
+            >
+              Update now
+            </button>
+          </div>
+        )}
+
         {!isOnline && (
           <div className="mb-4 flex items-center gap-2 rounded-xl bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-900">
             <WifiOff className="w-4 h-4" /> You are offline. Captures cannot be queued until the connection is back.

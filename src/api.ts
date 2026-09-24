@@ -55,7 +55,7 @@ function post<T>(path: string, body?: unknown): Promise<T> {
 
 export const api = {
   // --- auth ---
-  health: () => request<{ status: string; features: HealthFeatures; erpMapping: string }>('/health'),
+  health: () => request<{ status: string; features: HealthFeatures; erpMapping: string; build?: string }>('/health'),
   login: (username: string, password: string) => post<SessionUser>('/login', { username, password }),
   logout: () => post<{ success: boolean }>('/logout'),
   session: () => request<SessionUser>('/session'),
