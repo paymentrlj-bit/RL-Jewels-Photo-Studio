@@ -14,7 +14,10 @@ import crypto from 'crypto';
 import { config } from '../config';
 import { getDb, newId, nowIso } from '../db';
 
-export type PhotoKind = 'original' | 'processed';
+// 'angle' is an extra photo of the same piece from another viewpoint, added
+// when part of it was hidden in the original. It never replaces the original -
+// it is fed to the models alongside it.
+export type PhotoKind = 'original' | 'processed' | 'angle';
 export type PhotoSource = 'upload' | 'phone_camera' | 'dslr' | 'sample';
 
 export interface StoredPhoto {

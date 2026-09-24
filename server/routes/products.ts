@@ -51,6 +51,11 @@ function decorate(productId: string) {
 
   const original = getLatestPhoto(productId, 'original');
   const processed = getLatestPhoto(productId, 'processed');
+  // Only angles taken for the current original - an older shoot's angles no
+  // longer describe what is being processed.
+  const angles = original
+    ? listPhotos(productId).filter((p) => p.kind === 'angle' && p.createdAt >= original.createdAt)
+    : [];
   const job = getLatestJobForProduct(productId, 'enhance');
   const creator = findUserById(product.createdBy);
 
@@ -59,6 +64,7 @@ function decorate(productId: string) {
     staffName: creator?.displayName || creator?.username || 'Unknown',
     originalPhotoId: original?.id || null,
     processedPhotoId: processed?.id || null,
+    anglePhotoIds: angles.map((p) => p.id),
     job: job
       ? {
           id: job.id,
@@ -250,7 +256,7 @@ productsRouter.post('/products/:id/photo', (req: AuthenticatedRequest, res) => {
 
   // A reshoot is someone standing at the counter waiting, so it goes ahead of
   // the backlog queued earlier in the day.
-  const isReshoot = product.status === 'needs_reshoot' || product.status === 'failed';
+  const isReshoot = product.status === 'needs_reshoot' || product.status === 'needs_angle' || product.status === 'failed';
   const job = enqueueJob({
     productId: product.id,
     type: 'enhance',
@@ -266,6 +272,49 @@ productsRouter.post('/products/:id/photo', (req: AuthenticatedRequest, res) => {
     isReshoot,
     jobId: job.id,
   }, actorFrom(user));
+
+  res.status(202).json({ product: decorate(product.id), photoId: photo.id, jobId: job.id });
+});
+
+// Adds a photo of the same piece from another angle and reprocesses it with
+// both. Used when the pipeline found part of the piece hidden (needs_angle), or
+// after a failed audit, as a cheaper and more targeted alternative to a full
+// reshoot: the original photo stays, the new one only fills in what it hid.
+productsRouter.post('/products/:id/angle', (req: AuthenticatedRequest, res) => {
+  const product = getProduct(req.params.id);
+  if (!product) {
+    res.status(404).json({ error: 'Product not found.' });
+    return;
+  }
+  if (!getLatestPhoto(product.id, 'original')) {
+    res.status(400).json({ error: 'Take the main photo first - an extra angle is added alongside it.' });
+    return;
+  }
+
+  const imageData = req.body?.imageBase64;
+  if (!imageData || typeof imageData !== 'string') {
+    res.status(400).json({ error: 'imageBase64 is required.' });
+    return;
+  }
+
+  let photo;
+  try {
+    photo = saveImage({ productId: product.id, kind: 'angle', data: imageData, source: 'upload' });
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message });
+    return;
+  }
+
+  // Someone is at the counter with the piece in hand - jump the queue.
+  const job = enqueueJob({ productId: product.id, type: 'enhance', priority: 10 });
+  setProductStatus(product.id, 'queued');
+  logEvent('product.angle_added', {
+    productId: product.id,
+    photoId: photo.id,
+    bytes: photo.bytes,
+    previousStatus: product.status,
+    jobId: job.id,
+  }, actorFrom(req.user));
 
   res.status(202).json({ product: decorate(product.id), photoId: photo.id, jobId: job.id });
 });
@@ -336,13 +385,18 @@ productsRouter.post('/products/:id/requeue', (req: AuthenticatedRequest, res) =>
     return;
   }
 
+  // "Process anyway" on a needs_angle item: a fresh job carrying the flag that
+  // tells the pipeline not to stop and ask for an angle again.
+  const proceedWithoutAngle = req.body?.proceedWithoutAngle === true;
   const existing = getLatestJobForProduct(product.id, 'enhance');
-  const jobId = existing && requeueJob(existing.id)
-    ? existing.id
-    : enqueueJob({ productId: product.id, type: 'enhance', priority: 5 }).id;
+  const jobId = proceedWithoutAngle
+    ? enqueueJob({ productId: product.id, type: 'enhance', priority: 10, payload: { skipAngleRequest: true } }).id
+    : existing && requeueJob(existing.id)
+      ? existing.id
+      : enqueueJob({ productId: product.id, type: 'enhance', priority: 5 }).id;
 
   setProductStatus(product.id, 'queued');
-  logEvent('product.requeued', { productId: product.id, jobId }, actorFrom(req.user));
+  logEvent('product.requeued', { productId: product.id, jobId, proceedWithoutAngle }, actorFrom(req.user));
   res.status(202).json({ product: decorate(product.id), jobId });
 });
 

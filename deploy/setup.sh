@@ -114,6 +114,10 @@ OCR_SPACE_API_KEY=
 # to run a batch without it and compare.
 DETAIL_INVENTORY=on
 
+# Asks staff for one more photo from another angle when part of a piece is
+# hidden in the first one, before paying for the enhancement. "off" skips it.
+ANGLE_REQUESTS=on
+
 GOOGLE_DRIVE_CLIENT_ID=
 GOOGLE_DRIVE_CLIENT_SECRET=
 GOOGLE_DRIVE_REFRESH_TOKEN=

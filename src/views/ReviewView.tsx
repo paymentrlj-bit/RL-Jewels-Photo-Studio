@@ -10,6 +10,7 @@ import {
   CheckCircle2, XCircle, RefreshCw, AlertTriangle, Sparkles, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import { api, ApiError } from '../api';
+import { AngleCaptureButton } from '../components/AngleCaptureButton';
 import type { Product } from '../types';
 import { AUDIT_CHECK_LABELS, STATUS_LABELS } from '../types';
 
@@ -36,7 +37,7 @@ export const ReviewView: React.FC<ReviewViewProps> = ({ products, onChanged }) =
   }, [onChanged]);
 
   const awaiting = products.filter((p) => p.status === 'awaiting_review');
-  const problems = products.filter((p) => p.status === 'needs_reshoot' || p.status === 'failed');
+  const problems = products.filter((p) => p.status === 'needs_reshoot' || p.status === 'needs_angle' || p.status === 'failed');
 
   return (
     <div className="space-y-8">
@@ -81,6 +82,9 @@ export const ReviewView: React.FC<ReviewViewProps> = ({ products, onChanged }) =
                 product={product}
                 busy={busyId === product.id}
                 onRequeue={() => act(product.id, () => api.requeue(product.id))}
+                onProceed={() => act(product.id, () => api.requeue(product.id, { proceedWithoutAngle: true }))}
+                onChanged={onChanged}
+                onError={setError}
               />
             ))}
           </div>
@@ -218,15 +222,25 @@ const ReviewCard: React.FC<{
   );
 };
 
-const ProblemRow: React.FC<{ product: Product; busy: boolean; onRequeue: () => void }> = ({ product, busy, onRequeue }) => (
-  <div className="flex items-center gap-4 rounded-xl border border-stone-200 bg-white p-4">
+const ProblemRow: React.FC<{
+  product: Product;
+  busy: boolean;
+  onRequeue: () => void;
+  onProceed: () => void;
+  onChanged: () => void;
+  onError: (message: string) => void;
+}> = ({ product, busy, onRequeue, onProceed, onChanged, onError }) => (
+  <div className="flex flex-wrap items-center gap-4 rounded-xl border border-stone-200 bg-white p-4">
     {product.originalPhotoId && (
       <img src={api.photoUrl(product.originalPhotoId)} alt="" className="h-16 w-16 rounded-lg object-cover bg-stone-100" />
     )}
     <div className="min-w-0 flex-1">
       <p className="text-sm font-medium text-stone-900">
         {product.cpc || product.itemType || 'Untitled'}
-        <span className={`ml-2 rounded-full px-2 py-0.5 text-xs ${product.status === 'failed' ? 'bg-orange-100 text-orange-800' : 'bg-red-100 text-red-800'}`}>
+        <span className={`ml-2 rounded-full px-2 py-0.5 text-xs ${
+          product.status === 'failed' ? 'bg-orange-100 text-orange-800'
+          : product.status === 'needs_angle' ? 'bg-amber-100 text-amber-800'
+          : 'bg-red-100 text-red-800'}`}>
           {STATUS_LABELS[product.status]}
         </span>
       </p>
@@ -240,13 +254,31 @@ const ProblemRow: React.FC<{ product: Product; busy: boolean; onRequeue: () => v
         <p className="mt-1 text-xs text-stone-400">This was a processing error, not a problem with the photo. Retrying is usually enough.</p>
       )}
     </div>
-    <button
-      type="button"
-      onClick={onRequeue}
-      disabled={busy}
-      className="inline-flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-700 hover:bg-stone-50 disabled:opacity-60"
-    >
-      <RefreshCw className={`w-4 h-4 ${busy ? 'animate-spin' : ''}`} /> Retry
-    </button>
+    <div className="flex flex-wrap gap-2">
+      {/* A failed audit is often a detail the first photo showed badly -
+          another angle fixes that without redoing the whole shoot. */}
+      {product.status !== 'failed' && (
+        <AngleCaptureButton productId={product.id} onAdded={onChanged} onError={onError} />
+      )}
+      {product.status === 'needs_angle' ? (
+        <button
+          type="button"
+          onClick={onProceed}
+          disabled={busy}
+          className="min-h-[44px] shrink-0 rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-700 hover:bg-stone-50 disabled:opacity-60"
+        >
+          Process anyway
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={onRequeue}
+          disabled={busy}
+          className="inline-flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-700 hover:bg-stone-50 disabled:opacity-60"
+        >
+          <RefreshCw className={`w-4 h-4 ${busy ? 'animate-spin' : ''}`} /> Retry
+        </button>
+      )}
+    </div>
   </div>
 );

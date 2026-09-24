@@ -36,7 +36,7 @@ afterAll(() => {
 // one test can't bleed into the next.
 beforeEach(() => {
   const db = getDb();
-  db.exec('DELETE FROM users; DELETE FROM login_attempts; DELETE FROM events;');
+  db.exec('DELETE FROM jobs; DELETE FROM photos; DELETE FROM products; DELETE FROM batches; DELETE FROM users; DELETE FROM login_attempts; DELETE FROM events;');
 });
 
 async function loginAs(username: string, password: string) {
@@ -168,5 +168,49 @@ describe('admin password reset', () => {
       .set('Cookie', cookie!)
       .send({ isActive: false });
     expect(res.status).toBe(409);
+  });
+});
+
+describe('extra angle photos', () => {
+  const tinyJpeg = 'data:image/jpeg;base64,' + Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString('base64');
+
+  async function productWithOriginal(cookie: string) {
+    const created = await request(app).post('/api/products').set('Cookie', cookie).send({ itemType: 'Jhumka' });
+    const id = created.body.product.id as string;
+    return id;
+  }
+
+  it('refuses an angle before there is a main photo to go with it', async () => {
+    await createUser({ username: 'staffer', password: 'a-real-password-1', isAdmin: false });
+    const { cookie } = await loginAs('staffer', 'a-real-password-1');
+    const id = await productWithOriginal(cookie!);
+    const res = await request(app).post(`/api/products/${id}/angle`).set('Cookie', cookie!).send({ imageBase64: tinyJpeg });
+    expect(res.status).toBe(400);
+  });
+
+  it('stores the angle alongside the original and requeues the piece', async () => {
+    await createUser({ username: 'staffer', password: 'a-real-password-1', isAdmin: false });
+    const { cookie } = await loginAs('staffer', 'a-real-password-1');
+    const id = await productWithOriginal(cookie!);
+    await request(app).post(`/api/products/${id}/photo`).set('Cookie', cookie!).send({ imageBase64: tinyJpeg });
+
+    const res = await request(app).post(`/api/products/${id}/angle`).set('Cookie', cookie!).send({ imageBase64: tinyJpeg });
+    expect(res.status).toBe(202);
+    expect(res.body.product.status).toBe('queued');
+    expect(res.body.product.anglePhotoIds).toHaveLength(1);
+    // The original is untouched - the angle is added, not a replacement.
+    expect(res.body.product.originalPhotoId).toBeTruthy();
+  });
+
+  it('"Process anyway" queues a job told not to ask for an angle again', async () => {
+    await createUser({ username: 'staffer', password: 'a-real-password-1', isAdmin: false });
+    const { cookie } = await loginAs('staffer', 'a-real-password-1');
+    const id = await productWithOriginal(cookie!);
+    await request(app).post(`/api/products/${id}/photo`).set('Cookie', cookie!).send({ imageBase64: tinyJpeg });
+
+    const res = await request(app).post(`/api/products/${id}/requeue`).set('Cookie', cookie!).send({ proceedWithoutAngle: true });
+    expect(res.status).toBe(202);
+    const job = getDb().prepare("SELECT payload FROM jobs WHERE product_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1").get(id) as { payload: string };
+    expect(JSON.parse(job.payload)).toEqual({ skipAngleRequest: true });
   });
 });

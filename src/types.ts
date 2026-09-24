@@ -14,6 +14,7 @@ export type ProductStatus =
   | 'awaiting_review'
   | 'approved'
   | 'exported'
+  | 'needs_angle'
   | 'needs_reshoot'
   | 'failed';
 
@@ -59,6 +60,8 @@ export interface Product {
   staffName: string;
   originalPhotoId: string | null;
   processedPhotoId: string | null;
+  /** Extra photos of this piece from other angles, for the current original. */
+  anglePhotoIds: string[];
   job: JobSummary | null;
 }
 
@@ -135,6 +138,7 @@ export const STATUS_LABELS: Record<ProductStatus, string> = {
   awaiting_review: 'Ready to review',
   approved: 'Approved',
   exported: 'Exported',
+  needs_angle: 'Needs another angle',
   needs_reshoot: 'Needs reshoot',
   failed: 'Failed',
 };

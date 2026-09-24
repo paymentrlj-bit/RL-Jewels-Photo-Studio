@@ -8,6 +8,8 @@ import {
   buildInventoryBlock,
   buildReferenceImagesBlock,
   buildAuditInventoryBlock,
+  hiddenElements,
+  buildAngleRequestReason,
   MAX_DETAIL_REGIONS,
   type DetailInventory,
   type InventoryAnalysis,
@@ -18,7 +20,6 @@ const emptyInventory = (): DetailInventory => ({
   elements: [],
   chainStrands: null,
   chainLinkStyle: null,
-  hallmarkOrStamp: null,
   surfaceFinish: null,
   naturalOrientation: null,
   proportions: null,
@@ -174,18 +175,18 @@ describe('inventory prompt blocks', () => {
 
   it('numbers enhance close-ups from image 2 - the photo itself is image 1', () => {
     const block = buildReferenceImagesBlock([
-      { base64: '', mimeType: 'image/jpeg', label: 'fringe' },
-      { base64: '', mimeType: 'image/jpeg', label: 'motif' },
+      { base64: '', mimeType: 'image/jpeg', label: 'fringe', kind: 'closeup' as const },
+      { base64: '', mimeType: 'image/jpeg', label: 'motif', kind: 'closeup' as const },
     ]);
-    expect(block).toContain('image 2 = "fringe"');
-    expect(block).toContain('image 3 = "motif"');
+    expect(block).toContain('image 2 is a full-resolution close-up cropped from image 1: "fringe"');
+    expect(block).toContain('image 3 is a full-resolution close-up cropped from image 1: "motif"');
     expect(block).toMatch(/exactly once/);
     expect(buildReferenceImagesBlock([])).toBe('');
   });
 
   it('numbers audit close-ups from IMAGE 3 - original and enhanced come first', () => {
-    const block = buildAuditInventoryBlock(inventory, [{ base64: '', mimeType: 'image/jpeg', label: 'fringe' }]);
-    expect(block).toContain('IMAGE 3 = "fringe"');
+    const block = buildAuditInventoryBlock(inventory, [{ base64: '', mimeType: 'image/jpeg', label: 'fringe', kind: 'closeup' as const }]);
+    expect(block).toContain('IMAGE 3 is a full-resolution close-up cropped from IMAGE 1: "fringe"');
     expect(block).toMatch(/black beads must still be black/);
   });
 });
@@ -210,5 +211,43 @@ describe('inventory cache', () => {
     const retry = await cachedInventory('photo', async () => { calls++; return analysis; });
     expect(calls).toBe(2);
     expect(retry.cacheHit).toBe(false);
+  });
+});
+
+describe('other-angle photos', () => {
+  it('tells the image model an angle photo is a different view, not a close-up', () => {
+    const block = buildReferenceImagesBlock([
+      { base64: '', mimeType: 'image/jpeg', label: 'another angle', kind: 'angle' },
+      { base64: '', mimeType: 'image/jpeg', label: 'fringe', kind: 'closeup' },
+    ]);
+    expect(block).toContain('image 2 is the same piece photographed from another angle');
+    expect(block).toContain('image 3 is a full-resolution close-up');
+    expect(block).toMatch(/exactly once/);
+  });
+});
+
+describe('asking for another angle', () => {
+  const element = (overrides: Partial<DetailInventory['elements'][number]>) => ({
+    feature: 'bead fringe', count: 7, countConfidence: 'high' as const, shape: '', colorMaterial: '', arrangement: '', ...overrides,
+  });
+
+  it('flags only countable elements the inspector could not fully see', () => {
+    const inv = {
+      ...emptyInventory(),
+      elements: [
+        element({ feature: 'visible fringe' }),
+        element({ feature: 'hidden fringe', countConfidence: 'low' }),
+        element({ feature: 'hidden texture', countConfidence: 'low', count: null }),
+      ],
+    };
+    expect(hiddenElements(inv).map((e) => e.feature)).toEqual(['hidden fringe']);
+  });
+
+  it('says what is hidden and where, in words staff can act on', () => {
+    const reason = buildAngleRequestReason([
+      element({ feature: 'halo diamonds', countConfidence: 'low', arrangement: 'two hidden behind the thumb' }),
+    ]);
+    expect(reason).toContain('halo diamonds (two hidden behind the thumb)');
+    expect(reason).toMatch(/Process anyway/);
   });
 });

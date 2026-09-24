@@ -22,6 +22,7 @@ import { ITEM_TYPE_SUGGESTIONS } from '../itemTypes';
 import type { Batch, CpcLookupResult, GoldPurity, Product, ProductGender } from '../types';
 import { STATUS_LABELS } from '../types';
 import { CameraModal } from '../components/CameraModal';
+import { AngleCaptureButton } from '../components/AngleCaptureButton';
 import { ScannerModal } from '../components/ScannerModal';
 import { downscaleImage, analyzeImageQuality, checkFlashFired, type PreflightIssue } from '../utils/imagePreflight';
 import { logClientEvent } from '../utils/analytics';
@@ -68,9 +69,11 @@ interface ShootViewProps {
   batch: Batch | null;
   onQueued: () => void;
   recent: Product[];
+  /** Pieces the pipeline paused on because part of them was hidden. */
+  needsAngle: Product[];
 }
 
-export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent }) => {
+export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, needsAngle }) => {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [photo, setPhoto] = useState<string | null>(null);
   const [lookup, setLookup] = useState<CpcLookupResult | null>(null);
@@ -257,6 +260,38 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent })
             <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
             <span>{error}</span>
           </div>
+        )}
+
+        {/* Shown here rather than only on Review: the point is to catch staff
+            while the piece is still on the counter, not an hour later. */}
+        {needsAngle.length > 0 && (
+          <section className="rounded-2xl border-2 border-amber-300 bg-amber-50 p-4 space-y-3">
+            <h2 className="flex items-center gap-2 font-semibold text-amber-900">
+              <Eye className="w-4 h-4" /> One more photo needed ({needsAngle.length})
+            </h2>
+            {needsAngle.map((product) => (
+              <div key={product.id} className="flex flex-wrap items-center gap-3 rounded-xl bg-white p-3">
+                {product.originalPhotoId && (
+                  <img src={api.photoUrl(product.originalPhotoId)} alt="" className="h-14 w-14 rounded-lg object-cover bg-stone-100" />
+                )}
+                <div className="min-w-0 flex-1 basis-48">
+                  <p className="text-sm font-medium text-stone-900">{product.cpc || product.itemType}</p>
+                  <p className="text-xs text-stone-600">{product.auditReason}</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <AngleCaptureButton productId={product.id} onAdded={onQueued} onError={setError} />
+                  <button
+                    type="button"
+                    onClick={() => void api.requeue(product.id, { proceedWithoutAngle: true }).then(onQueued, (err) =>
+                      setError(err instanceof ApiError ? err.message : 'Could not process it.'))}
+                    className="min-h-[44px] rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm text-stone-700 hover:bg-stone-50"
+                  >
+                    Process anyway
+                  </button>
+                </div>
+              </div>
+            ))}
+          </section>
         )}
 
         {/* --- photo --- */}
@@ -550,6 +585,7 @@ const StatusPill: React.FC<{ product: Product }> = ({ product }) => {
   const stage = product.job?.stage;
   const tone =
     product.status === 'awaiting_review' || product.status === 'approved' ? 'bg-emerald-100 text-emerald-800'
+    : product.status === 'needs_angle' ? 'bg-amber-100 text-amber-800'
     : product.status === 'needs_reshoot' || product.status === 'failed' ? 'bg-red-100 text-red-800'
     : product.status === 'processing' ? 'bg-blue-100 text-blue-800'
     : 'bg-stone-100 text-stone-700';
