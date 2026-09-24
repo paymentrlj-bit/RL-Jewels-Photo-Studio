@@ -37,8 +37,16 @@ import {
   type AuditResult,
 } from '../ai/operations';
 import { buildOutputFramingBlock } from '../ai/prompts';
-import { aspectRatioFor } from '../catalog/taxonomy';
-import { cachedSegmentation } from './segmentationCache';
+import {
+  analyzeDetail,
+  cropDetailRegions,
+  buildInventoryBlock,
+  buildReferenceImagesBlock,
+  type DetailInventory,
+  type ReferenceImage,
+} from '../ai/inventory';
+import { aspectRatioFor, describeItemType } from '../catalog/taxonomy';
+import { cachedSegmentation, cachedInventory } from './groundingCache';
 import { getEnhancePrompt } from '../settings';
 import { logEvent, newRequestId } from '../logging';
 import {
@@ -56,7 +64,7 @@ import {
   recordAuditResult,
   applyGeneratedCopy,
 } from '../db/products';
-import { getLatestPhoto, saveImage, readImageBase64, imageExists } from '../storage/images';
+import { getLatestPhoto, saveImage, readImageBase64, readImageBuffer, imageExists } from '../storage/images';
 
 let running = false;
 let activeWorkers = 0;
@@ -174,8 +182,13 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
   const deadline = pipelineStart + PIPELINE_BUDGET_MS;
   let estimatedCostUsd = 0;
   let apiCallCount = 0;
+  // Recorded on every pipeline.completed event, so reshoot rates with and
+  // without the detail inventory can be compared directly in Axiom.
+  let detailInventoryUsed = false;
+  let referenceImageCount = 0;
 
-  const cleanBase64 = readImageBase64(originalPhoto);
+  const originalBuffer = readImageBuffer(originalPhoto);
+  const cleanBase64 = originalBuffer.toString('base64');
   const mimeType = originalPhoto.mimeType;
 
   logEvent('pipeline.started', {
@@ -189,6 +202,7 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
     cpc: product.cpc || null,
     imageBytesApprox: originalPhoto.bytes,
     segmentationEnabled: ENABLE_SEGMENTATION_GROUNDING,
+    detailInventoryEnabled: config.detailInventory,
     attempt: job.attempts,
   });
 
@@ -230,7 +244,10 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
       modelUsed: detail.modelUsed,
       attemptCount: detail.attemptCount,
       itemType: product.itemType || null,
+      resolvedCategory: describeItemType(product.itemType).line,
       purity: product.purity || null,
+      detailInventoryUsed,
+      referenceImageCount,
     });
 
     recordAuditResult(product.id, {
@@ -263,9 +280,8 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
   // Non-blocking grounding call. Fails open: if it errors or times out,
   // segmentationBlock stays empty and the pipeline behaves exactly as it
   // would have without the feature.
-  let segmentationBlock = '';
-  if (ENABLE_SEGMENTATION_GROUNDING) {
-    setJobStage(job.id, 'segmenting');
+  const runSegmentation = async (): Promise<string> => {
+    if (!ENABLE_SEGMENTATION_GROUNDING) return '';
     const segmentStartedAt = Date.now();
     // Deduped by image hash: a "regenerate" or a requeue on the same photo
     // re-uses the outline instead of paying for it again.
@@ -283,19 +299,96 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
       cacheHit,
       latencyMs: Date.now() - segmentStartedAt,
     });
-    if (segmentation) segmentationBlock = buildSegmentationBlock(segmentation);
-  }
+    return segmentation ? buildSegmentationBlock(segmentation) : '';
+  };
+
+  // The detail inventory (ai/inventory.ts): close-ups of the intricate areas
+  // plus a verified count of the fine detail, which the enhance call and the
+  // audit both treat as ground truth. Fails open exactly like segmentation -
+  // any error and the pipeline runs as it did before this stage existed.
+  const item = describeItemType(product.itemType);
+  const runInventory = async (): Promise<{ inventory: DetailInventory; crops: ReferenceImage[] } | null> => {
+    if (!config.detailInventory) return null;
+    const startedAt = Date.now();
+    try {
+      const fresh: { crops?: ReferenceImage[] } = {};
+      const { result: analysis, cacheHit } = await cachedInventory(cleanBase64, async () => {
+        const out = await analyzeDetail(
+          ai,
+          { buffer: originalBuffer, base64: cleanBase64, mimeType },
+          { itemLine: item.line, itemNotes: item.notes, purity: product.purity || '22kt' },
+          { deadline, onAttempt: recordAttempt }
+        );
+        fresh.crops = out.crops;
+        return out.analysis;
+      });
+      // On a cache hit only the (small) regions were remembered - re-crop
+      // locally, which is free, rather than holding image data in memory.
+      const crops = fresh.crops ?? (await cropDetailRegions(originalBuffer, analysis.regions)).map((c) => c.crop);
+      logEvent('pipeline.inventory', {
+        requestId,
+        found: true,
+        cacheHit,
+        latencyMs: Date.now() - startedAt,
+        closeUps: crops.length,
+        closeUpLabels: crops.map((c) => c.label),
+        elementCount: analysis.inventory.elements.length,
+        referenceScalePresent: analysis.inventory.referenceScale.present,
+        // The inventory itself, so what the inspector counted can later be
+        // compared against what staff say the piece really has.
+        inventory: JSON.stringify(analysis.inventory).slice(0, 3000),
+      });
+      return { inventory: analysis.inventory, crops };
+    } catch (err) {
+      logEvent('pipeline.inventory', {
+        requestId,
+        found: false,
+        latencyMs: Date.now() - startedAt,
+        errorMessage: debugDetail(err),
+      });
+      return null;
+    }
+  };
+
+  setJobStage(job.id, config.detailInventory ? 'inspecting' : 'segmenting');
+  const [segmentationBlock, detail] = await Promise.all([runSegmentation(), runInventory()]);
+
+  detailInventoryUsed = Boolean(detail);
+  const inventoryBlock = detail ? buildInventoryBlock(detail.inventory) : '';
+  const auditGrounding = detail ?? undefined;
+  let enhanceRefs: ReferenceImage[] = detail?.crops ?? [];
+  const buildEnhancePrompt = (refs: ReferenceImage[]) =>
+    promptTemplate + contextBlock + segmentationBlock + inventoryBlock + buildReferenceImagesBlock(refs) + framingBlock;
+
+  const runEnhance = (model: string, stage: string, prompt: string, refs: ReferenceImage[]) =>
+    withTransientRetry(
+      () => enhanceImage(ai, model, cleanBase64, mimeType, prompt, aspectRatio, refs),
+      3,
+      deadline,
+      recordAttempt(stage, model)
+    );
 
   // --- Attempt 1: default (cheap/fast) tier ---
   let enhanced: EnhanceResult | null = null;
   try {
     setJobStage(job.id, 'enhancing');
-    enhanced = await withTransientRetry(
-      () => enhanceImage(ai, MODEL_ENHANCE_DEFAULT, cleanBase64, mimeType, promptTemplate + contextBlock + segmentationBlock + framingBlock, aspectRatio),
-      3,
-      deadline,
-      recordAttempt('enhance', MODEL_ENHANCE_DEFAULT)
-    );
+    try {
+      enhanced = await runEnhance(MODEL_ENHANCE_DEFAULT, 'enhance', buildEnhancePrompt(enhanceRefs), enhanceRefs);
+    } catch (err) {
+      // The close-ups are extra input images. If the model rejects the request
+      // outright - not a hiccup, not billing - try once without them rather
+      // than failing a photo that would have processed fine before they existed.
+      if (enhanceRefs.length === 0 || isBillingError(err) || isTransientError(err)) throw err;
+      logEvent('pipeline.references_rejected', {
+        requestId,
+        model: MODEL_ENHANCE_DEFAULT,
+        referenceCount: enhanceRefs.length,
+        errorMessage: debugDetail(err),
+      });
+      enhanceRefs = [];
+      enhanced = await runEnhance(MODEL_ENHANCE_DEFAULT, 'enhance', buildEnhancePrompt(enhanceRefs), enhanceRefs);
+    }
+    referenceImageCount = enhanceRefs.length;
   } catch (err) {
     if (isBillingError(err)) {
       finish('failed', { reason: 'The Gemini account has hit its billing/spend cap. An admin needs to raise it before photos can be processed.' });
@@ -326,7 +419,7 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
 
   setJobStage(job.id, 'auditing');
   let audit = await withTransientRetry(
-    () => auditOutput(ai, cleanBase64, mimeType, enhanced!.imageBase64, enhanced!.mimeType, auditContext),
+    () => auditOutput(ai, cleanBase64, mimeType, enhanced!.imageBase64, enhanced!.mimeType, auditContext, MODEL_AUDIT, auditGrounding),
     3,
     deadline,
     recordAttempt('audit', MODEL_AUDIT)
@@ -373,7 +466,7 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
       return;
     }
 
-    const correctivePrompt = `${promptTemplate}${contextBlock}${segmentationBlock}${framingBlock}
+    const correctivePrompt = `${buildEnhancePrompt(enhanceRefs)}
 
 IMPORTANT: A previous attempt at this edit failed quality review for this specific reason:
 "${audit.reason}"
@@ -389,12 +482,7 @@ Correct this specific issue while still following every rule above.`;
 
     try {
       setJobStage(job.id, 'escalating');
-      const retryEnhanced = await withTransientRetry(
-        () => enhanceImage(ai, MODEL_ENHANCE_ESCALATED, cleanBase64, mimeType, correctivePrompt, aspectRatio),
-        3,
-        deadline,
-        recordAttempt('enhance-escalated', MODEL_ENHANCE_ESCALATED)
-      );
+      const retryEnhanced = await runEnhance(MODEL_ENHANCE_ESCALATED, 'enhance-escalated', correctivePrompt, enhanceRefs);
       attemptCount = 2;
 
       if (retryEnhanced) {
@@ -402,7 +490,7 @@ Correct this specific issue while still following every rule above.`;
         // Stronger grader for the re-audit: this is the last gate before a
         // photo ships, and both passes have already been paid for.
         const retryAudit = await withTransientRetry(
-          () => auditOutput(ai, cleanBase64, mimeType, retryEnhanced.imageBase64, retryEnhanced.mimeType, auditContext, MODEL_AUDIT_STRONG),
+          () => auditOutput(ai, cleanBase64, mimeType, retryEnhanced.imageBase64, retryEnhanced.mimeType, auditContext, MODEL_AUDIT_STRONG, auditGrounding),
           3,
           deadline,
           recordAttempt('audit-strong', MODEL_AUDIT_STRONG)

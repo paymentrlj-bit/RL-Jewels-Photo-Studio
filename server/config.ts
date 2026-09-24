@@ -101,6 +101,12 @@ export const config = {
     dataset: process.env.AXIOM_DATASET?.trim() || 'rl-jewels-events',
   },
 
+  // The detail-inventory stage (server/ai/inventory.ts): count the piece's fine
+  // detail from full-resolution close-ups before enhancing. On by default; set
+  // DETAIL_INVENTORY=off to run a batch without it and compare reshoot rates -
+  // every pipeline.completed event records which way it ran.
+  detailInventory: process.env.DETAIL_INVENTORY?.trim().toLowerCase() !== 'off',
+
   // Which ERP column mapping to use when exporting. See server/export/mappings/.
   // Config, not code, specifically so pointing this at the store's real ERP
   // is a one-line change rather than a rewrite of the export module.

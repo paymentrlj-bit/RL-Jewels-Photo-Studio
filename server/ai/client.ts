@@ -40,6 +40,12 @@ export const MODEL_AUDIT_STRONG = 'gemini-3.1-pro-preview';
 // problem. Verified against this account's real /v1beta/models list.
 export const MODEL_COPY = 'gemini-3.1-pro-preview';
 export const MODEL_SEGMENT = 'gemini-robotics-er-1.6-preview';
+// Counts and describes the piece's fine detail once, before enhancement. Both
+// the enhance call and the audit treat its output as ground truth, so a wrong
+// count here poisons both - which is why it gets the strong tier rather than
+// flash-lite, even though it runs on every photo. Deduped per image by
+// groundingCache, so a regenerate never pays for it twice.
+export const MODEL_INVENTORY = 'gemini-3.1-pro-preview';
 
 // Segmentation grounding: a small vision call that traces the real jewelry's
 // exact silhouette in the ORIGINAL photo, so the enhance call gets real
@@ -92,6 +98,11 @@ export const COSTS_ARE_CALIBRATED = Boolean(process.env.COST_ENHANCE_DEFAULT_USD
 export const ENHANCE_TIMEOUT_MS = 45_000;
 export const AUDIT_TIMEOUT_MS = 20_000;
 export const SEGMENT_TIMEOUT_MS = 15_000;
+// The inventory call sends the full photo plus up to three close-ups to a
+// model that reasons before answering, so it is legitimately slower than the
+// audit. Same principle as ENHANCE_TIMEOUT_MS above: generous enough for a
+// real answer, short enough that a hung connection is abandoned and retried.
+export const INVENTORY_TIMEOUT_MS = 40_000;
 
 // Hard ceiling on the ENTIRE pipeline's wall-clock time, independent of how
 // individual per-call timeouts and retries stack.
