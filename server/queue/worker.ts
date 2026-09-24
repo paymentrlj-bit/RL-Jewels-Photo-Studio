@@ -40,6 +40,9 @@ import { buildOutputFramingBlock } from '../ai/prompts';
 import {
   analyzeDetail,
   cropDetailRegions,
+  hiddenElements,
+  buildAngleRequestReason,
+  MAX_ANGLE_PHOTOS,
   buildInventoryBlock,
   buildReferenceImagesBlock,
   type DetailInventory,
@@ -64,7 +67,7 @@ import {
   recordAuditResult,
   applyGeneratedCopy,
 } from '../db/products';
-import { getLatestPhoto, saveImage, readImageBase64, readImageBuffer, imageExists } from '../storage/images';
+import { getLatestPhoto, listPhotos, saveImage, readImageBase64, readImageBuffer, imageExists } from '../storage/images';
 
 let running = false;
 let activeWorkers = 0;
@@ -191,6 +194,13 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
   const cleanBase64 = originalBuffer.toString('base64');
   const mimeType = originalPhoto.mimeType;
 
+  // Extra photos of this piece from other angles, taken after the current
+  // original (older ones belong to a previous shoot of it).
+  const angles: ReferenceImage[] = listPhotos(product.id)
+    .filter((p) => p.kind === 'angle' && p.createdAt >= originalPhoto.createdAt && imageExists(p))
+    .slice(-MAX_ANGLE_PHOTOS)
+    .map((p) => ({ base64: readImageBase64(p), mimeType: p.mimeType, label: 'another angle of the same piece', kind: 'angle' as const }));
+
   logEvent('pipeline.started', {
     requestId,
     jobId: job.id,
@@ -203,6 +213,7 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
     imageBytesApprox: originalPhoto.bytes,
     segmentationEnabled: ENABLE_SEGMENTATION_GROUNDING,
     detailInventoryEnabled: config.detailInventory,
+    anglePhotos: angles.length,
     attempt: job.attempts,
   });
 
@@ -229,7 +240,7 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
   };
 
   const finish = (
-    status: 'awaiting_review' | 'needs_reshoot' | 'failed',
+    status: 'awaiting_review' | 'needs_angle' | 'needs_reshoot' | 'failed',
     detail: { reason: string; checklist?: AuditResult['checklist'] | null; modelUsed?: string; attemptCount?: number; retryable?: boolean }
   ) => {
     logEvent('pipeline.completed', {
@@ -248,6 +259,7 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
       purity: product.purity || null,
       detailInventoryUsed,
       referenceImageCount,
+      anglePhotos: angles.length,
     });
 
     recordAuditResult(product.id, {
@@ -312,12 +324,16 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
     const startedAt = Date.now();
     try {
       const fresh: { crops?: ReferenceImage[] } = {};
-      const { result: analysis, cacheHit } = await cachedInventory(cleanBase64, async () => {
+      // Keyed on the angle photos too: adding an angle must produce a fresh
+      // count, not the cached one that could not see round the obstruction.
+      const cacheKey = [cleanBase64, ...angles.map((a) => a.base64)].join('|');
+      const { result: analysis, cacheHit } = await cachedInventory(cacheKey, async () => {
         const out = await analyzeDetail(
           ai,
           { buffer: originalBuffer, base64: cleanBase64, mimeType },
           { itemLine: item.line, itemNotes: item.notes, purity: product.purity || '22kt' },
-          { deadline, onAttempt: recordAttempt }
+          { deadline, onAttempt: recordAttempt },
+          angles
         );
         fresh.crops = out.crops;
         return out.analysis;
@@ -354,9 +370,34 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
   const [segmentationBlock, detail] = await Promise.all([runSegmentation(), runInventory()]);
 
   detailInventoryUsed = Boolean(detail);
+
+  // Part of the piece hidden, and nobody has added another angle yet: stop
+  // here and ask for one. This is the cheapest point to do it - before the
+  // enhancement is paid for - and the likeliest moment the piece is still at
+  // the counter. Staff can always choose "Process anyway", which requeues with
+  // skipAngleRequest set.
+  const hidden = detail ? hiddenElements(detail.inventory) : [];
+  if (config.angleRequests && hidden.length > 0 && angles.length === 0 && job.payload.skipAngleRequest !== true) {
+    const reason = buildAngleRequestReason(hidden);
+    logEvent('pipeline.angle_requested', {
+      requestId,
+      productId: product.id,
+      hiddenFeatures: hidden.map((e) => e.feature),
+      itemType: product.itemType || null,
+    });
+    finish('needs_angle', { reason, attemptCount: 0 });
+    setProductStatus(product.id, 'needs_angle');
+    completeJob(job.id, 'needs_reshoot', { reason: 'needs_angle' });
+    return;
+  }
+
   const inventoryBlock = detail ? buildInventoryBlock(detail.inventory) : '';
-  const auditGrounding = detail ?? undefined;
-  let enhanceRefs: ReferenceImage[] = detail?.crops ?? [];
+  // Angles first: they carry information the close-ups cannot (they are just
+  // the original's pixels, enlarged). Capped so the image model is never sent
+  // more reference images than it reliably handles.
+  const allRefs: ReferenceImage[] = [...angles, ...(detail?.crops ?? [])];
+  const auditGrounding = detail ? { inventory: detail.inventory, crops: allRefs } : undefined;
+  let enhanceRefs: ReferenceImage[] = allRefs.slice(0, 4);
   const buildEnhancePrompt = (refs: ReferenceImage[]) =>
     promptTemplate + contextBlock + segmentationBlock + inventoryBlock + buildReferenceImagesBlock(refs) + framingBlock;
 

@@ -156,6 +156,16 @@ describe('aspect ratio branching', () => {
     expect(resolveCategory('EKDANI')?.type).toBe('Necklace');
   });
 
+  it('resolves the chain and earring names the owner explained', () => {
+    for (const name of ['TENDULKAR', 'NAWABI HOLO', 'INDO-ITALIAN']) expect(resolveCategory(name)?.type, name).toBe('Chain');
+    expect(resolveCategory('LONG PBB')?.type).toBe('Mangalsutra');
+    expect(resolveCategory('SINGAPORE TOPS')?.type).toBe('J Hoop');
+    expect(resolveCategory('KANSAKALI')?.type).toBe('Ear Chain');
+    expect(aspectRatioFor('KANSAKALI')).toBe('3:4');
+    // Plain "tops" is still a stud.
+    expect(resolveCategory('FANCY TOPS')?.type).toBe('Stud');
+  });
+
   it('supplies a gender default only where one is real', () => {
     expect(defaultGenderFor('Mangalsutra')).toBe("women's");
     expect(defaultGenderFor('Chain')).toBe('unisex');
@@ -214,6 +224,11 @@ describe('audit prompt', () => {
     for (const check of AUDIT_CHECKS) expect(prompt).toContain(`"${check}"`);
   });
 
+  it('never fails a photo over a hallmark stamp', () => {
+    expect(buildAuditPrompt({ itemType: 'Ring', purity: '22kt' })).toMatch(/Ignore hallmark stamps/);
+    expect(DEFAULT_ENHANCE_PROMPT).not.toMatch(/blur any hallmark/);
+  });
+
   it('tells the grader what a POS style name actually is', () => {
     const prompt = buildAuditPrompt({ itemType: 'ATTACHED CHAIN POTE', purity: '22kt' });
     expect(prompt).toContain('Mangalsutra (store tag name: "ATTACHED CHAIN POTE")');
@@ -229,7 +244,7 @@ describe('context block', () => {
   });
 
   it('passes an unknown style name through, marked as the store\'s own', () => {
-    expect(buildContextBlock({ itemType: 'TENDULKAR' })).toContain('"TENDULKAR" (the store\'s own style name)');
+    expect(buildContextBlock({ itemType: 'KALKATTA SET' })).toContain('"KALKATTA SET" (the store\'s own style name)');
   });
 
   it('does not repeat the name when the tag already uses the trade word', () => {

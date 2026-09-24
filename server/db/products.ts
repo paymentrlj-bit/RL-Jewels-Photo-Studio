@@ -10,6 +10,8 @@ import type { AuditCheck } from '../ai/operations';
 // awaiting_review - AI passed its own QA, a human needs to sign off
 // approved      - human approved, ready to export
 // exported      - written out to CSV/Drive
+// needs_angle   - part of the piece is hidden in the photo; one more photo
+//                 from another angle before paying for the enhancement
 // needs_reshoot - AI QA failed twice; the photo itself is the problem
 // failed        - a transient error exhausted its retries; safe to requeue
 export const PRODUCT_STATUSES = [
@@ -19,6 +21,7 @@ export const PRODUCT_STATUSES = [
   'awaiting_review',
   'approved',
   'exported',
+  'needs_angle',
   'needs_reshoot',
   'failed',
 ] as const;

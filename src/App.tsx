@@ -84,7 +84,8 @@ export default function App() {
   if (!user) return <LoginView onSignedIn={setUser} aiConfigured={features?.ai ?? true} />;
 
   const awaitingCount = products.filter((p) => p.status === 'awaiting_review').length;
-  const problemCount = products.filter((p) => p.status === 'needs_reshoot' || p.status === 'failed').length;
+  const problemCount = products.filter((p) => p.status === 'needs_reshoot' || p.status === 'needs_angle' || p.status === 'failed').length;
+  const needsAngle = products.filter((p) => p.status === 'needs_angle');
   const recent = products.slice(0, 8);
 
   const tabs: { key: Tab; label: string; icon: typeof Camera; badge?: number; adminOnly?: boolean }[] = [
@@ -174,6 +175,7 @@ export default function App() {
             batch={batch}
             onQueued={refresh}
             recent={recent}
+            needsAngle={needsAngle}
           />
         )}
         {tab === 'review' && <ReviewView products={products} onChanged={refresh} />}

@@ -107,6 +107,11 @@ export const config = {
   // every pipeline.completed event records which way it ran.
   detailInventory: process.env.DETAIL_INVENTORY?.trim().toLowerCase() !== 'off',
 
+  // When the inventory finds part of a piece hidden (behind a tag, the other
+  // earring, a finger), pause before enhancing and ask for one more photo from
+  // another angle. ANGLE_REQUESTS=off processes everything straight through.
+  angleRequests: process.env.ANGLE_REQUESTS?.trim().toLowerCase() !== 'off',
+
   // Which ERP column mapping to use when exporting. See server/export/mappings/.
   // Config, not code, specifically so pointing this at the store's real ERP
   // is a one-line change rather than a rewrite of the export module.

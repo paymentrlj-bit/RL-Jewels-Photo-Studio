@@ -65,7 +65,19 @@ export interface ReferenceImage {
   base64: string;
   mimeType: string;
   label: string;
+  /**
+   * closeup: cropped from the main photo. angle: a separate photo of the same
+   * piece from another viewpoint, added by staff when part of it was hidden.
+   * The models are told which is which - an angle photo is new information,
+   * a close-up is the same pixels made bigger.
+   */
+  kind: 'closeup' | 'angle';
 }
+
+// Extra angle photos per piece. Two is enough to see round the usual
+// obstructions (a tag, the other earring, the stand) without turning one
+// product into a photo shoot.
+export const MAX_ANGLE_PHOTOS = 2;
 
 export interface InventoryElement {
   feature: string;
@@ -80,7 +92,6 @@ export interface DetailInventory {
   elements: InventoryElement[];
   chainStrands: number | null;
   chainLinkStyle: string | null;
-  hallmarkOrStamp: string | null;
   surfaceFinish: string | null;
   naturalOrientation: string | null;
   proportions: string | null;
@@ -164,7 +175,6 @@ export function parseInventory(raw: unknown): DetailInventory | null {
     elements,
     chainStrands: num(r.chainStrands),
     chainLinkStyle: str(r.chainLinkStyle),
-    hallmarkOrStamp: str(r.hallmarkOrStamp),
     surfaceFinish: str(r.surfaceFinish),
     naturalOrientation: str(r.naturalOrientation),
     proportions: str(r.proportions),
@@ -215,7 +225,7 @@ export async function cropDetailRegions(
       .resize({ width: CROP_MAX_EDGE, height: CROP_MAX_EDGE, fit: 'inside', withoutEnlargement: true })
       .jpeg({ quality: 90 })
       .toBuffer();
-    out.push({ region, crop: { base64: data.toString('base64'), mimeType: 'image/jpeg', label: region.label } });
+    out.push({ region, crop: { base64: data.toString('base64'), mimeType: 'image/jpeg', label: region.label, kind: 'closeup' } });
   }
   return out;
 }
@@ -252,7 +262,7 @@ export async function detectDetailRegions(
   item: InventoryItemContext
 ): Promise<DetailRegion[]> {
   const prompt = `This photo shows one jewelry piece: ${item.itemLine}.
-Find up to ${MAX_DETAIL_REGIONS} areas of the piece where the design detail is small and intricate enough to be easily miscounted or simplified when the piece is redrawn: clusters, rows or fringes of small beads, balls or tassels; granulation; rows or halos of small stones; black-bead sections; sections of chain or mesh whose link pattern is hard to see at full-photo size; engravings, carved or filigree motifs, enamel work; hallmark stamps.
+Find up to ${MAX_DETAIL_REGIONS} areas of the piece where the design detail is small and intricate enough to be easily miscounted or simplified when the piece is redrawn: clusters, rows or fringes of small beads, balls or tassels; granulation; rows or halos of small stones; black-bead sections; sections of chain or mesh whose link pattern is hard to see at full-photo size; engravings, carved or filigree motifs, enamel work.
 Prefer areas with small countable elements. Keep each box tight around that detail - never the whole piece, never plain smooth metal, never a price tag, hand, stand or background. If the piece is a matching pair (e.g. two earrings), choose the area on only one of them unless the two genuinely differ.
 Output a JSON list, most intricate first: [{"box_2d": [ymin, xmin, ymax, xmax], "label": "short description, e.g. 'bead fringe along the base of the left jhumka'"}]. Coordinates normalized 0-1000. Output [] if the piece has no such detail.`;
 
@@ -272,12 +282,10 @@ export async function countDetails(
   ai: GoogleGenAI,
   imageBase64: string,
   mimeType: string,
-  crops: ReferenceImage[],
+  refs: ReferenceImage[],
   item: InventoryItemContext
 ): Promise<DetailInventory> {
-  const closeUps = crops.length
-    ? ` IMAGES 2 to ${crops.length + 1} are full-resolution close-ups cropped from IMAGE 1: ${crops.map((c, i) => `IMAGE ${i + 2} = "${c.label}"`).join('; ')}.`
-    : '';
+  const closeUps = describeRefs(refs, 2, 'IMAGE');
 
   const prompt = `You are a jewelry inspector writing a precise inventory of ONE physical piece, so that an image editor can reproduce it exactly and a quality inspector can check the result against it.
 Item: ${item.purity} gold ${item.itemLine}.${item.itemNotes ? `\nAbout this category: ${item.itemNotes}` : ''}
@@ -285,18 +293,18 @@ IMAGE 1 is the full counter photo.${closeUps}
 
 Rules:
 - Wherever a close-up covers an area, count from the close-up - it shows far more detail than IMAGE 1.
+- Photos from another angle show the SAME single piece. Use them to count anything hidden or unclear in IMAGE 1, but never add the views together: an element seen in two photos is one element.
 - Count literally, one element at a time. Do not estimate, round, or assume symmetry: if two sides of a pair differ, record both.
 - If part of a group is hidden (behind a finger, a tag, the other earring, or out of frame), set countConfidence to "low" and say what is hidden in "arrangement", rather than guessing the hidden part.
 - Record colour and material exactly as seen: black beads are black beads, enamel is enamel (name its colours), white stones are white stones - never describe any of them as plain gold.
 - Record shape exactly: a flat disc with a carved centre is not a ball; an open filigree bail is not a solid carved bail.
-- Ignore price tags, display stands, hands and the background. A ruler or measuring scale, if present, is a measuring aid: record what it measures under referenceScale, never as part of the piece.
+- Ignore price tags, display stands, hands, the background and hallmark stamps (e.g. 916) - do not list any of them. A ruler or measuring scale, if present, is a measuring aid: record what it measures under referenceScale, never as part of the piece.
 
 Respond ONLY as JSON:
 {
   "elements": [{"feature": string, "count": number | null, "countConfidence": "high" | "medium" | "low", "shape": string, "colorMaterial": string, "arrangement": string}],
   "chainStrands": number | null,
   "chainLinkStyle": string | null,
-  "hallmarkOrStamp": string | null,
   "surfaceFinish": string,
   "naturalOrientation": string,
   "proportions": string,
@@ -305,14 +313,13 @@ Respond ONLY as JSON:
 Field guide:
 - elements: every countable or design-defining feature - bead fringes, stones, motifs, drops, tassels, panels, cages, black-bead sections. Example: {"feature": "bead fringe along the base of each jhumka bell", "count": 7, "countConfidence": "high", "shape": "round balls", "colorMaterial": "plain polished gold", "arrangement": "single evenly spaced row, 7 on each earring"}. Use count null only for things that are genuinely not countable, like a continuous texture.
 - chainLinkStyle: e.g. "flat hand-made links", "round ball chain", "box chain", "rope chain". null if there is no chain.
-- hallmarkOrStamp: e.g. "916 stamped on the inside of the band". null if none is visible.
 - surfaceFinish: each finish and where it is, e.g. "mirror-polished domes on a matte sandblasted background, diamond-cut edges".
 - naturalOrientation: e.g. "vertical - hangs from the bail at the top".
 - proportions: relative sizes that must be preserved, e.g. "each chain drop is about 2x the height of the pendant body".`;
 
   const parts: object[] = [
     { inlineData: { mimeType, data: imageBase64 } },
-    ...crops.map((c) => ({ inlineData: { mimeType: c.mimeType, data: c.base64 } })),
+    ...refs.map((c) => ({ inlineData: { mimeType: c.mimeType, data: c.base64 } })),
     { text: prompt },
   ];
 
@@ -329,7 +336,8 @@ export async function analyzeDetail(
   ai: GoogleGenAI,
   image: { buffer: Buffer; base64: string; mimeType: string },
   item: InventoryItemContext,
-  hooks: { deadline: number; onAttempt: (stage: string, model: string) => (info: RetryAttemptInfo) => void }
+  hooks: { deadline: number; onAttempt: (stage: string, model: string) => (info: RetryAttemptInfo) => void },
+  angles: ReferenceImage[] = []
 ): Promise<{ analysis: InventoryAnalysis; crops: ReferenceImage[] }> {
   const regions = await withTransientRetry(
     () => detectDetailRegions(ai, image.base64, image.mimeType, item),
@@ -348,7 +356,7 @@ export async function analyzeDetail(
   const crops = cropped.map((c) => c.crop);
 
   const inventory = await withTransientRetry(
-    () => countDetails(ai, image.base64, image.mimeType, crops, item),
+    () => countDetails(ai, image.base64, image.mimeType, [...crops, ...angles], item),
     2,
     hooks.deadline,
     hooks.onAttempt('inventory-count', MODEL_INVENTORY)
@@ -372,7 +380,6 @@ function inventoryLines(inv: DetailInventory): string[] {
   if (inv.chainStrands !== null || inv.chainLinkStyle) {
     lines.push(`- Chain: ${inv.chainStrands !== null ? `${inv.chainStrands} strand(s)` : 'strand count not determined'}${inv.chainLinkStyle ? `, ${inv.chainLinkStyle}` : ''}`);
   }
-  if (inv.hallmarkOrStamp) lines.push(`- Hallmark / stamp: ${inv.hallmarkOrStamp}`);
   if (inv.surfaceFinish) lines.push(`- Surface finish: ${inv.surfaceFinish}`);
   if (inv.naturalOrientation) lines.push(`- Natural orientation: ${inv.naturalOrientation}`);
   if (inv.proportions) lines.push(`- Proportions: ${inv.proportions}`);
@@ -392,22 +399,57 @@ ${lines.join('\n')}
 Your output must match every count, shape, colour/material, chain style, finish and proportion above. Keep each area's surface finish distinct as described - do not give the whole piece one uniform shine.`;
 }
 
-export function buildReferenceImagesBlock(crops: ReferenceImage[]): string {
-  if (crops.length === 0) return '';
-  return `
-
-CLOSE-UP REFERENCE IMAGES: the first image is the photo to transform. The ${crops.length} image(s) after it are full-resolution close-ups cropped from that SAME photo, of the areas with the finest detail: ${crops.map((c, i) => `image ${i + 2} = "${c.label}"`).join('; ')}. Use them only to see those details accurately. They are not separate products and not separate views to combine: your output must show the single piece from the first image, exactly once.`;
+// Names each reference image by its position in the request, so the model
+// knows which inputs are close-ups of the main photo and which are genuinely
+// different photos of the piece.
+function describeRefs(refs: ReferenceImage[], firstNumber: number, word: string): string {
+  if (refs.length === 0) return '';
+  const parts = refs.map((r, i) => {
+    const n = `${word} ${firstNumber + i}`;
+    return r.kind === 'angle'
+      ? `${n} is the same piece photographed from another angle`
+      : `${n} is a full-resolution close-up cropped from ${word} 1: "${r.label}"`;
+  });
+  return ` ${parts.join('; ')}.`;
 }
 
-export function buildAuditInventoryBlock(inv: DetailInventory, crops: ReferenceImage[]): string {
-  const lines = inventoryLines(inv);
-  if (lines.length === 0) return '';
-  const closeUps = crops.length
-    ? ` IMAGES 3 to ${crops.length + 2} are those close-ups, cropped from IMAGE 1: ${crops.map((c, i) => `IMAGE ${i + 3} = "${c.label}"`).join('; ')}.`
-    : '';
+export function buildReferenceImagesBlock(refs: ReferenceImage[]): string {
+  if (refs.length === 0) return '';
   return `
 
-VERIFIED DETAIL INVENTORY OF IMAGE 1 (counted by a separate inspection from full-resolution close-ups).${closeUps}
+REFERENCE IMAGES: the first image is the photo to transform. The ${refs.length} image(s) after it show the SAME single piece:${describeRefs(refs, 2, 'image')} Use them only to see detail accurately and to understand parts the first photo hides. They are not separate products and not views to combine side by side: your output must show the single piece from the first image, exactly once.`;
+}
+
+export function buildAuditInventoryBlock(inv: DetailInventory, refs: ReferenceImage[]): string {
+  const lines = inventoryLines(inv);
+  if (lines.length === 0) return '';
+  // In the audit, IMAGE 2 is the enhanced result, so references start at 3.
+  const closeUps = refs.length ? ` IMAGES 3 onward are references of the original piece:${describeRefs(refs, 3, 'IMAGE')}` : '';
+  return `
+
+VERIFIED DETAIL INVENTORY OF IMAGE 1 (counted by a separate inspection from full-resolution close-ups and any other-angle photos).${closeUps}
 These numbers are more reliable than anything you can count from the full view of IMAGE 1: copy them into originalCounts, then check IMAGE 2 against every line - count, shape, colour/material, chain style and proportions, not just count. For example: black beads must still be black, flat carved discs must not have become round balls, enamel colours must still be present, a flat hand-made chain must not have become a ball or rope chain, a solid carved bail must not have become an open one.
 ${lines.join('\n')}`;
+}
+
+// ---------------------------------------------------------------------------
+// Asking for another angle
+// ---------------------------------------------------------------------------
+
+/**
+ * Countable elements the inspector could only partly see. These are the
+ * likeliest to come back miscounted, so a piece with any of them is worth one
+ * more photo before paying for the enhancement - while the piece is still at
+ * the counter, not after a failed audit.
+ */
+export function hiddenElements(inv: DetailInventory): InventoryElement[] {
+  return inv.elements.filter((e) => e.countConfidence === 'low' && e.count !== null);
+}
+
+export function buildAngleRequestReason(hidden: InventoryElement[]): string {
+  const what = hidden
+    .slice(0, 3)
+    .map((e) => (e.arrangement ? `${e.feature} (${e.arrangement})` : e.feature))
+    .join('; ');
+  return `Part of this piece is hidden in the photo: ${what}. Add one more photo from an angle where it is fully visible, or choose "Process anyway".`;
 }

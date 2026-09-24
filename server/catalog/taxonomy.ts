@@ -42,8 +42,8 @@ export interface Category {
 export const CATEGORIES: Category[] = [
   // --- compact / closed-loop pieces: square ---
   {
-    type: 'Ring', defaultGender: "women's", aspectRatio: '1:1', synonyms: ['anguthi', 'finger ring', 'band'],
-    modelNotes: "Men's rings (anguthi) are often cast with a raised motif or a patterned shank. The motif, the pattern along the sides of the shank, and any hallmark stamp (e.g. 916) visible inside the band must be kept exactly - these were the most common ring failures.",
+    type: 'Ring', defaultGender: "women's", aspectRatio: '1:1', synonyms: ['anguthi', 'anguti', 'finger ring', 'band'],
+    modelNotes: "Men's rings (anguthi) are often cast with a raised motif or a patterned shank. The motif and the pattern along the sides of the shank must be kept exactly - these were the most common ring failures.",
   },
   {
     type: 'Jhumka', defaultGender: "women's", aspectRatio: '1:1', synonyms: ['jhumki', 'zumka', 'jumka'],
@@ -52,13 +52,21 @@ export const CATEGORIES: Category[] = [
   { type: 'Chandbali',   defaultGender: "women's", aspectRatio: '1:1', synonyms: ['chandbala', 'chand bali'] },
   { type: 'Bali',        defaultGender: "women's", aspectRatio: '1:1', synonyms: ['hoop', 'hoops', 'balee'] },
   { type: 'Stud',        defaultGender: "women's", aspectRatio: '1:1', synonyms: ['studs', 'tops', 'ear stud'] },
-  { type: 'Earrings',    defaultGender: "women's", aspectRatio: '1:1', synonyms: ['earring', 'kanbali', 'karnphool'] },
+  // "earings" is a real spelling on the store's tags.
+  { type: 'Earrings',    defaultGender: "women's", aspectRatio: '1:1', synonyms: ['earring', 'earings', 'earing', 'kanbali', 'karnphool', 'bugadi'] },
+  {
+    // "Singapore tops" is the store's name for a J-type earring. Listed as its
+    // own type (and ahead of the bare "tops" -> Stud match by length) because
+    // a model that thinks it is drawing a stud flattens the J curve.
+    type: 'J Hoop', defaultGender: "women's", aspectRatio: '1:1', synonyms: ['singapore tops', 'j hoop', 'j hoops', 'j type tops'],
+    modelNotes: 'A J-shaped earring: it passes through the lobe and curves down and round in a "J", with the long front of the J visible when worn. It is not a closed round hoop and not a flat stud - keep the J curve, its length and any pattern along it.',
+  },
   // "padak" is the store's POS word for a pendant; "pendent" is a real,
   // common spelling on its tags ("PENDENT SET").
   { type: 'Pendant',     defaultGender: 'unisex',  aspectRatio: '1:1', synonyms: ['locket', 'dollar', 'padak', 'pendent'] },
-  { type: 'Bangle',      defaultGender: "women's", aspectRatio: '1:1', synonyms: ['bangles', 'bangdi', 'patli'] },
+  { type: 'Bangle',      defaultGender: "women's", aspectRatio: '1:1', synonyms: ['bangles', 'bangels', 'bangal', 'bangals', 'bangdi', 'patli', 'kangan'] },
   { type: 'Kada',        defaultGender: 'unisex',  aspectRatio: '1:1', synonyms: ['kara', 'kadaa'] },
-  { type: 'Nose Pin',    defaultGender: "women's", aspectRatio: '1:1', synonyms: ['nath', 'nose ring', 'chunni'] },
+  { type: 'Nose Pin',    defaultGender: "women's", aspectRatio: '1:1', synonyms: ['nath', 'natth', 'nose ring', 'nosepin', 'chunni'] },
   { type: 'Coin',        defaultGender: 'unisex',  aspectRatio: '1:1', synonyms: ['bar', 'biscuit', 'gold coin', 'sikka'] },
   { type: 'Temple Set',  defaultGender: "women's", aspectRatio: '1:1', synonyms: ['temple jewellery', 'temple jewelry'] },
   { type: 'Bridal Set',  defaultGender: "women's", aspectRatio: '1:1', synonyms: ['wedding set', 'dulhan set', 'full set'] },
@@ -67,15 +75,20 @@ export const CATEGORIES: Category[] = [
   {
     // "chain padak" (a chain sold with its pendant) must stay elongated - it is
     // listed here so it outranks the bare "padak" -> Pendant (square) match.
-    type: 'Chain', defaultGender: 'unisex', aspectRatio: '3:4', synonyms: ['chein', 'zanzeer', 'chain padak'],
+    //
+    // Tendulkar, Nawabi Holo and Indo-Italian are the store's names for chain
+    // designs (confirmed by the owner) - they appear on tags with no other word
+    // that would say "chain".
+    type: 'Chain', defaultGender: 'unisex', aspectRatio: '3:4',
+    synonyms: ['chein', 'zanzeer', 'chain padak', 'tendulkar', 'nawabi holo', 'indo italian'],
     modelNotes: 'The link style defines the chain - flat hand-made links, box, rope, curb, ball chain and so on are different products. Reproduce exactly the link style shown; never substitute a different one, and never change a flat link into a round one.',
   },
   // "Ekdani" is the store's name for a necklace style built from strands of
   // repeated small elements (the owner described one as a "3-strand EKDANI
   // design throughout the entire necklace").
-  { type: 'Necklace',    defaultGender: "women's", aspectRatio: '3:4', synonyms: ['neckless', 'nekless', 'ekdani'] },
-  { type: 'Haar',        defaultGender: "women's", aspectRatio: '3:4', synonyms: ['haram', 'rani haar', 'long haar', 'har'] },
-  { type: 'Choker',      defaultGender: "women's", aspectRatio: '3:4', synonyms: ['kanthi', 'kantha'] },
+  { type: 'Necklace',    defaultGender: "women's", aspectRatio: '3:4', synonyms: ['neckless', 'nekless', 'neckles', 'ekdani', 'mohanmala', 'mohan mal'] },
+  { type: 'Haar',        defaultGender: "women's", aspectRatio: '3:4', synonyms: ['haram', 'rani haar', 'ranihar', 'long haar', 'har', 'harset', 'chaplahar', 'chapalahar'] },
+  { type: 'Choker',      defaultGender: "women's", aspectRatio: '3:4', synonyms: ['kanthi', 'kantha', 'chokar', 'thushi'] },
   {
     // "Pote" is the Marathi name for the black-bead string of a mangalsutra, and
     // it is how the store's POS names these ("ATTACHED CHAIN POTE", "SHORT NANO
@@ -84,10 +97,17 @@ export const CATEGORIES: Category[] = [
     // "attached chain pote" was the single worst category in the first pilot,
     // with black beads repeatedly rendered as gold. "chain pote" is listed so it
     // outranks the bare "chain" match.
-    type: 'Mangalsutra', defaultGender: "women's", aspectRatio: '3:4', synonyms: ['mangalsutram', 'mangal sutra', 'thali', 'pote', 'chain pote'],
+    // "PBB" (as in "LONG PBB") is short for pote black beads.
+    type: 'Mangalsutra', defaultGender: "women's", aspectRatio: '3:4', synonyms: ['mangalsutram', 'mangal sutra', 'thali', 'pote', 'chain pote', 'pbb', 'mangalpote'],
     modelNotes: 'A mangalsutra: gold chain combined with strings or sections of small black glass beads (pote / kaala mani), usually with a gold pendant or two small cup-shaped vati. The black beads are its defining feature: they must stay black, at the same count and positions, and must never be rendered as gold beads. Black beads set inside small gold cages must keep both the cage and the black bead inside it. Any black enamel (meena) on the vati or pendant must stay.',
   },
-  { type: 'Bracelet',    defaultGender: 'unisex',  aspectRatio: '3:4', synonyms: ['brasslet', 'lucky', 'charm bracelet'] },
+  { type: 'Bracelet',    defaultGender: 'unisex',  aspectRatio: '3:4', synonyms: ['brasslet', 'braclet', 'bracelate', 'lucky', 'charm bracelet'] },
+  {
+    // "Kansakali" is the store's name for an ear chain (confirmed by the owner).
+    // Elongated: it runs the full height of the ear.
+    type: 'Ear Chain', defaultGender: "women's", aspectRatio: '3:4', synonyms: ['kansakali', 'kansakhali', 'kansakli', 'ear chain', 'ear chains'],
+    modelNotes: 'An earring worn vertically along the ear (an ear chain): a piece at the lobe joined by a chain or strands running up the ear to a clip, cuff or hook near the top. Keep its full vertical length, the number of chains and strands, and the upper attachment - none of it may be cropped, shortened or dropped.',
+  },
   { type: 'Anklet',      defaultGender: "women's", aspectRatio: '3:4', synonyms: ['payal', 'payals', 'pajeb', 'anklets'] },
   { type: 'Waist Chain', defaultGender: "women's", aspectRatio: '3:4', synonyms: ['kamarbandh', 'kamar band', 'oddiyanam'] },
   { type: 'Mala',        defaultGender: 'unisex',  aspectRatio: '3:4', synonyms: ['maala', 'rudraksh mala', 'ashtapailu mala'] },
@@ -155,7 +175,7 @@ export function defaultGenderFor(itemType: string): DefaultGender | null {
 export function hasDropElements(itemType: string): boolean {
   const category = resolveCategory(itemType);
   if (!category) return false;
-  return ['Jhumka', 'Chandbali', 'Haar', 'Mangalsutra', 'Anklet', 'Waist Chain', 'Bracelet', 'Necklace', 'Mala'].includes(category.type);
+  return ['Jhumka', 'Chandbali', 'Haar', 'Mangalsutra', 'Ear Chain', 'Anklet', 'Waist Chain', 'Bracelet', 'Necklace', 'Mala'].includes(category.type);
 }
 
 export const CATEGORY_TYPES = CATEGORIES.map((c) => c.type);
