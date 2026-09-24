@@ -50,6 +50,8 @@ describe('GET /api/health', () => {
     const res = await request(app).get('/api/health');
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('ok');
+    // Open tabs compare this against the build they loaded to pick up deploys.
+    expect(typeof res.body.build).toBe('string');
   });
 });
 

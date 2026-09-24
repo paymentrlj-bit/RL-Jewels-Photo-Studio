@@ -150,14 +150,28 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ isOpen, onClose, onS
         torch: Boolean(caps.torch),
       });
 
-      // One read in flight at a time, as fast as frames arrive.
+      // One read in flight at a time, as fast as frames arrive. Only a
+      // CPC-shaped code (1516L387) is accepted - anything else (a price
+      // barcode, a misread off the velvet's texture) is ignored and the
+      // camera just keeps looking. The old scanner stopped on the first
+      // thing it read at all, which is how a tag ended up filling the CPC
+      // box with 411152 or 32382 instead of 1516L387: those were real reads
+      // of *something* in the frame, just not the tag's own code.
+      let misreadCount = 0;
       const tick = async () => {
         if (stopped || doneRef.current) return;
         if (video.readyState >= 2) {
           const text = await reader.readVideo(video);
           if (text && !stopped) {
-            finish(text, 'live');
-            return;
+            if (extractCpc(text).matched) {
+              finish(text, 'live');
+              return;
+            }
+            misreadCount++;
+            // Reading plenty of something-but-not-a-CPC well before the
+            // generic 5s hint is usually a focus problem, so surface the
+            // hint sooner rather than making staff wait it out.
+            if (misreadCount === 15) setShowHint(true);
           }
         }
         const v = video as HTMLVideoElement & { requestVideoFrameCallback?: (cb: () => void) => number };
@@ -207,12 +221,18 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ isOpen, onClose, onS
       const bitmap = await createImageBitmap(file);
       const text = await reader.readImage(bitmap);
       bitmap.close();
-      if (text) {
+      if (text && extractCpc(text).matched) {
         finish(text, 'photo');
         return;
       }
-      logClientEvent('scanner_photo_unreadable', { reader: reader.kind, bytes: file.size });
-      setError('No code found in that photo. Fill the frame with the tag and keep it sharp, or type the CPC.');
+      logClientEvent('scanner_photo_unreadable', {
+        reader: reader.kind, bytes: file.size, readSomethingElse: Boolean(text),
+      });
+      setError(
+        text
+          ? 'That read something, but not the tag\'s CPC code. Get closer to the QR code and keep it sharp, or type the CPC.'
+          : 'No code found in that photo. Fill the frame with the tag and keep it sharp, or type the CPC.'
+      );
     } catch {
       setError('Could not read that photo. Try again, or type the CPC.');
     }
