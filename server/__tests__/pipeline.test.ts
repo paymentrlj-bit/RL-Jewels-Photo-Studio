@@ -146,15 +146,21 @@ describe('aspect ratio branching', () => {
     }
   });
 
-  it('keeps a chain sold with its pendant elongated, while a bare padak is a square pendant', () => {
-    expect(resolveCategory('CHAIN PADAK')?.type).toBe('Chain');
-    expect(aspectRatioFor('FANCY CHAIN PADAK')).toBe('3:4');
-    expect(resolveCategory('FANCY PADAK')?.type).toBe('Pendant');
-    expect(resolveCategory('PENDENT SET')?.type).toBe('Pendant');
+  it('frames a chain padak (a pendant made for a chain) as a square pendant, per the owner', () => {
+    for (const name of ['CHAIN PADAK', 'FANCY CHAIN PADAK', 'CASTING CHAIN PADAK', 'FANCY PADAK']) {
+      expect(resolveCategory(name)?.type, name).toBe('Pendant');
+      expect(aspectRatioFor(name), name).toBe('1:1');
+    }
+    expect(resolveCategory('CHAIN PADAK CASTING 3.50')?.type).toBe('Pendant');
+    // A pendant sold with matching earrings is a set: every piece must stay.
+    expect(resolveCategory('PENDENT SET')?.type).toBe('Pendant Set');
+    expect(resolveCategory('FANCY PENDANT SET')?.type).toBe('Pendant Set');
   });
 
-  it('resolves EKDANI to a necklace', () => {
-    expect(resolveCategory('EKDANI')?.type).toBe('Necklace');
+  it('resolves the bead malas, including the POS shorthand "mal"', () => {
+    for (const name of ['EKDANI', 'AKDANI GOL 4>', 'JONDHALI MAL', 'LONG VERTICAL MAL', 'RUDRAKSHYA MAL', 'FMG MOHANMALA']) {
+      expect(resolveCategory(name)?.type, name).toBe('Mala');
+    }
   });
 
   it('resolves the chain and earring names the owner explained', () => {
@@ -165,6 +171,32 @@ describe('aspect ratio branching', () => {
     expect(aspectRatioFor('KANSAKALI')).toBe('3:4');
     // Plain "tops" is still a stud.
     expect(resolveCategory('FANCY TOPS')?.type).toBe('Stud');
+  });
+
+  it('resolves the gold names the owner filled in on the item-names sheet', () => {
+    const expected: Record<string, string> = {
+      'VATI SET 2 L': 'Vati Set', 'DORLA L': 'Dorla', 'RINGA U SHAPE': 'U Hoop', 'FANCY RINGA': 'Bali',
+      'TOPS LATKAN': 'Latkan Tops', 'FANCY TOPS LATKAN': 'Latkan Tops', 'KAYAMAT CHAIN': 'Kayamat',
+      'SUIDHAGA': 'Sui Dhaga', 'CHANDRAKANTA': 'Chandbali', 'KARDA FANCY': 'Ring', 'FANCY TODA  2': 'Kada',
+      'GEHU TODA 2': 'Kada', 'GOTE PURE 1': 'Bangle', 'RASSI <5': 'Chain', 'COIMBTUR': 'Chain', 'DOKIYA': 'Chain',
+      'GOFE PURE': 'Chain', 'KAJU KATLI': 'Chain', 'HOLO': 'Chain', 'STONE TAAR': 'Nose Pin', 'STONE FIRKI': 'Nose Pin',
+      'MOTIKUDI': 'Earrings', 'KANCHAIN PURE 2': 'Earrings', 'SET LONG 3': 'Haar', 'SET ANTIC 3': 'Haar',
+      'SHORT BRACLET POTE': 'Mangalsutra', 'LONG BRACLET POTE': 'Mangalsutra', 'BAJUBAND': 'Bajuband',
+      'BINDI': 'Bindi', 'RAKHI': 'Rakhi', 'JANWA': 'Janwa', 'LOTUS': 'Chain', 'HC': 'Chain', 'AAKDA': 'Aakda',
+    };
+    for (const [name, type] of Object.entries(expected)) expect(resolveCategory(name)?.type, name).toBe(type);
+    // Elongated where the piece hangs long.
+    for (const name of ['KAYAMAT CHAIN', 'SUIDHAGA', 'SHORT BRACLET POTE']) expect(aspectRatioFor(name), name).toBe('3:4');
+    for (const name of ['VATI SET 2 L', 'RINGA U SHAPE', 'TOPS LATKAN']) expect(aspectRatioFor(name), name).toBe('1:1');
+  });
+
+  it('adds the owner\'s style notes to the category\'s own', () => {
+    expect(describeItemType('BUNCH CHAIN POTE').notes).toMatch(/three or four machine chains/);
+    expect(describeItemType('SHORT NANO POTE').notes).toMatch(/very small \(nano\) black beads/);
+    expect(describeItemType('TARAMANDAL POTE').notes).toMatch(/star motif/);
+    expect(describeItemType('CHAPLAHAR').notes).toMatch(/flat gold pieceworks/);
+    expect(describeItemType('RASSI').notes).toMatch(/rope/);
+    expect(describeItemType('GENTS ANGUTHI').notes).not.toMatch(/Nano|Bunch|Rassi/);
   });
 
   it('supplies a gender default only where one is real', () => {
