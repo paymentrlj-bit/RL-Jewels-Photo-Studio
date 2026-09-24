@@ -151,8 +151,7 @@ describe('aspect ratio branching', () => {
       expect(resolveCategory(name)?.type, name).toBe('Pendant');
       expect(aspectRatioFor(name), name).toBe('1:1');
     }
-    // The one the owner marked as a chain.
-    expect(resolveCategory('CHAIN PADAK CASTING 3.50')?.type).toBe('Chain');
+    expect(resolveCategory('CHAIN PADAK CASTING 3.50')?.type).toBe('Pendant');
     // A pendant sold with matching earrings is a set: every piece must stay.
     expect(resolveCategory('PENDENT SET')?.type).toBe('Pendant Set');
     expect(resolveCategory('FANCY PENDANT SET')?.type).toBe('Pendant Set');
@@ -183,7 +182,7 @@ describe('aspect ratio branching', () => {
       'GOFE PURE': 'Chain', 'KAJU KATLI': 'Chain', 'HOLO': 'Chain', 'STONE TAAR': 'Nose Pin', 'STONE FIRKI': 'Nose Pin',
       'MOTIKUDI': 'Earrings', 'KANCHAIN PURE 2': 'Earrings', 'SET LONG 3': 'Haar', 'SET ANTIC 3': 'Haar',
       'SHORT BRACLET POTE': 'Mangalsutra', 'LONG BRACLET POTE': 'Mangalsutra', 'BAJUBAND': 'Bajuband',
-      'BINDI': 'Bindi', 'RAKHI': 'Rakhi', 'JANWA': 'Janwa',
+      'BINDI': 'Bindi', 'RAKHI': 'Rakhi', 'JANWA': 'Janwa', 'LOTUS': 'Chain', 'HC': 'Chain', 'AAKDA': 'Aakda',
     };
     for (const [name, type] of Object.entries(expected)) expect(resolveCategory(name)?.type, name).toBe(type);
     // Elongated where the piece hangs long.

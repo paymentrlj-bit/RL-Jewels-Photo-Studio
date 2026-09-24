@@ -83,7 +83,7 @@ export const CATEGORIES: Category[] = [
   // "padak" is the store's POS word for a pendant; "pendent" is a real,
   // common spelling on its tags. A "chain padak" is a pendant made to go on a
   // chain - sold and photographed as a pendant (confirmed by the owner), so
-  // square. The exception, "CHAIN PADAK CASTING", the owner marked as a chain.
+  // square - "CHAIN PADAK CASTING" included (owner).
   { type: 'Pendant',     defaultGender: 'unisex',  aspectRatio: '1:1', synonyms: ['locket', 'dollar', 'padak', 'pendent', 'chain padak'] },
   {
     type: 'Pendant Set', defaultGender: "women's", aspectRatio: '1:1', synonyms: ['pendant set', 'pendent set'],
@@ -110,6 +110,10 @@ export const CATEGORIES: Category[] = [
   },
   // Taar and firki are nose pins without and with a screw back (owner).
   { type: 'Nose Pin',    defaultGender: "women's", aspectRatio: '1:1', synonyms: ['nath', 'natth', 'nose ring', 'nosepin', 'chunni', 'taar', 'firki'] },
+  {
+    type: 'Aakda', defaultGender: 'unisex', aspectRatio: '1:1', synonyms: ['aakda', 'akda'],
+    modelNotes: 'An aakda: a heavy traditional clasp or hook used to fasten Indian ornaments. Keep the hook, its loop and any decoration exactly.',
+  },
   { type: 'Bindi',       defaultGender: "women's", aspectRatio: '1:1', synonyms: ['bindi'] },
   { type: 'Rakhi',       defaultGender: 'unisex',  aspectRatio: '1:1', synonyms: ['rakhi'] },
   { type: 'Coin',        defaultGender: 'unisex',  aspectRatio: '1:1', synonyms: ['bar', 'biscuit', 'gold coin', 'sikka'] },
@@ -123,8 +127,10 @@ export const CATEGORIES: Category[] = [
     // appear on tags with no other word that would say "chain".
     type: 'Chain', defaultGender: 'unisex', aspectRatio: '3:4',
     synonyms: [
-      'chein', 'zanzeer', 'chain padak casting', 'tendulkar', 'nawabi holo', 'indo italian', 'holo',
-      'rassi', 'rasshi', 'coimbtur', 'coimbatore', 'dokiya', 'gofe', 'gof', 'kaju katli',
+      'chein', 'zanzeer', 'tendulkar', 'nawabi holo', 'indo italian', 'holo',
+      'rassi', 'rasshi', 'coimbtur', 'coimbatore', 'dokiya', 'gofe', 'gof', 'kaju katli', 'lotus',
+      // HC: the haar chain that goes at the back of haars and rani haars.
+      'hc', 'haar chain',
     ],
     modelNotes: 'The link style defines the chain - flat hand-made links, box, rope, curb, ball chain and so on are different products. Reproduce exactly the link style shown; never substitute a different one, and never change a flat link into a round one.',
   },
