@@ -4,10 +4,11 @@ import {
   AUDIT_CHECKS,
   UNFIXABLE_BY_ESCALATION,
   FIXABLE_BY_ESCALATION,
+  buildContextBlock,
   type AuditCheck,
 } from '../ai/operations';
 import { aspectRatioFor, resolveCategory, defaultGenderFor, isElongated } from '../catalog/taxonomy';
-import { cachedSegmentation, clearSegmentationCache, segmentationCacheSize } from '../queue/segmentationCache';
+import { cachedSegmentation, clearSegmentationCache, segmentationCacheSize } from '../queue/groundingCache';
 import { DEFAULT_ENHANCE_PROMPT, buildOutputFramingBlock, buildAuditPrompt } from '../ai/prompts';
 
 function allPassing(): Record<AuditCheck, boolean> {
@@ -135,6 +136,26 @@ describe('aspect ratio branching', () => {
     expect(isElongated('something unheard of')).toBe(false);
   });
 
+  it('resolves the store\'s mangalsutra ("pote") names to Mangalsutra, elongated', () => {
+    // The worst category in the first pilot. It used to resolve to plain
+    // Chain, or to nothing at all - which also meant a square frame.
+    for (const name of ['ATTACHED CHAIN POTE', 'SHORT NANO POTE', 'DESIGNER POTE', 'SHORT CHAIN POTE']) {
+      expect(resolveCategory(name)?.type, name).toBe('Mangalsutra');
+      expect(aspectRatioFor(name), name).toBe('3:4');
+    }
+  });
+
+  it('keeps a chain sold with its pendant elongated, while a bare padak is a square pendant', () => {
+    expect(resolveCategory('CHAIN PADAK')?.type).toBe('Chain');
+    expect(aspectRatioFor('FANCY CHAIN PADAK')).toBe('3:4');
+    expect(resolveCategory('FANCY PADAK')?.type).toBe('Pendant');
+    expect(resolveCategory('PENDENT SET')?.type).toBe('Pendant');
+  });
+
+  it('resolves EKDANI to a necklace', () => {
+    expect(resolveCategory('EKDANI')?.type).toBe('Necklace');
+  });
+
   it('supplies a gender default only where one is real', () => {
     expect(defaultGenderFor('Mangalsutra')).toBe("women's");
     expect(defaultGenderFor('Chain')).toBe('unisex');
@@ -185,6 +206,34 @@ describe('audit prompt', () => {
     for (const check of AUDIT_CHECKS) {
       expect(prompt, `audit prompt is missing "${check}"`).toContain(`"${check}"`);
     }
+  });
+
+  it('still asks for every check when a verified inventory is included', () => {
+    const prompt = buildAuditPrompt({ itemType: 'Jhumka', purity: '22kt' }, '\n\nVERIFIED DETAIL INVENTORY OF IMAGE 1: test');
+    expect(prompt).toContain('VERIFIED DETAIL INVENTORY OF IMAGE 1: test');
+    for (const check of AUDIT_CHECKS) expect(prompt).toContain(`"${check}"`);
+  });
+
+  it('tells the grader what a POS style name actually is', () => {
+    const prompt = buildAuditPrompt({ itemType: 'ATTACHED CHAIN POTE', purity: '22kt' });
+    expect(prompt).toContain('Mangalsutra (store tag name: "ATTACHED CHAIN POTE")');
+    expect(prompt).toMatch(/black beads/i);
+  });
+});
+
+describe('context block', () => {
+  it('leads with the resolved category and carries its notes', () => {
+    const block = buildContextBlock({ itemType: 'ATTACHED CHAIN POTE', purity: '22kt' });
+    expect(block).toContain('Item Category: Mangalsutra (store tag name: "ATTACHED CHAIN POTE")');
+    expect(block).toMatch(/must never be rendered as gold beads/);
+  });
+
+  it('passes an unknown style name through, marked as the store\'s own', () => {
+    expect(buildContextBlock({ itemType: 'TENDULKAR' })).toContain('"TENDULKAR" (the store\'s own style name)');
+  });
+
+  it('does not repeat the name when the tag already uses the trade word', () => {
+    expect(buildContextBlock({ itemType: 'Ring' })).toContain('Item Category: Ring\n');
   });
 });
 

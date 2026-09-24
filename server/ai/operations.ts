@@ -15,19 +15,26 @@ import {
   SEGMENT_TIMEOUT_MS,
 } from './client';
 import { buildAuditPrompt, buildCopyPrompt, type AuditContext, type CopyContext } from './prompts';
+import { buildAuditInventoryBlock, type DetailInventory, type ReferenceImage } from './inventory';
+import { describeItemType } from '../catalog/taxonomy';
 
 export interface EnhanceResult {
   imageBase64: string;
   mimeType: string;
 }
 
+// referenceImages are close-up crops of the same photo, sent after it as extra
+// input so the model can see fine detail at full resolution. The prompt must
+// say what they are (see buildReferenceImagesBlock) or the model may treat them
+// as additional pieces to include.
 export async function enhanceImage(
   ai: GoogleGenAI,
   model: string,
   imageBase64: string,
   mimeType: string,
   prompt: string,
-  aspectRatio: '1:1' | '3:4' = '1:1'
+  aspectRatio: '1:1' | '3:4' = '1:1',
+  referenceImages: ReferenceImage[] = []
 ): Promise<EnhanceResult | null> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), ENHANCE_TIMEOUT_MS);
@@ -37,6 +44,7 @@ export async function enhanceImage(
       contents: {
         parts: [
           { inlineData: { mimeType, data: imageBase64 } },
+          ...referenceImages.map((r) => ({ inlineData: { mimeType: r.mimeType, data: r.base64 } })),
           { text: prompt },
         ],
       },
@@ -149,9 +157,11 @@ export async function auditOutput(
   enhancedBase64: string,
   enhancedMime: string,
   context: AuditContext,
-  model: string = MODEL_AUDIT
+  model: string = MODEL_AUDIT,
+  grounding?: { inventory: DetailInventory; crops: ReferenceImage[] }
 ): Promise<AuditResult> {
-  const prompt = buildAuditPrompt(context);
+  const crops = grounding?.crops ?? [];
+  const prompt = buildAuditPrompt(context, grounding ? buildAuditInventoryBlock(grounding.inventory, crops) : '');
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), AUDIT_TIMEOUT_MS);
@@ -162,6 +172,7 @@ export async function auditOutput(
         parts: [
           { inlineData: { mimeType: originalMime, data: originalBase64 } },
           { inlineData: { mimeType: enhancedMime, data: enhancedBase64 } },
+          ...crops.map((c) => ({ inlineData: { mimeType: c.mimeType, data: c.base64 } })),
           { text: prompt },
         ],
       },
@@ -307,20 +318,24 @@ export async function generateCopy(
   }
 }
 
-// Builds the context block appended to the enhance prompt. Kept identical to
-// v1's string, including the trailing-newline shape - the prompt was tuned
-// against this exact layout.
+// Builds the context block appended to the enhance prompt. Same layout as v1,
+// which the prompt was tuned against, with one change: the category line leads
+// with the resolved trade category instead of the raw POS style name. The
+// first pilot showed why - "ATTACHED CHAIN POTE" reached the model verbatim,
+// the model had no way to know "pote" means black beads, and that category
+// had the worst reshoot rate of all, with black beads rendered as gold.
 export function buildContextBlock(input: {
   itemType?: string;
   purity?: string;
   gender?: string;
   weight?: string;
 }): string {
+  const item = describeItemType(input.itemType);
   return `
 
 ADDITIONAL CONTEXT (FROM CATALOG FORM):
-- Item Category: ${input.itemType || 'jewellery'}
-- Purity: ${input.purity || '22kt'} Gold
+- Item Category: ${item.line}
+${item.notes ? `- About this category: ${item.notes}\n` : ''}- Purity: ${input.purity || '22kt'} Gold
 - Intended For: ${input.gender || "women's"}
 ${input.weight ? `- Weight: ${input.weight}g` : ''}`;
 }

@@ -37,6 +37,8 @@ services:
 
       AXIOM_TOKEN: ${AXIOM_TOKEN:-}
       AXIOM_DATASET: ${AXIOM_DATASET:-rl-jewels-events}
+
+      DETAIL_INVENTORY: ${DETAIL_INVENTORY:-on}
     volumes:
       # THE shoot. Every product, every photo, the whole database.
       # This is the one thing that must be backed up.

@@ -109,6 +109,11 @@ ERP_MAPPING=generic
 QUEUE_CONCURRENCY=2
 OCR_SPACE_API_KEY=
 
+# Counts each piece's fine detail from close-ups before enhancing (more
+# accurate beads/stones/chains, a few US cents more per photo). Set to "off"
+# to run a batch without it and compare.
+DETAIL_INVENTORY=on
+
 GOOGLE_DRIVE_CLIENT_ID=
 GOOGLE_DRIVE_CLIENT_SECRET=
 GOOGLE_DRIVE_REFRESH_TOKEN=
