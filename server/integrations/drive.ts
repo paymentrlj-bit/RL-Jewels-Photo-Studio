@@ -1,6 +1,6 @@
 import { OAuth2Client } from 'google-auth-library';
 import { config, isDriveConfigured as configuredInEnv } from '../config';
-import { resolveCategory, genderVariesFor } from '../catalog/taxonomy';
+import { resolveCategory, genderVariesFor, groupFor } from '../catalog/taxonomy';
 
 // Uploads approved product photos + metadata into the store's own Google
 // Drive, authenticated as a real Google account via OAuth (not a service
@@ -55,14 +55,25 @@ function normalizeFolderName(name: string): string {
  * Without this, a batch of 20 Rings re-searched Drive for the exact same
  * "Ring / Women's / Cocktail Ring" folder 20 times instead of once - most of
  * a Drive export's wall-clock time was this redundant searching, not the
- * actual file uploads. Scoped to a single call to exportBatchToDrive() /
- * exportProductToDrive() loop, never persisted, so it can't ever serve a
- * stale folder id across separate export clicks.
+ * actual file uploads.
  */
 export type FolderCache = Map<string, string>;
 export function newFolderCache(): FolderCache {
   return new Map();
 }
+
+// The drive-export worker (server/queue/driveExportWorker.ts) processes one
+// job at a time for the lifetime of the server process, not one batch at a
+// time - a scoped-per-request cache would only help products that happen to
+// land in the same POST. This one instance is shared across every job the
+// worker ever runs, so the speed win applies across separate export clicks
+// too, not just within one. A folder id only goes stale if someone deletes
+// that folder from Drive by hand, in which case the next upload to it fails
+// with a clear "not found" error (surfaced per-item, same as any other
+// failure) rather than silently going anywhere wrong - an acceptable trade
+// for not re-searching Drive on every single upload for the server's whole
+// uptime.
+export const sharedFolderCache: FolderCache = newFolderCache();
 
 // Finds a folder under a given parent, creating it if it doesn't exist yet.
 // Used to build the Category/Gender/Style folder structure inside the
@@ -141,12 +152,21 @@ function cleanSegment(value: string, fallback: string): string {
 }
 
 /**
- * Category -> (Gender, only for categories that genuinely have both) ->
- * Style -> [product's files land here]. Replaces the old flat
+ * (Group, only for categories that share a merchandising department with
+ * others) -> Category -> (Gender, only for categories that genuinely have
+ * both) -> Style -> [product's files land here]. Replaces the old flat
  * "one folder per category" layout: at 3,000+ SKUs a single "Mangalsutra"
  * or "Chain" folder had become an unbrowsable wall of files, and everything
  * the split needs is already known at export time - nothing new to ask
  * staff for.
+ *
+ * Group is how the store itself shops these side by side - every ear-worn
+ * style lands under "Earrings Category" whether it's a Jhumka, a Chandbali
+ * or an Ear Chain, the same way a customer comparing earrings does not care
+ * which of those trade names the piece happens to be. Not every category
+ * has one: a few (Ring, Mangalsutra, Anklet...) are distinct enough on
+ * their own that a department wrapper would only ever contain that one
+ * folder.
  *
  * Style is the store's own raw style name (itemType as scanned/typed, e.g.
  * "Vati Mangalsutra", "Gents Casting Anguthi") - already the specific,
@@ -156,10 +176,15 @@ function cleanSegment(value: string, fallback: string): string {
  */
 export function driveFolderSegments(itemType: string, gender: string): string[] {
   const category = resolveCategory(itemType);
+  const segments: string[] = [];
+
+  const group = category ? groupFor(itemType) : null;
+  if (group) segments.push(group);
+
   // Unmatched item types get their own top-level bucket, not a folder named
   // after their raw text reused as its own style folder too - that would
   // nest e.g. "Something New/Something New" for nothing.
-  const segments = [category ? category.type : 'Uncategorized'];
+  segments.push(category ? category.type : 'Uncategorized');
 
   if (category && genderVariesFor(itemType)) {
     segments.push(GENDER_LABELS[gender] || 'Unspecified');

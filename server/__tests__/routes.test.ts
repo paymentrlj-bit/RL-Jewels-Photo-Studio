@@ -18,6 +18,7 @@ import { initDatabase, closeDatabase, getDb } from '../db';
 import { createApp } from '../index';
 import { createUser } from '../auth/users';
 import { getProduct } from '../db/products';
+import { config } from '../config';
 
 let app: express.Express;
 let dir: string;
@@ -381,5 +382,120 @@ describe('bulk delete', () => {
     const cookie = await staff();
     const res = await request(app).post('/api/products/bulk-delete').set('Cookie', cookie).send({ ids: [] });
     expect(res.status).toBe(400);
+  });
+});
+
+describe('Drive export queues jobs instead of uploading inline', () => {
+  async function staff() {
+    await createUser({ username: 'staffer', password: 'a-real-password-1', isAdmin: false });
+    return (await loginAs('staffer', 'a-real-password-1')).cookie!;
+  }
+
+  async function currentBatchId(cookie: string): Promise<string> {
+    const res = await request(app).get('/api/batches/current').set('Cookie', cookie);
+    return res.body.batch.id as string;
+  }
+
+  async function approvedProduct(cookie: string, cpc: string, batchId: string) {
+    const created = await request(app).post('/api/products').set('Cookie', cookie).send({ cpc, itemType: 'Ring', batchId });
+    getDb().prepare("UPDATE products SET status = 'approved' WHERE id = ?").run(created.body.product.id);
+    return created.body.product.id as string;
+  }
+
+  function driveExportJobs(productId: string) {
+    return getDb().prepare("SELECT status FROM jobs WHERE product_id = ? AND type = 'drive_export'").all(productId) as { status: string }[];
+  }
+
+  it('is unavailable when Drive is not configured', async () => {
+    const cookie = await staff();
+    const batchId = await currentBatchId(cookie);
+    await approvedProduct(cookie, '9101L1', batchId);
+    const res = await request(app).post(`/api/export/batch/${batchId}/drive`).set('Cookie', cookie).send({});
+    expect(res.status).toBe(503);
+  });
+
+  describe('with Drive configured', () => {
+    beforeAll(() => {
+      // Mutating the already-loaded config object directly - isDriveConfigured()
+      // reads config.drive at call time, and no real network call ever happens
+      // in this suite (createApp() never starts a worker, so a queued
+      // drive_export job just sits there, exactly what these tests check).
+      config.drive.clientId = 'test-client-id';
+      config.drive.clientSecret = 'test-client-secret';
+      config.drive.refreshToken = 'test-refresh-token';
+      config.drive.rootFolderId = 'test-root-folder';
+    });
+    afterAll(() => {
+      config.drive.clientId = undefined;
+      config.drive.clientSecret = undefined;
+      config.drive.refreshToken = undefined;
+      config.drive.rootFolderId = undefined;
+    });
+
+    it('queues a job per approved product, and reports already-exported ones separately', async () => {
+      const cookie = await staff();
+      const batchId = await currentBatchId(cookie);
+      const approvedId = await approvedProduct(cookie, '9102L1', batchId);
+      const exportedId = await approvedProduct(cookie, '9102L2', batchId);
+      getDb().prepare("UPDATE products SET status = 'exported' WHERE id = ?").run(exportedId);
+
+      const res = await request(app).post(`/api/export/batch/${batchId}/drive`).set('Cookie', cookie).send({});
+      expect(res.status).toBe(200);
+      expect(res.body.enqueued).toBe(1);
+      expect(res.body.alreadyExported).toBe(1);
+      expect(driveExportJobs(approvedId)).toHaveLength(1);
+      expect(driveExportJobs(approvedId)[0].status).toBe('queued');
+      expect(driveExportJobs(exportedId)).toHaveLength(0);
+    });
+
+    it('does not double-queue a product whose export is still queued or running', async () => {
+      const cookie = await staff();
+      const batchId = await currentBatchId(cookie);
+      const productId = await approvedProduct(cookie, '9103L1', batchId);
+
+      const first = await request(app).post(`/api/export/batch/${batchId}/drive`).set('Cookie', cookie).send({});
+      expect(first.body.enqueued).toBe(1);
+
+      // Product status is still 'approved' at this point - nothing ran the
+      // job - so without the in-flight-job check this would queue a second
+      // upload of the exact same photo.
+      const second = await request(app).post(`/api/export/batch/${batchId}/drive`).set('Cookie', cookie).send({});
+      expect(second.body.enqueued).toBe(0);
+      expect(driveExportJobs(productId)).toHaveLength(1);
+    });
+
+    it('queues a product again after its previous export job failed', async () => {
+      const cookie = await staff();
+      const batchId = await currentBatchId(cookie);
+      const productId = await approvedProduct(cookie, '9104L1', batchId);
+
+      await request(app).post(`/api/export/batch/${batchId}/drive`).set('Cookie', cookie).send({});
+      getDb().prepare("UPDATE jobs SET status = 'failed' WHERE product_id = ? AND type = 'drive_export'").run(productId);
+
+      const retry = await request(app).post(`/api/export/batch/${batchId}/drive`).set('Cookie', cookie).send({});
+      expect(retry.body.enqueued).toBe(1);
+      expect(driveExportJobs(productId)).toHaveLength(2);
+    });
+
+    it('drive-status reports queued/running/succeeded from job and product state', async () => {
+      const cookie = await staff();
+      const batchId = await currentBatchId(cookie);
+      await approvedProduct(cookie, '9105L1', batchId);
+      const runningId = await approvedProduct(cookie, '9105L2', batchId);
+      const succeededId = await approvedProduct(cookie, '9105L3', batchId);
+
+      await request(app).post(`/api/export/batch/${batchId}/drive`).set('Cookie', cookie).send({});
+      getDb().prepare("UPDATE jobs SET status = 'running' WHERE product_id = ? AND type = 'drive_export'").run(runningId);
+      getDb().prepare("DELETE FROM jobs WHERE product_id = ? AND type = 'drive_export'").run(succeededId);
+      getDb().prepare("UPDATE products SET status = 'exported' WHERE id = ?").run(succeededId);
+
+      const res = await request(app).get(`/api/export/batch/${batchId}/drive-status`).set('Cookie', cookie);
+      expect(res.status).toBe(200);
+      expect(res.body.total).toBe(3);
+      expect(res.body.queued).toBe(1);
+      expect(res.body.running).toBe(1);
+      expect(res.body.succeeded).toBe(1);
+      expect(res.body.inProgress).toBe(2);
+    });
   });
 });

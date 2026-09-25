@@ -42,6 +42,17 @@ export interface Category {
    */
   genderVaries?: boolean;
   /**
+   * The merchandising department this category is displayed and shopped
+   * under - e.g. every ear-worn style (Jhumka, Chandbali, Bali, studs, ear
+   * chains...) is "Earrings", not its own top-level Drive folder, because
+   * that is how the store itself groups them for a customer comparing
+   * options side by side. Undefined only for categories genuinely singular
+   * enough that a department wrapper would have exactly one child forever
+   * (Mangalsutra is its own department). See driveFolderSegments() in
+   * server/integrations/drive.ts, the only consumer.
+   */
+  group?: string;
+  /**
    * What the image and vision models need to know about this category that a
    * general-purpose model would not - sent with every enhance, audit and
    * inventory call. Only where a real failure pattern justifies it: every
@@ -59,45 +70,45 @@ export const CATEGORIES: Category[] = [
     modelNotes: "Men's rings (anguthi) are often cast with a raised motif or a patterned shank. The motif and the pattern along the sides of the shank must be kept exactly - these were the most common ring failures.",
   },
   {
-    type: 'Jhumka', defaultGender: "women's", aspectRatio: '1:1', synonyms: ['jhumki', 'zumka', 'jumka'],
+    type: 'Jhumka', defaultGender: "women's", aspectRatio: '1:1', group: 'Earrings Category', synonyms: ['jhumki', 'zumka', 'jumka'],
     modelNotes: 'A bell- or dome-shaped drop earring, usually hanging from a decorative stud top, with a fringe of small balls or beads around the rim of the bell and often small clusters hanging beneath it. The number of fringe beads and the shape and count of the hanging clusters are the details most often redrawn wrongly.',
   },
   {
     // "Chandrakanta" is the store's crescent-shaped statement earring.
-    type: 'Chandbali', defaultGender: "women's", aspectRatio: '1:1', synonyms: ['chandbala', 'chand bali', 'chandrakanta'],
+    type: 'Chandbali', defaultGender: "women's", aspectRatio: '1:1', group: 'Earrings Category', synonyms: ['chandbala', 'chand bali', 'chandrakanta'],
     modelNotes: 'A crescent-shaped (half-moon) statement earring, often with filigree or die-struck work and small dangling drops along the curve. Keep the crescent shape, the filigree pattern and the number of drops.',
   },
   // "Ringa" is the store's hoop worn through the lobe (confirmed by the owner).
-  { type: 'Bali',        defaultGender: "women's", aspectRatio: '1:1', synonyms: ['hoop', 'hoops', 'balee', 'ringa'] },
+  { type: 'Bali',        defaultGender: "women's", aspectRatio: '1:1', group: 'Earrings Category', synonyms: ['hoop', 'hoops', 'balee', 'ringa'] },
   {
     // "Ringa U Shape" - 1,642 pieces in stock - is not a round hoop.
-    type: 'U Hoop', defaultGender: "women's", aspectRatio: '1:1', synonyms: ['ringa u shape', 'u shape', 'v shape', 'u hoop'],
+    type: 'U Hoop', defaultGender: "women's", aspectRatio: '1:1', group: 'Earrings Category', synonyms: ['ringa u shape', 'u shape', 'v shape', 'u hoop'],
     modelNotes: 'A hoop earring in a U or V (horseshoe) shape, not a round circle. Keep the U or V silhouette - its straight or angled sides and the curve or point at the bottom - and any pattern along it.',
   },
-  { type: 'Stud',        defaultGender: "women's", aspectRatio: '1:1', synonyms: ['studs', 'tops', 'ear stud'] },
+  { type: 'Stud',        defaultGender: "women's", aspectRatio: '1:1', group: 'Earrings Category', synonyms: ['studs', 'tops', 'ear stud'] },
   {
     // "Tops latkan" - a stud top with a small hanging charm (confirmed by the
     // owner). Its own type so the drop is not flattened into a plain stud.
-    type: 'Latkan Tops', defaultGender: "women's", aspectRatio: '1:1', synonyms: ['tops latkan', 'latkan', 'latkans'],
+    type: 'Latkan Tops', defaultGender: "women's", aspectRatio: '1:1', group: 'Earrings Category', synonyms: ['tops latkan', 'latkan', 'latkans'],
     modelNotes: 'A stud earring (top) that sits on the lobe with a small charm, drop or chain hanging below it (the latkan). Keep both parts: the top, and every hanging element with its length and count.',
   },
   // "earings" is a real spelling on the store's tags. Motikudi is a large ornate
   // pearl stud; kanchain is the owner's word for an earring style.
-  { type: 'Earrings',    defaultGender: "women's", aspectRatio: '1:1', synonyms: ['earring', 'earings', 'earing', 'kanbali', 'karnphool', 'bugadi', 'motikudi', 'kanchain'] },
+  { type: 'Earrings',    defaultGender: "women's", aspectRatio: '1:1', group: 'Earrings Category', synonyms: ['earring', 'earings', 'earing', 'kanbali', 'karnphool', 'bugadi', 'motikudi', 'kanchain'] },
   {
     // "Singapore tops" is the store's name for a J-type earring. Listed as its
     // own type (and ahead of the bare "tops" -> Stud match by length) because
     // a model that thinks it is drawing a stud flattens the J curve.
-    type: 'J Hoop', defaultGender: "women's", aspectRatio: '1:1', synonyms: ['singapore tops', 'j hoop', 'j hoops', 'j type tops'],
+    type: 'J Hoop', defaultGender: "women's", aspectRatio: '1:1', group: 'Earrings Category', synonyms: ['singapore tops', 'j hoop', 'j hoops', 'j type tops'],
     modelNotes: 'A J-shaped earring: it passes through the lobe and curves down and round in a "J", with the long front of the J visible when worn. It is not a closed round hoop and not a flat stud - keep the J curve, its length and any pattern along it.',
   },
   // "padak" is the store's POS word for a pendant; "pendent" is a real,
   // common spelling on its tags. A "chain padak" is a pendant made to go on a
   // chain - sold and photographed as a pendant (confirmed by the owner), so
   // square - "CHAIN PADAK CASTING" included (owner).
-  { type: 'Pendant',     defaultGender: 'unisex',  aspectRatio: '1:1', genderVaries: true, synonyms: ['locket', 'dollar', 'padak', 'pendent', 'chain padak'] },
+  { type: 'Pendant',     defaultGender: 'unisex',  aspectRatio: '1:1', genderVaries: true, group: 'Pendant Category', synonyms: ['locket', 'dollar', 'padak', 'pendent', 'chain padak'] },
   {
-    type: 'Pendant Set', defaultGender: "women's", aspectRatio: '1:1', synonyms: ['pendant set', 'pendent set'],
+    type: 'Pendant Set', defaultGender: "women's", aspectRatio: '1:1', group: 'Pendant Category', synonyms: ['pendant set', 'pendent set'],
     modelNotes: 'A set: a pendant (sometimes on its chain) with a matching pair of earrings or tops. Every piece of the set in the photo must stay - the pendant and both earrings - each with its own details.',
   },
   {
@@ -112,11 +123,11 @@ export const CATEGORIES: Category[] = [
     modelNotes: 'A dorla: an ornate round or heart-shaped gold locket, similar to a vati but built by soldering many small embossed pieces together. Keep every small piece and the joins between them - never smooth it into a single cast surface.',
   },
   // Gote (plain gold bangle) and patli (a pair of bangles) per the owner.
-  { type: 'Bangle',      defaultGender: "women's", aspectRatio: '1:1', genderVaries: true, synonyms: ['bangles', 'bangels', 'bangal', 'bangals', 'bangdi', 'patli', 'kangan', 'gote'] },
+  { type: 'Bangle',      defaultGender: "women's", aspectRatio: '1:1', genderVaries: true, group: 'Bangles Category', synonyms: ['bangles', 'bangels', 'bangal', 'bangals', 'bangdi', 'patli', 'kangan', 'gote'] },
   // Toda: a thick, structural kada (owner).
-  { type: 'Kada',        defaultGender: 'unisex',  aspectRatio: '1:1', genderVaries: true, synonyms: ['kara', 'kadaa', 'toda'] },
+  { type: 'Kada',        defaultGender: 'unisex',  aspectRatio: '1:1', genderVaries: true, group: 'Bangles Category', synonyms: ['kara', 'kadaa', 'toda'] },
   {
-    type: 'Bajuband', defaultGender: "women's", aspectRatio: '1:1', synonyms: ['bajuband', 'baju band', 'armlet'],
+    type: 'Bajuband', defaultGender: "women's", aspectRatio: '1:1', group: 'Bangles Category', synonyms: ['bajuband', 'baju band', 'armlet'],
     modelNotes: 'An armlet worn snugly around the upper arm. Keep its full band, the central motif and any hanging elements.',
   },
   // Taar and firki are nose pins without and with a screw back (owner).
@@ -136,7 +147,7 @@ export const CATEGORIES: Category[] = [
     // Tendulkar, Nawabi Holo, Indo-Italian, Coimbtur, Dokiya, Gofe, Rassi, Kaju
     // Katli and Holo are all chain designs (confirmed by the owner) - they
     // appear on tags with no other word that would say "chain".
-    type: 'Chain', defaultGender: 'unisex', aspectRatio: '3:4', genderVaries: true,
+    type: 'Chain', defaultGender: 'unisex', aspectRatio: '3:4', genderVaries: true, group: 'Necklace Category',
     synonyms: [
       'chein', 'zanzeer', 'tendulkar', 'nawabi holo', 'indo italian', 'holo',
       'rassi', 'rasshi', 'coimbtur', 'coimbatore', 'dokiya', 'gofe', 'gof', 'kaju katli', 'lotus',
@@ -148,22 +159,22 @@ export const CATEGORIES: Category[] = [
   {
     // "Kayamat" is a long chain attachment worn with tops - an earring, not a
     // neck chain (owner). Listed so "KAYAMAT CHAIN" outranks bare "chain".
-    type: 'Kayamat', defaultGender: "women's", aspectRatio: '3:4', synonyms: ['kayamat', 'kayamat chain'],
+    type: 'Kayamat', defaultGender: "women's", aspectRatio: '3:4', group: 'Earrings Category', synonyms: ['kayamat', 'kayamat chain'],
     modelNotes: 'A kayamat: a long, elaborate earring attachment worn with tops - hanging chains carrying gold beads or small pieceworks. Keep every chain, its length and the beads and pieces on it; nothing may be shortened or merged.',
   },
   {
-    type: 'Sui Dhaga', defaultGender: "women's", aspectRatio: '3:4', synonyms: ['suidhaga', 'sui dhaga', 'sui dhaaga'],
+    type: 'Sui Dhaga', defaultGender: "women's", aspectRatio: '3:4', group: 'Earrings Category', synonyms: ['suidhaga', 'sui dhaga', 'sui dhaaga'],
     modelNotes: 'A sui-dhaga ("needle and thread") earring: a thin chain threaded through the lobe, with a small needle or stud at one end and a dangling end at the other. Keep the chain\'s full length and both ends.',
   },
-  { type: 'Necklace',    defaultGender: "women's", aspectRatio: '3:4', synonyms: ['neckless', 'nekless', 'neckles'] },
+  { type: 'Necklace',    defaultGender: "women's", aspectRatio: '3:4', group: 'Necklace Category', synonyms: ['neckless', 'nekless', 'neckles'] },
   // The "pendant ..." names are a haar sold with its pendant. Listed so they
   // outrank the bare "pendant" match, which would frame a long haar square.
   // "Set long" / "set antic" are haar sets (owner).
   {
-    type: 'Haar', defaultGender: "women's", aspectRatio: '3:4',
+    type: 'Haar', defaultGender: "women's", aspectRatio: '3:4', group: 'Necklace Category',
     synonyms: ['haram', 'rani haar', 'ranihar', 'long haar', 'har', 'harset', 'chaplahar', 'chapalahar', 'pendant rani har', 'meena ranihar', 'pendant harset', 'set long', 'set antic'],
   },
-  { type: 'Choker',      defaultGender: "women's", aspectRatio: '3:4', synonyms: ['kanthi', 'kantha', 'chokar', 'thushi'] },
+  { type: 'Choker',      defaultGender: "women's", aspectRatio: '3:4', group: 'Necklace Category', synonyms: ['kanthi', 'kantha', 'chokar', 'thushi'] },
   {
     // "Pote" is the Marathi name for the black-bead string of a mangalsutra, and
     // it is how the store's POS names these ("ATTACHED CHAIN POTE", "SHORT NANO
@@ -182,11 +193,11 @@ export const CATEGORIES: Category[] = [
     modelNotes: 'A mangalsutra: gold chain combined with strings or sections of small black glass beads (pote / kaala mani), usually with a gold pendant or two small cup-shaped vati. The black beads are its defining feature: they must stay black, at the same count and positions, and must never be rendered as gold beads. Black beads set inside small gold cages must keep both the cage and the black bead inside it. Any black enamel (meena) on the vati or pendant must stay.',
   },
   // Not "lucky": the store's "LUCKY STONE" is a loose gemstone, not a bracelet.
-  { type: 'Bracelet',    defaultGender: 'unisex',  aspectRatio: '3:4', genderVaries: true, synonyms: ['brasslet', 'braclet', 'bracelate', 'charm bracelet'] },
+  { type: 'Bracelet',    defaultGender: 'unisex',  aspectRatio: '3:4', genderVaries: true, group: 'Bangles Category', synonyms: ['brasslet', 'braclet', 'bracelate', 'charm bracelet'] },
   {
     // "Kansakali" is the store's name for an ear chain (confirmed by the owner).
     // Elongated: it runs the full height of the ear.
-    type: 'Ear Chain', defaultGender: "women's", aspectRatio: '3:4', synonyms: ['kansakali', 'kansakhali', 'kansakli', 'ear chain', 'ear chains'],
+    type: 'Ear Chain', defaultGender: "women's", aspectRatio: '3:4', group: 'Earrings Category', synonyms: ['kansakali', 'kansakhali', 'kansakli', 'ear chain', 'ear chains'],
     modelNotes: 'An earring worn vertically along the ear (an ear chain): a piece at the lobe joined by a chain or strands running up the ear to a clip, cuff or hook near the top. Keep its full vertical length, the number of chains and strands, and the upper attachment - none of it may be cropped, shortened or dropped.',
   },
   { type: 'Anklet',      defaultGender: "women's", aspectRatio: '3:4', synonyms: ['payal', 'payals', 'pajeb', 'anklets'] },
@@ -197,7 +208,7 @@ export const CATEGORIES: Category[] = [
   {
     // Ekdani, mohan mala, jondhali and akdani are malas of gold beads (owner);
     // "mal" is how the POS shortens mala ("LONG VERTICAL MAL").
-    type: 'Mala', defaultGender: 'unisex', aspectRatio: '3:4', genderVaries: true,
+    type: 'Mala', defaultGender: 'unisex', aspectRatio: '3:4', genderVaries: true, group: 'Necklace Category',
     synonyms: ['maala', 'mal', 'rudraksh mala', 'ashtapailu mala', 'ekdani', 'akdani', 'mohanmala', 'mohan mala', 'mohan mal', 'jondhali'],
     modelNotes: 'A mala: one or more strands of beads, often gold beads with intricate work on each and in several sizes. Keep the number of strands, the count, size and order of the beads, and the pattern on each bead.',
   },
@@ -277,6 +288,10 @@ export function defaultGenderFor(itemType: string): DefaultGender | null {
 
 export function genderVariesFor(itemType: string): boolean {
   return resolveCategory(itemType)?.genderVaries === true;
+}
+
+export function groupFor(itemType: string): string | null {
+  return resolveCategory(itemType)?.group ?? null;
 }
 
 /**

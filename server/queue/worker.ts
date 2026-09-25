@@ -59,6 +59,7 @@ import { cachedSegmentation, cachedInventory } from './groundingCache';
 import { reportBlockingIssue, clearBlockingIssue } from './systemStatus';
 import { getEnhancePrompt } from '../settings';
 import { logEvent, newRequestId } from '../logging';
+import { runDriveExportJob } from './driveExportWorker';
 import {
   claimNextJob,
   completeJob,
@@ -149,6 +150,15 @@ async function workerLoop(workerId: string): Promise<void> {
 }
 
 async function runJob(job: Job, workerId: string): Promise<void> {
+  // Checked before the Gemini gate below: a Drive upload needs no AI call at
+  // all, so a server with no GEMINI_API_KEY set (or one that's temporarily
+  // misconfigured) must not block Drive exports too - the two are unrelated
+  // failure domains.
+  if (job.type === 'drive_export') {
+    await runDriveExportJob(job, workerId);
+    return;
+  }
+
   if (!isGeminiConfigured()) {
     failJob(job.id, 'GEMINI_API_KEY is not configured on the server.', false);
     setProductStatus(job.productId, 'failed');

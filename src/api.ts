@@ -110,10 +110,17 @@ export const api = {
   exportMappings: () =>
     request<{ mappings: { id: string; label: string; description?: string; columnCount: number }[]; active: string }>('/export/mappings'),
   driveStatus: () => request<{ configured: boolean }>('/export/drive-status'),
+  // Queues the batch's uploads and returns immediately - does not wait for
+  // any of them to finish. Poll driveExportStatus() for progress.
   exportToDrive: (batchId: string, mapping?: string) =>
-    post<{ success: boolean; uploaded: number; failedCount: number; alreadyExported: number; folderLink: string; failures: { cpc: string; error: string }[] }>(
+    post<{ enqueued: number; alreadyExported: number; folderLink: string }>(
       `/export/batch/${batchId}/drive`, { mapping }
     ),
+  driveExportStatus: (batchId: string) =>
+    request<{
+      total: number; succeeded: number; queued: number; running: number; failed: number; inProgress: number;
+      folderLink: string; results: { cpc: string; photoLink: string }[]; failures: { cpc: string; error: string }[];
+    }>(`/export/batch/${batchId}/drive-status`),
   csvUrl: (batchId: string, mapping: string) => `/api/export/batch/${batchId}/csv?mapping=${encodeURIComponent(mapping)}`,
   zipUrl: (batchId: string, mapping: string) => `/api/export/batch/${batchId}/zip?mapping=${encodeURIComponent(mapping)}`,
 

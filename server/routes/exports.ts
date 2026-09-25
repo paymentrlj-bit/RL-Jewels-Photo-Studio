@@ -9,31 +9,15 @@ import JSZip from 'jszip';
 import { requireAuth, type AuthenticatedRequest } from '../auth/session';
 import { logEvent, actorFrom } from '../logging';
 import { isDriveConfigured, config } from '../config';
-import { debugDetail } from '../ai/client';
-import { getProduct, getBatch, listProducts, setProductStatus, type Product } from '../db/products';
-import { getLatestPhoto, readImageBuffer, imageExists, extensionForMime } from '../storage/images';
-import { findUserById } from '../auth/users';
-import { buildExportRow, type ExportRow } from '../export/fields';
+import { getProduct, getBatch, listProducts, type Product } from '../db/products';
+import { getLatestPhoto, readImageBuffer, imageExists } from '../storage/images';
+import { rowFor, type ExportRow } from '../export/fields';
 import { buildCsv, buildProductJsonLd, rowsToCsv } from '../export/csv';
 import { allMappings, getMapping } from '../export/mappings';
-import { exportProductToDrive, newFolderCache } from '../integrations/drive';
+import { enqueueJob, getLatestJobForProduct } from '../queue/jobs';
 
 export const exportRouter = express.Router();
 exportRouter.use(requireAuth);
-
-function rowFor(product: Product): ExportRow {
-  const creator = findUserById(product.createdBy);
-  const batch = product.batchId ? getBatch(product.batchId) : null;
-  const photo = getLatestPhoto(product.id, 'processed') || getLatestPhoto(product.id, 'original');
-  const cpc = product.cpc.trim() || 'RLJ-UNKNOWN';
-
-  return buildExportRow({
-    product,
-    staffName: creator?.displayName || creator?.username || 'Unknown',
-    batchName: batch?.name,
-    photoFilename: photo ? `${cpc}_photo.${extensionForMime(photo.mimeType)}` : '',
-  });
-}
 
 // Only approved and already-exported items leave the building. A product
 // still awaiting review has not been signed off by a human, and v1's
@@ -166,12 +150,17 @@ exportRouter.get('/export/drive-status', (_req, res) => {
   res.json({ configured: isDriveConfigured() });
 });
 
-// Uploads a whole batch to Drive, one product at a time.
+// Queues a whole batch for Drive upload and returns immediately - staff do
+// not sit on this page while N products upload one at a time. A worker
+// drains these jobs the same way it drains enhance/copy jobs (see
+// server/queue/driveExportWorker.ts); the browser polls the status route
+// below for progress instead of holding one long request open.
 //
-// Partial success is reported rather than hidden: with 50 products and one
-// network blip, "43 uploaded, 7 failed, here is which" is actionable, whereas
-// a single error for the whole batch is not.
-exportRouter.post('/export/batch/:batchId/drive', async (req: AuthenticatedRequest, res) => {
+// This used to run synchronously in this handler. That meant a batch of 50
+// held the connection open for however long 50 sequential uploads took -
+// often over a minute - with no way to see progress and a real risk of
+// losing the whole thing to a connection hiccup partway through.
+exportRouter.post('/export/batch/:batchId/drive', (req: AuthenticatedRequest, res) => {
   if (!isDriveConfigured()) {
     res.status(503).json({ error: 'Google Drive export is not configured on this server. See DRIVE_SETUP.md.' });
     return;
@@ -189,84 +178,83 @@ exportRouter.post('/export/batch/:batchId/drive', async (req: AuthenticatedReque
     return;
   }
 
-  // 'exported' means this exact product already has a photo + CSV sitting in
-  // Drive from a previous run - re-uploading it on every retry or re-click
-  // was the actual cause of "it keeps duplicating in Drive", not the folder
-  // naming. Skipped, not re-sent: the record stays exactly as it is (no
-  // change to status, history, or anything else in the app), it just never
-  // goes to Drive a second time.
-  const toUpload = products.filter((p) => p.status !== 'exported');
-  const alreadyExported = products.length - toUpload.length;
+  // Skip a product that's already uploaded ('exported') or already has a
+  // job in flight for it - re-clicking Export while the last run is still
+  // draining must not queue a second upload of the same photo alongside the
+  // first. A product whose last drive_export job FAILED is fair game again:
+  // that's the retry.
+  const toUpload = products.filter((p) => {
+    if (p.status === 'exported') return false;
+    const job = getLatestJobForProduct(p.id, 'drive_export');
+    return !job || (job.status !== 'queued' && job.status !== 'running');
+  });
+  const alreadyExported = products.filter((p) => p.status === 'exported').length;
 
-  const mapping = getMapping(String(req.body?.mapping || config.erpMapping));
-  const startedAt = Date.now();
-  const uploaded: { productId: string; cpc: string; photoLink: string }[] = [];
-  const failed: { productId: string; cpc: string; error: string }[] = [];
-  // Points at the shared root, not one product's leaf folder: since products
-  // now nest into category/gender/style subfolders, a batch spanning more
-  // than one of those has no single "the" folder any upload landed in - the
-  // root is the one link that is always where everything from this batch
-  // actually is.
-  const folderLink = `https://drive.google.com/drive/folders/${config.drive.rootFolderId}`;
-  // Shared across every product below: without it, each one re-searches
-  // Drive for its category/gender/style folder from scratch even when the
-  // previous product just resolved the identical path - the main reason a
-  // big batch felt slow.
-  const folderCache = newFolderCache();
-
+  const mappingId = String(req.body?.mapping || config.erpMapping);
   for (const product of toUpload) {
-    const row = rowFor(product);
-    const photo = getLatestPhoto(product.id, 'processed') || getLatestPhoto(product.id, 'original');
-
-    if (!photo || !imageExists(photo)) {
-      failed.push({ productId: product.id, cpc: row.cpc, error: 'No photo file on disk.' });
-      continue;
-    }
-
-    try {
-      const result = await exportProductToDrive({
-        cpc: row.cpc,
-        itemType: product.itemType,
-        gender: product.gender,
-        photoBase64: readImageBuffer(photo).toString('base64'),
-        photoMimeType: photo.mimeType,
-        metadataCsv: rowsToCsv(mapping, [row], { bom: false }),
-      }, folderCache);
-      uploaded.push({ productId: product.id, cpc: row.cpc, photoLink: result.photoLink });
-      setProductStatus(product.id, 'exported');
-    } catch (err) {
-      const errorDetail = debugDetail(err);
-      // Per-item, not just the batch total: the summary event below only ever
-      // carried counts, so a systemic failure (bad OAuth token, wrong root
-      // folder) that failed every item, every time, left nobody able to see
-      // WHY without re-triggering the upload and reading the HTTP response
-      // in the moment - which staff have no reason to inspect.
-      logEvent('export.drive_item_failed', {
-        batchId: batch.id,
-        productId: product.id,
-        cpc: row.cpc,
-        errorMessage: errorDetail,
-      }, actorFrom(req.user));
-      failed.push({ productId: product.id, cpc: row.cpc, error: errorDetail });
-    }
+    enqueueJob({ productId: product.id, type: 'drive_export', payload: { mapping: mappingId } });
   }
 
-  logEvent('export.drive', {
+  logEvent('export.drive_enqueued', {
     batchId: batch.id,
-    mapping: mapping.id,
-    uploaded: uploaded.length,
-    failed: failed.length,
+    mapping: mappingId,
+    enqueued: toUpload.length,
     alreadyExported,
-    latencyMs: Date.now() - startedAt,
   }, actorFrom(req.user));
 
   res.json({
-    success: failed.length === 0,
-    uploaded: uploaded.length,
-    failedCount: failed.length,
+    enqueued: toUpload.length,
     alreadyExported,
-    folderLink,
-    results: uploaded,
-    failures: failed,
+    folderLink: `https://drive.google.com/drive/folders/${config.drive.rootFolderId}`,
+  });
+});
+
+// Polled by the Export screen while a Drive upload is in progress. Derives
+// everything from job + product state already on disk rather than a
+// separate progress table - a product's status flips to 'exported' only on
+// a successful upload (see driveExportWorker.ts), so "how many are done" is
+// always just a count of that, no extra bookkeeping to keep in sync.
+exportRouter.get('/export/batch/:batchId/drive-status', (req, res) => {
+  const batch = getBatch(req.params.batchId);
+  if (!batch) {
+    res.status(404).json({ error: 'Batch not found.' });
+    return;
+  }
+
+  const products = exportableProducts(batch.id);
+  let succeeded = 0;
+  let queued = 0;
+  let running = 0;
+  let failed = 0;
+  const results: { cpc: string; photoLink: string }[] = [];
+  const failures: { cpc: string; error: string }[] = [];
+
+  for (const product of products) {
+    if (product.status === 'exported') {
+      succeeded++;
+      const job = getLatestJobForProduct(product.id, 'drive_export');
+      results.push({ cpc: product.cpc, photoLink: String(job?.result?.photoLink || '') });
+      continue;
+    }
+    const job = getLatestJobForProduct(product.id, 'drive_export');
+    if (!job) continue; // never part of a Drive export run
+    if (job.status === 'queued') queued++;
+    else if (job.status === 'running') running++;
+    else if (job.status === 'failed') {
+      failed++;
+      failures.push({ cpc: product.cpc, error: job.lastError });
+    }
+  }
+
+  res.json({
+    total: products.length,
+    succeeded,
+    queued,
+    running,
+    failed,
+    inProgress: queued + running,
+    folderLink: `https://drive.google.com/drive/folders/${config.drive.rootFolderId}`,
+    results,
+    failures,
   });
 });
