@@ -111,7 +111,7 @@ export const api = {
     request<{ mappings: { id: string; label: string; description?: string; columnCount: number }[]; active: string }>('/export/mappings'),
   driveStatus: () => request<{ configured: boolean }>('/export/drive-status'),
   exportToDrive: (batchId: string, mapping?: string) =>
-    post<{ success: boolean; uploaded: number; failedCount: number; folderLink: string; failures: { cpc: string; error: string }[] }>(
+    post<{ success: boolean; uploaded: number; failedCount: number; alreadyExported: number; folderLink: string; failures: { cpc: string; error: string }[] }>(
       `/export/batch/${batchId}/drive`, { mapping }
     ),
   csvUrl: (batchId: string, mapping: string) => `/api/export/batch/${batchId}/csv?mapping=${encodeURIComponent(mapping)}`,

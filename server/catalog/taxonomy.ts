@@ -31,6 +31,17 @@ export interface Category {
   /** Other real names for the same thing, matched case-insensitively. */
   synonyms: string[];
   /**
+   * True when real stock of this category genuinely spans more than one
+   * gender (Ring: gents' and ladies' are both common), so a Drive export
+   * folder for it is worth splitting by gender. False for categories that
+   * are single-gender by convention even when defaultGender isn't a strong
+   * signal of that on its own (e.g. Mangalsutra is always women's; nobody
+   * needs a "Women's" folder inside it that never has a sibling).
+   * See driveFolderSegments() in server/integrations/drive.ts, the only
+   * consumer - kept here rather than a second list so the two can't drift.
+   */
+  genderVaries?: boolean;
+  /**
    * What the image and vision models need to know about this category that a
    * general-purpose model would not - sent with every enhance, audit and
    * inventory call. Only where a real failure pattern justifies it: every
@@ -44,7 +55,7 @@ export const CATEGORIES: Category[] = [
   {
     // "Karda" is a finger ring styled like a kada (confirmed by the owner) - not
     // to be confused with ".KARNDA", a silver waist chain.
-    type: 'Ring', defaultGender: "women's", aspectRatio: '1:1', synonyms: ['anguthi', 'anguti', 'finger ring', 'band', 'karda'],
+    type: 'Ring', defaultGender: "women's", aspectRatio: '1:1', genderVaries: true, synonyms: ['anguthi', 'anguti', 'finger ring', 'band', 'karda'],
     modelNotes: "Men's rings (anguthi) are often cast with a raised motif or a patterned shank. The motif and the pattern along the sides of the shank must be kept exactly - these were the most common ring failures.",
   },
   {
@@ -84,7 +95,7 @@ export const CATEGORIES: Category[] = [
   // common spelling on its tags. A "chain padak" is a pendant made to go on a
   // chain - sold and photographed as a pendant (confirmed by the owner), so
   // square - "CHAIN PADAK CASTING" included (owner).
-  { type: 'Pendant',     defaultGender: 'unisex',  aspectRatio: '1:1', synonyms: ['locket', 'dollar', 'padak', 'pendent', 'chain padak'] },
+  { type: 'Pendant',     defaultGender: 'unisex',  aspectRatio: '1:1', genderVaries: true, synonyms: ['locket', 'dollar', 'padak', 'pendent', 'chain padak'] },
   {
     type: 'Pendant Set', defaultGender: "women's", aspectRatio: '1:1', synonyms: ['pendant set', 'pendent set'],
     modelNotes: 'A set: a pendant (sometimes on its chain) with a matching pair of earrings or tops. Every piece of the set in the photo must stay - the pendant and both earrings - each with its own details.',
@@ -101,9 +112,9 @@ export const CATEGORIES: Category[] = [
     modelNotes: 'A dorla: an ornate round or heart-shaped gold locket, similar to a vati but built by soldering many small embossed pieces together. Keep every small piece and the joins between them - never smooth it into a single cast surface.',
   },
   // Gote (plain gold bangle) and patli (a pair of bangles) per the owner.
-  { type: 'Bangle',      defaultGender: "women's", aspectRatio: '1:1', synonyms: ['bangles', 'bangels', 'bangal', 'bangals', 'bangdi', 'patli', 'kangan', 'gote'] },
+  { type: 'Bangle',      defaultGender: "women's", aspectRatio: '1:1', genderVaries: true, synonyms: ['bangles', 'bangels', 'bangal', 'bangals', 'bangdi', 'patli', 'kangan', 'gote'] },
   // Toda: a thick, structural kada (owner).
-  { type: 'Kada',        defaultGender: 'unisex',  aspectRatio: '1:1', synonyms: ['kara', 'kadaa', 'toda'] },
+  { type: 'Kada',        defaultGender: 'unisex',  aspectRatio: '1:1', genderVaries: true, synonyms: ['kara', 'kadaa', 'toda'] },
   {
     type: 'Bajuband', defaultGender: "women's", aspectRatio: '1:1', synonyms: ['bajuband', 'baju band', 'armlet'],
     modelNotes: 'An armlet worn snugly around the upper arm. Keep its full band, the central motif and any hanging elements.',
@@ -111,12 +122,12 @@ export const CATEGORIES: Category[] = [
   // Taar and firki are nose pins without and with a screw back (owner).
   { type: 'Nose Pin',    defaultGender: "women's", aspectRatio: '1:1', synonyms: ['nath', 'natth', 'nose ring', 'nosepin', 'chunni', 'taar', 'firki'] },
   {
-    type: 'Aakda', defaultGender: 'unisex', aspectRatio: '1:1', synonyms: ['aakda', 'akda'],
+    type: 'Aakda', defaultGender: 'unisex', aspectRatio: '1:1', genderVaries: true, synonyms: ['aakda', 'akda'],
     modelNotes: 'An aakda: a heavy traditional clasp or hook used to fasten Indian ornaments. Keep the hook, its loop and any decoration exactly.',
   },
   { type: 'Bindi',       defaultGender: "women's", aspectRatio: '1:1', synonyms: ['bindi'] },
-  { type: 'Rakhi',       defaultGender: 'unisex',  aspectRatio: '1:1', synonyms: ['rakhi'] },
-  { type: 'Coin',        defaultGender: 'unisex',  aspectRatio: '1:1', synonyms: ['bar', 'biscuit', 'gold coin', 'sikka'] },
+  { type: 'Rakhi',       defaultGender: 'unisex',  aspectRatio: '1:1', genderVaries: true, synonyms: ['rakhi'] },
+  { type: 'Coin',        defaultGender: 'unisex',  aspectRatio: '1:1', genderVaries: true, synonyms: ['bar', 'biscuit', 'gold coin', 'sikka'] },
   { type: 'Temple Set',  defaultGender: "women's", aspectRatio: '1:1', synonyms: ['temple jewellery', 'temple jewelry'] },
   { type: 'Bridal Set',  defaultGender: "women's", aspectRatio: '1:1', synonyms: ['wedding set', 'dulhan set', 'full set'] },
 
@@ -125,7 +136,7 @@ export const CATEGORIES: Category[] = [
     // Tendulkar, Nawabi Holo, Indo-Italian, Coimbtur, Dokiya, Gofe, Rassi, Kaju
     // Katli and Holo are all chain designs (confirmed by the owner) - they
     // appear on tags with no other word that would say "chain".
-    type: 'Chain', defaultGender: 'unisex', aspectRatio: '3:4',
+    type: 'Chain', defaultGender: 'unisex', aspectRatio: '3:4', genderVaries: true,
     synonyms: [
       'chein', 'zanzeer', 'tendulkar', 'nawabi holo', 'indo italian', 'holo',
       'rassi', 'rasshi', 'coimbtur', 'coimbatore', 'dokiya', 'gofe', 'gof', 'kaju katli', 'lotus',
@@ -171,7 +182,7 @@ export const CATEGORIES: Category[] = [
     modelNotes: 'A mangalsutra: gold chain combined with strings or sections of small black glass beads (pote / kaala mani), usually with a gold pendant or two small cup-shaped vati. The black beads are its defining feature: they must stay black, at the same count and positions, and must never be rendered as gold beads. Black beads set inside small gold cages must keep both the cage and the black bead inside it. Any black enamel (meena) on the vati or pendant must stay.',
   },
   // Not "lucky": the store's "LUCKY STONE" is a loose gemstone, not a bracelet.
-  { type: 'Bracelet',    defaultGender: 'unisex',  aspectRatio: '3:4', synonyms: ['brasslet', 'braclet', 'bracelate', 'charm bracelet'] },
+  { type: 'Bracelet',    defaultGender: 'unisex',  aspectRatio: '3:4', genderVaries: true, synonyms: ['brasslet', 'braclet', 'bracelate', 'charm bracelet'] },
   {
     // "Kansakali" is the store's name for an ear chain (confirmed by the owner).
     // Elongated: it runs the full height of the ear.
@@ -186,7 +197,7 @@ export const CATEGORIES: Category[] = [
   {
     // Ekdani, mohan mala, jondhali and akdani are malas of gold beads (owner);
     // "mal" is how the POS shortens mala ("LONG VERTICAL MAL").
-    type: 'Mala', defaultGender: 'unisex', aspectRatio: '3:4',
+    type: 'Mala', defaultGender: 'unisex', aspectRatio: '3:4', genderVaries: true,
     synonyms: ['maala', 'mal', 'rudraksh mala', 'ashtapailu mala', 'ekdani', 'akdani', 'mohanmala', 'mohan mala', 'mohan mal', 'jondhali'],
     modelNotes: 'A mala: one or more strands of beads, often gold beads with intricate work on each and in several sizes. Keep the number of strands, the count, size and order of the beads, and the pattern on each bead.',
   },
@@ -262,6 +273,10 @@ export function isElongated(itemType: string): boolean {
 /** A form default only - staff can always override it. */
 export function defaultGenderFor(itemType: string): DefaultGender | null {
   return resolveCategory(itemType)?.defaultGender ?? null;
+}
+
+export function genderVariesFor(itemType: string): boolean {
+  return resolveCategory(itemType)?.genderVaries === true;
 }
 
 /**

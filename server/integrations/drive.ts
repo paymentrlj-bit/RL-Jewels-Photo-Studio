@@ -1,5 +1,6 @@
 import { OAuth2Client } from 'google-auth-library';
 import { config, isDriveConfigured as configuredInEnv } from '../config';
+import { resolveCategory, genderVariesFor } from '../catalog/taxonomy';
 
 // Uploads approved product photos + metadata into the store's own Google
 // Drive, authenticated as a real Google account via OAuth (not a service
@@ -45,18 +46,32 @@ export async function getAccessToken(): Promise<string> {
   return token;
 }
 
-// Finds a folder by exact name under a given parent, creating it if it
-// doesn't exist yet. Used to build a Group/Item-Type folder structure inside
-// the shared root folder on first use of each category.
+function normalizeFolderName(name: string): string {
+  return name.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+// Finds a folder under a given parent, creating it if it doesn't exist yet.
+// Used to build the Category/Gender/Style folder structure inside the
+// shared root folder on first use of each.
+//
+// Matches case- and whitespace-insensitively, comparing every existing
+// child rather than asking Drive's API to filter by exact name=. That
+// exact-match query is why the same style typed as "Chandrakanta" once and
+// "CHANDRAKANTA" (or with a trailing space) another time silently created
+// TWO folders instead of reusing one - Drive's name= filter is case
+// sensitive, so the second upload's search for its own exact string never
+// found the first upload's folder. Comparing normalized names here means
+// only a genuinely different name creates a new folder.
 async function findOrCreateFolder(accessToken: string, name: string, parentId: string): Promise<string> {
-  const escapedName = name.replace(/'/g, "\\'");
-  const query = `name='${escapedName}' and '${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
-  const searchRes = await fetch(`${DRIVE_FILES_URL}?q=${encodeURIComponent(query)}&fields=files(id,name)`, {
+  const target = normalizeFolderName(name);
+  const query = `'${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
+  const searchRes = await fetch(`${DRIVE_FILES_URL}?q=${encodeURIComponent(query)}&fields=files(id,name)&pageSize=1000`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   const searchData: any = await searchRes.json();
-  if (searchData.files && searchData.files.length > 0) {
-    return searchData.files[0].id;
+  const existing = (searchData.files || []).find((f: any) => normalizeFolderName(f.name) === target);
+  if (existing) {
+    return existing.id;
   }
 
   const createRes = await fetch(DRIVE_FILES_URL, {
@@ -73,6 +88,67 @@ async function findOrCreateFolder(accessToken: string, name: string, parentId: s
     throw new Error(createData.error?.message || 'Failed to create Drive folder.');
   }
   return createData.id;
+}
+
+// Walks/creates a chain of nested folders, root first, returning the
+// innermost folder's id. One find-or-create call per level - cheap once a
+// level exists (the search hits before any create is attempted), and no
+// worse than the old flat structure's single call on a repeat upload.
+async function findOrCreateFolderPath(accessToken: string, segments: string[], rootId: string): Promise<string> {
+  let parentId = rootId;
+  for (const segment of segments) {
+    parentId = await findOrCreateFolder(accessToken, segment, parentId);
+  }
+  return parentId;
+}
+
+const GENDER_LABELS: Record<string, string> = {
+  "women's": "Women's",
+  "men's": "Men's",
+  "kids'": "Kids'",
+  unisex: 'Unisex',
+};
+
+// Drive folder names have no meaningful escaping needs beyond this - Drive
+// itself accepts almost any character - but a stray slash would visually
+// read as another path level, doubled-up spacing looks sloppy next to a
+// folder typed cleanly the first time, and a very long style name (staff
+// sometimes paste the full POS description) makes an unwieldy folder.
+function cleanSegment(value: string, fallback: string): string {
+  const cleaned = value.replace(/[/\\]/g, '-').trim().replace(/\s+/g, ' ').slice(0, 80);
+  return cleaned || fallback;
+}
+
+/**
+ * Category -> (Gender, only for categories that genuinely have both) ->
+ * Style -> [product's files land here]. Replaces the old flat
+ * "one folder per category" layout: at 3,000+ SKUs a single "Mangalsutra"
+ * or "Chain" folder had become an unbrowsable wall of files, and everything
+ * the split needs is already known at export time - nothing new to ask
+ * staff for.
+ *
+ * Style is the store's own raw style name (itemType as scanned/typed, e.g.
+ * "Vati Mangalsutra", "Gents Casting Anguthi") - already the specific,
+ * trade-language name staff use, no separate vocabulary needed. Falls back
+ * to "General" when that name IS the category (staff typed just "Ring")
+ * rather than nest a folder under itself for nothing.
+ */
+export function driveFolderSegments(itemType: string, gender: string): string[] {
+  const category = resolveCategory(itemType);
+  // Unmatched item types get their own top-level bucket, not a folder named
+  // after their raw text reused as its own style folder too - that would
+  // nest e.g. "Something New/Something New" for nothing.
+  const segments = [category ? category.type : 'Uncategorized'];
+
+  if (category && genderVariesFor(itemType)) {
+    segments.push(GENDER_LABELS[gender] || 'Unspecified');
+  }
+
+  const raw = (itemType || '').trim();
+  const isBareCategory = category !== null && raw.toLowerCase() === category.type.toLowerCase();
+  segments.push(isBareCategory || !raw ? 'General' : cleanSegment(raw, 'General'));
+
+  return segments;
 }
 
 async function uploadFile(
@@ -111,6 +187,7 @@ async function uploadFile(
 export interface DriveExportInput {
   cpc: string;
   itemType: string;
+  gender: string;
   photoBase64: string; // data URL
   photoMimeType: string;
   metadataCsv: string;
@@ -121,8 +198,7 @@ export async function exportProductToDrive(input: DriveExportInput): Promise<{ f
   if (!rootFolderId) throw new Error('GOOGLE_DRIVE_ROOT_FOLDER_ID is not configured.');
 
   const accessToken = await getAccessToken();
-  const categoryFolderName = (input.itemType || 'Uncategorized').trim() || 'Uncategorized';
-  const categoryFolderId = await findOrCreateFolder(accessToken, categoryFolderName, rootFolderId);
+  const categoryFolderId = await findOrCreateFolderPath(accessToken, driveFolderSegments(input.itemType, input.gender), rootFolderId);
 
   const match = input.photoBase64.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,(.+)$/);
   const mimeType = match ? match[1] : input.photoMimeType || 'image/jpeg';

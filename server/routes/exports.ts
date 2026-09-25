@@ -189,13 +189,27 @@ exportRouter.post('/export/batch/:batchId/drive', async (req: AuthenticatedReque
     return;
   }
 
+  // 'exported' means this exact product already has a photo + CSV sitting in
+  // Drive from a previous run - re-uploading it on every retry or re-click
+  // was the actual cause of "it keeps duplicating in Drive", not the folder
+  // naming. Skipped, not re-sent: the record stays exactly as it is (no
+  // change to status, history, or anything else in the app), it just never
+  // goes to Drive a second time.
+  const toUpload = products.filter((p) => p.status !== 'exported');
+  const alreadyExported = products.length - toUpload.length;
+
   const mapping = getMapping(String(req.body?.mapping || config.erpMapping));
   const startedAt = Date.now();
   const uploaded: { productId: string; cpc: string; photoLink: string }[] = [];
   const failed: { productId: string; cpc: string; error: string }[] = [];
-  let folderLink = '';
+  // Points at the shared root, not one product's leaf folder: since products
+  // now nest into category/gender/style subfolders, a batch spanning more
+  // than one of those has no single "the" folder any upload landed in - the
+  // root is the one link that is always where everything from this batch
+  // actually is.
+  const folderLink = `https://drive.google.com/drive/folders/${config.drive.rootFolderId}`;
 
-  for (const product of products) {
+  for (const product of toUpload) {
     const row = rowFor(product);
     const photo = getLatestPhoto(product.id, 'processed') || getLatestPhoto(product.id, 'original');
 
@@ -208,11 +222,11 @@ exportRouter.post('/export/batch/:batchId/drive', async (req: AuthenticatedReque
       const result = await exportProductToDrive({
         cpc: row.cpc,
         itemType: product.itemType,
+        gender: product.gender,
         photoBase64: readImageBuffer(photo).toString('base64'),
         photoMimeType: photo.mimeType,
         metadataCsv: rowsToCsv(mapping, [row], { bom: false }),
       });
-      folderLink = result.folderLink;
       uploaded.push({ productId: product.id, cpc: row.cpc, photoLink: result.photoLink });
       setProductStatus(product.id, 'exported');
     } catch (err) {
@@ -237,6 +251,7 @@ exportRouter.post('/export/batch/:batchId/drive', async (req: AuthenticatedReque
     mapping: mapping.id,
     uploaded: uploaded.length,
     failed: failed.length,
+    alreadyExported,
     latencyMs: Date.now() - startedAt,
   }, actorFrom(req.user));
 
@@ -244,6 +259,7 @@ exportRouter.post('/export/batch/:batchId/drive', async (req: AuthenticatedReque
     success: failed.length === 0,
     uploaded: uploaded.length,
     failedCount: failed.length,
+    alreadyExported,
     folderLink,
     results: uploaded,
     failures: failed,
