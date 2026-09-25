@@ -14,7 +14,9 @@ You only need to do the authorization step once — it produces a long-lived **r
 
 2. **Enable the Google Drive API** for that project: in the left sidebar, go to *APIs & Services → Library*, search for "Google Drive API", and click **Enable**.
 
-3. **Configure the OAuth consent screen**: *APIs & Services → OAuth consent screen*. Choose **External**, fill in the required app name/support email fields (anything reasonable), and save. You do not need to submit it for Google verification — it's fine to stay in "Testing" mode as long as you add your own Google account under **Test users** on that same screen.
+3. **Configure the OAuth consent screen**: *APIs & Services → OAuth consent screen*. Choose **External**, fill in the required app name/support email fields (anything reasonable), and save, then add your own Google account under **Test users**.
+
+   **Then click "Publish App"** to move it out of "Testing" status, right away, before generating the refresh token in step 5. This does **not** require Google's review or verification for this use case — you'll just see an "unverified app" warning when authorizing in step 5, which is expected and fine to click through. Skipping this step is the single most common way this integration breaks: a refresh token minted while the app is still in "Testing" status is **silently killed by Google after exactly 7 days**, with no warning — uploads that worked all week suddenly fail with `invalid_grant` and no obvious cause. Publishing first avoids that entirely.
 
 4. **Create an OAuth Client ID**: *APIs & Services → Credentials → Create Credentials → OAuth client ID*. Application type: **Web application** (not "Desktop app" — that type has fixed redirect URIs you can't edit, which breaks the next step). Give it any name, e.g. "RL Jewels Drive Uploader". Under **Authorized redirect URIs**, click **Add URI** and enter exactly `https://developers.google.com/oauthplayground`. Create it, then copy the **Client ID** and **Client Secret** shown — you'll need both.
 
@@ -42,6 +44,10 @@ Once all four are set and the server restarts, the "Upload to Google Drive" opti
 For each product you upload, the app creates (or reuses) a subfolder named after the item type — e.g. "Ring", "Chain", "Mangalsutra" — inside your root folder, and uploads two files into it:
 - `<CPC>_photo.jpg` — the final, studio-enhanced photo
 - `<CPC>_data.csv` — the same data as the ERP CSV export (CPC, name, description, purity, gender, size, weights, staff, timestamps)
+
+## Troubleshooting
+
+**Uploads fail with `invalid_grant` for every item, all at once, after working fine before.** The refresh token is dead — either it was minted while the OAuth consent screen was still in "Testing" status (Google kills those after exactly 7 days, see step 3 above), the authorizing Google account's password changed, or access was revoked at [myaccount.google.com/permissions](https://myaccount.google.com/permissions). Fix: confirm the app is Published (step 3), then redo step 5 to mint a fresh refresh token and update `GOOGLE_DRIVE_REFRESH_TOKEN`. A stuck-open-forever refresh token is the whole point of this setup, so this should be a one-time fix once the app is actually published.
 
 ## Security notes
 
