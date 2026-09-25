@@ -33,6 +33,17 @@ describe('driveFolderSegments', () => {
     expect(driveFolderSegments('Nawabi Holo Chain', "unisex")[0]).toBe('Chain Category');
   });
 
+  it('the small odds-and-ends the store\'s own POS "SET" department also groups together share Set Category', () => {
+    // Owner's call after seeing their real POS department tree: fold these
+    // in too, rather than each sitting alone as its own single-item
+    // top-level folder.
+    expect(driveFolderSegments('Aakda', 'unisex')[0]).toBe('Set Category');
+    expect(driveFolderSegments('Bindi', "women's")[0]).toBe('Set Category');
+    expect(driveFolderSegments('Rakhi', 'unisex')[0]).toBe('Set Category');
+    expect(driveFolderSegments('Payal', "women's")[0]).toBe('Set Category');
+    expect(driveFolderSegments('Kandora', "women's")[0]).toBe('Set Category');
+  });
+
   it('every spelling/synonym of a category resolves to the same canonical category folder name', () => {
     // The real bug this guards: "Chandrakanta" and "Chand Bali" are the same
     // trade category under different names, and used to each get their own

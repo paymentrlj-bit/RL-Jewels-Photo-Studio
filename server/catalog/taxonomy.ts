@@ -138,11 +138,14 @@ export const CATEGORIES: Category[] = [
   // Taar and firki are nose pins without and with a screw back (owner).
   { type: 'Nose Pin',    defaultGender: "women's", aspectRatio: '1:1', synonyms: ['nath', 'natth', 'nose ring', 'nosepin', 'chunni', 'taar', 'firki'] },
   {
-    type: 'Aakda', defaultGender: 'unisex', aspectRatio: '1:1', genderVaries: true, synonyms: ['aakda', 'akda'],
+    // Owner's call: folded into Set Category with the rest of the small
+    // odds-and-ends items their own POS "SET" department groups together,
+    // rather than each getting its own single-item top-level folder.
+    type: 'Aakda', defaultGender: 'unisex', aspectRatio: '1:1', genderVaries: true, group: 'Set Category', synonyms: ['aakda', 'akda'],
     modelNotes: 'An aakda: a heavy traditional clasp or hook used to fasten Indian ornaments. Keep the hook, its loop and any decoration exactly.',
   },
-  { type: 'Bindi',       defaultGender: "women's", aspectRatio: '1:1', synonyms: ['bindi'] },
-  { type: 'Rakhi',       defaultGender: 'unisex',  aspectRatio: '1:1', genderVaries: true, synonyms: ['rakhi'] },
+  { type: 'Bindi',       defaultGender: "women's", aspectRatio: '1:1', group: 'Set Category', synonyms: ['bindi'] },
+  { type: 'Rakhi',       defaultGender: 'unisex',  aspectRatio: '1:1', genderVaries: true, group: 'Set Category', synonyms: ['rakhi'] },
   { type: 'Coin',        defaultGender: 'unisex',  aspectRatio: '1:1', genderVaries: true, synonyms: ['bar', 'biscuit', 'gold coin', 'sikka'] },
   { type: 'Temple Set',  defaultGender: "women's", aspectRatio: '1:1', synonyms: ['temple jewellery', 'temple jewelry'] },
   { type: 'Bridal Set',  defaultGender: "women's", aspectRatio: '1:1', synonyms: ['wedding set', 'dulhan set', 'full set'] },
@@ -214,9 +217,9 @@ export const CATEGORIES: Category[] = [
     type: 'Kansakhali', defaultGender: "women's", aspectRatio: '3:4', group: 'Tops Category', synonyms: ['kansakali', 'kansakhali', 'kansakli', 'ear chain', 'ear chains'],
     modelNotes: 'An earring worn vertically along the ear (an ear chain): a piece at the lobe joined by a chain or strands running up the ear to a clip, cuff or hook near the top. Keep its full vertical length, the number of chains and strands, and the upper attachment - none of it may be cropped, shortened or dropped.',
   },
-  { type: 'Anklet',      defaultGender: "women's", aspectRatio: '3:4', synonyms: ['payal', 'payals', 'pajeb', 'anklets'] },
+  { type: 'Anklet',      defaultGender: "women's", aspectRatio: '3:4', group: 'Set Category', synonyms: ['payal', 'payals', 'pajeb', 'anklets'] },
   // Kandora / karnda: a waist chain (owner).
-  { type: 'Waist Chain', defaultGender: "women's", aspectRatio: '3:4', synonyms: ['kamarbandh', 'kamar band', 'oddiyanam', 'kandora', 'karnda', 'kardora'] },
+  { type: 'Waist Chain', defaultGender: "women's", aspectRatio: '3:4', group: 'Set Category', synonyms: ['kamarbandh', 'kamar band', 'oddiyanam', 'kandora', 'karnda', 'kardora'] },
   // Janwa: the sacred thread (janeu), made in metal.
   { type: 'Janwa',       defaultGender: "men's",   aspectRatio: '3:4', synonyms: ['janwa', 'jaanva', 'janave', 'janeu'] },
   {
