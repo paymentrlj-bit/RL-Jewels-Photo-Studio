@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Camera, ClipboardCheck, PackageOpen, Settings, LogOut, WifiOff, AlertTriangle, RefreshCw } from 'lucide-react';
 import { api, ApiError, setUnauthorizedHandler } from './api';
-import type { Batch, HealthFeatures, Product, QueueDepth, SessionUser } from './types';
+import type { Batch, BlockingIssue, HealthFeatures, Product, QueueDepth, SessionUser } from './types';
 import { ShootView } from './views/ShootView';
 import { ReviewView } from './views/ReviewView';
 import { ExportView } from './views/ExportView';
@@ -16,6 +16,25 @@ type Tab = 'shoot' | 'review' | 'export' | 'admin';
 // enough that a finished photo appears while the staff member is still
 // looking at the screen, and light enough that a day of polling is nothing.
 const POLL_MS = 3000;
+
+// Turns a bare https://... inside a plain-text message into a tappable link,
+// for the rare error messages (like the AI billing one) that carry the exact
+// page to fix them on.
+function linkify(text: string): React.ReactNode {
+  const parts = text.split(/(https?:\/\/\S+)/g);
+  return parts.map((part, i) => {
+    if (!/^https?:\/\//.test(part)) return part;
+    // Strip trailing punctuation (a comma, a period ending the sentence) that
+    // the greedy \S+ swept up but isn't part of the actual URL.
+    const trail = part.match(/[),.]+$/)?.[0] ?? '';
+    const url = trail ? part.slice(0, -trail.length) : part;
+    return (
+      <span key={i}>
+        <a href={url} target="_blank" rel="noreferrer" className="underline">{url}</a>{trail}
+      </span>
+    );
+  });
+}
 
 // How often an open tab checks whether the server has a newer build. Staff
 // keep the app open all day, so without this a deploy never reaches them.
@@ -33,6 +52,10 @@ export default function App() {
   const [products, setProducts] = useState<Product[]>([]);
   const [queue, setQueue] = useState<QueueDepth>({ queued: 0, running: 0, failed: 0 });
   const [error, setError] = useState<string | null>(null);
+  // A failure that means EVERY photo is stuck, not just one - e.g. the AI
+  // account hit its spend limit. Shown to every signed-in person, not just
+  // an admin, so nobody keeps shooting into a queue that has stopped moving.
+  const [blockingIssue, setBlockingIssue] = useState<BlockingIssue | null>(null);
 
   // A 401 on any request drops straight back to sign-in, rather than leaving
   // an empty screen that silently fails every action.
@@ -97,6 +120,7 @@ export default function App() {
       ]);
       setProducts(productData.products);
       setQueue(queueData.depth);
+      setBlockingIssue(queueData.blockingIssue);
       setError(null);
     } catch (err) {
       // A transient poll failure should not throw an error banner up over a
@@ -206,6 +230,24 @@ export default function App() {
             >
               Update now
             </button>
+          </div>
+        )}
+
+        {/* Shown to every signed-in person, not just an admin: staff should
+            know the queue has actually stopped moving and it isn't their
+            fault, rather than keep shooting into it wondering why nothing
+            comes back. */}
+        {blockingIssue && (
+          <div className="mb-4 flex items-start gap-2 rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-900">
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-medium">Photos have stopped processing.</p>
+              <p className="mt-0.5">{linkify(blockingIssue.message)}</p>
+              <p className="mt-1 text-xs text-red-700">
+                Stuck since {new Date(blockingIssue.since).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })} today.
+                This will clear on its own the moment a photo goes through again.
+              </p>
+            </div>
           </div>
         )}
 

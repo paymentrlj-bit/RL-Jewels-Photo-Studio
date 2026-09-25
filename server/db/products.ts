@@ -392,6 +392,36 @@ export function findPreviousShoots(catalogProductId: string, excludeProductId?: 
   return rows.map(toProduct);
 }
 
+// Statuses that mean "someone already has this exact tag in progress right
+// now" - as opposed to approved/exported, which is a finished catalogue
+// entry that a legitimate restock or refresh can reasonably shoot again.
+const ACTIVE_STATUSES = "'draft','queued','processing','awaiting_review','needs_angle','needs_reshoot','failed'";
+
+/**
+ * The real duplicate check: the exact same CPC (the code printed on the
+ * tag), not just the same ProductId - a ProductId covers every lot of a
+ * style (1516 alone is 307 different physical pieces), so matching on that
+ * alone would wrongly flag shooting a different piece of the same design.
+ *
+ * Scoped to statuses that mean the earlier shoot is still unfinished
+ * business: scanning the same tag while it is already queued, awaiting
+ * review, or waiting on a reshoot is very likely the same piece getting
+ * photographed twice by mistake, not two different sessions of real work.
+ */
+export function findActiveDuplicate(cpc: string, excludeProductId?: string): Product | null {
+  const normalized = cpc.trim().toUpperCase();
+  if (!normalized) return null;
+  const row = getDb()
+    .prepare(
+      `SELECT * FROM products
+       WHERE UPPER(TRIM(cpc)) = ? AND id != COALESCE(?, '')
+         AND status IN (${ACTIVE_STATUSES})
+       ORDER BY created_at DESC LIMIT 1`
+    )
+    .get(normalized, excludeProductId ?? null) as ProductRow | undefined;
+  return row ? toProduct(row) : null;
+}
+
 export function deleteProduct(id: string): void {
   getDb().prepare('DELETE FROM products WHERE id = ?').run(id);
 }

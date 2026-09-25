@@ -55,6 +55,7 @@ import { buildFixBlock, AUDIT_CHECK_TO_FIX, isFixCode } from '../catalog/fixes';
 import { designMemoryFor, buildDesignMemoryBlock, recordFixRequest } from '../db/fixRequests';
 import { buildFaithfulImage, FaithfulUnavailableError } from '../imaging/faithful';
 import { cachedSegmentation, cachedInventory } from './groundingCache';
+import { reportBlockingIssue, clearBlockingIssue } from './systemStatus';
 import { getEnhancePrompt } from '../settings';
 import { logEvent, newRequestId } from '../logging';
 import {
@@ -442,6 +443,9 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
       const reason = why.trigger === 'staff_request'
         ? 'Your own photo, cut out onto white. Nothing in it was redrawn.'
         : `The AI version was not true to the piece (${why.reason.replace(/\.$/, '')}), so this is your own photo cut out onto white instead. Nothing in it was redrawn - check it and approve, or reshoot.`;
+      // A successful Gemini call at all (the outline call this needed) is
+      // proof the account isn't billing-capped, whichever path got here.
+      clearBlockingIssue();
       // No checklist: the audit's verdict was about the AI version, not this.
       finish('awaiting_review', { reason, checklist: null, modelUsed: 'faithful', attemptCount: why.attemptCount, renderMode: 'faithful' });
       setProductStatus(product.id, 'awaiting_review');
@@ -570,7 +574,13 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
     referenceImageCount = enhanceRefs.length;
   } catch (err) {
     if (isBillingError(err)) {
-      finish('failed', { reason: 'The Gemini account has hit its billing/spend cap. An admin needs to raise it before photos can be processed.' });
+      // Precise on purpose: this is Gemini's own prepaid-credit balance for
+      // this one API key/project, not a spend cap anyone here set, and not
+      // the same thing as a Google Cloud billing account's general credit
+      // balance - conflating the two costs real time chasing the wrong page.
+      const reason = 'The Gemini API key has run out of its prepaid credit. An admin needs to go to https://ai.studio/projects, open this project and add a payment method there - not the store\'s general Google Cloud billing.';
+      reportBlockingIssue('billing_cap', reason);
+      finish('failed', { reason });
       completeJob(job.id, 'failed', { reason: 'billing_cap' });
       failJob(job.id, debugDetail(err), false);
       setProductStatus(product.id, 'failed');
@@ -711,7 +721,9 @@ Correct this specific issue while still following every rule above.`;
       // rephotographing perfectly good pieces while an admin fixes the model.
       if (isModelNotFoundError(err)) {
         logEvent('pipeline.escalation_model_missing', { requestId, model: MODEL_ENHANCE_ESCALATED, error: debugDetail(err) });
-        finish('failed', { reason: `The escalation model "${MODEL_ENHANCE_ESCALATED}" is unavailable. An admin needs to update it - this is not a problem with the photo.` });
+        const reason = `The escalation model "${MODEL_ENHANCE_ESCALATED}" is unavailable. An admin needs to update it - this is not a problem with the photo.`;
+        reportBlockingIssue('escalation_model_missing', reason);
+        finish('failed', { reason });
         setProductStatus(product.id, 'failed');
         completeJob(job.id, 'failed', { reason: 'escalation_model_missing' });
         return;
@@ -731,6 +743,7 @@ Correct this specific issue while still following every rule above.`;
     source: 'upload',
   });
 
+  clearBlockingIssue();
   finish('awaiting_review', { reason: audit.reason, checklist: audit.checklist, modelUsed, attemptCount });
   setProductStatus(product.id, 'awaiting_review');
   completeJob(job.id, 'succeeded', {

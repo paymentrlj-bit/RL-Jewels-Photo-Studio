@@ -2,7 +2,7 @@
 // handling and the 401 case are handled once rather than in every component.
 
 import type {
-  Product, Batch, SessionUser, CpcLookupResult, QueueDepth, HealthFeatures,
+  Product, Batch, SessionUser, CpcLookupResult, QueueDepth, HealthFeatures, BlockingIssue,
 } from './types';
 
 export class ApiError extends Error {
@@ -81,6 +81,8 @@ export const api = {
   updateProduct: (id: string, fields: Record<string, unknown>) =>
     request<{ product: Product }>(`/products/${id}`, { method: 'PATCH', body: JSON.stringify(fields) }),
   deleteProduct: (id: string) => request<{ success: boolean }>(`/products/${id}`, { method: 'DELETE' }),
+  bulkDeleteProducts: (ids: string[]) =>
+    post<{ success: boolean; deleted: number; skipped: string[] }>('/products/bulk-delete', { ids }),
 
   attachPhoto: (id: string, imageBase64: string, source: string) =>
     post<{ product: Product; photoId: string; jobId: string }>(`/products/${id}/photo`, { imageBase64, source }),
@@ -97,7 +99,7 @@ export const api = {
   photoUrl: (photoId: string) => `/api/photos/${photoId}`,
 
   // --- queue ---
-  queueStatus: () => request<{ depth: QueueDepth; productCounts: Record<string, number> }>('/queue/status'),
+  queueStatus: () => request<{ depth: QueueDepth; productCounts: Record<string, number>; blockingIssue: BlockingIssue | null }>('/queue/status'),
 
   // --- catalog ---
   cpcLookup: (cpc: string) => request<CpcLookupResult>(`/cpc-lookup?cpc=${encodeURIComponent(cpc)}`),

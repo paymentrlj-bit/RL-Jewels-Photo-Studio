@@ -17,7 +17,7 @@ import {
   getCpcMasterStats,
   type CpcMasterRecord,
 } from '../integrations/cpcMaster';
-import { findPreviousShoots } from '../db/products';
+import { findPreviousShoots, findActiveDuplicate } from '../db/products';
 
 export const catalogRouter = express.Router();
 catalogRouter.use(requireAuth);
@@ -47,6 +47,12 @@ catalogRouter.get('/cpc-lookup', (req: AuthenticatedRequest, res) => {
     // has already photographed. Over a 3,247-product run this is the check
     // that stops duplicated work, and v1 had no way to perform it.
     previousShoots: result.productId ? findPreviousShoots(result.productId) : [],
+    // The harder rule: this exact tag is already mid-process somewhere in
+    // the system right now (queued, awaiting review, sent for reshoot...).
+    // Scanning the same physical tag twice used to just create a second,
+    // parallel product with nobody noticing - this is what the Shoot screen
+    // uses to stop that before it happens.
+    activeDuplicate: findActiveDuplicate(cpc),
   });
 });
 
