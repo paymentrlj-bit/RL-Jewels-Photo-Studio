@@ -16,7 +16,7 @@ export const ExportView: React.FC<ExportViewProps> = ({ driveConfigured }) => {
   const [mapping, setMapping] = useState('generic');
   const [uploading, setUploading] = useState<string | null>(null);
   const [result, setResult] = useState<{
-    batchId: string; uploaded: number; failed: number; folderLink: string;
+    batchId: string; uploaded: number; failed: number; alreadyExported: number; folderLink: string;
     failures: { cpc: string; error: string }[];
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -41,7 +41,8 @@ export const ExportView: React.FC<ExportViewProps> = ({ driveConfigured }) => {
     try {
       const response = await api.exportToDrive(batchId, mapping);
       setResult({
-        batchId, uploaded: response.uploaded, failed: response.failedCount, folderLink: response.folderLink,
+        batchId, uploaded: response.uploaded, failed: response.failedCount,
+        alreadyExported: response.alreadyExported, folderLink: response.folderLink,
         // This is the actual fix: the server always computed exactly why
         // each item failed, but nothing kept it past this response - staff
         // saw "2 failed" with no way to know why, forever, even on retry.
@@ -144,6 +145,7 @@ export const ExportView: React.FC<ExportViewProps> = ({ driveConfigured }) => {
                   {result.failed > 0 ? <AlertTriangle className="w-4 h-4" /> : <Check className="w-4 h-4" />}
                   <span>
                     {result.uploaded} uploaded
+                    {result.alreadyExported > 0 && `, ${result.alreadyExported} already in Drive (skipped)`}
                     {result.failed > 0 && `, ${result.failed} failed — retry to pick up just the failures`}
                   </span>
                 </div>

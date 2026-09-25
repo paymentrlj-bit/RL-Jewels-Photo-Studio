@@ -41,9 +41,19 @@ Once all four are set and the server restarts, the "Upload to Google Drive" opti
 
 ## What gets uploaded
 
-For each product you upload, the app creates (or reuses) a subfolder named after the item type — e.g. "Ring", "Chain", "Mangalsutra" — inside your root folder, and uploads two files into it:
-- `<CPC>_photo.jpg` — the final, studio-enhanced photo
-- `<CPC>_data.csv` — the same data as the ERP CSV export (CPC, name, description, purity, gender, size, weights, staff, timestamps)
+Each product's photo and data file land in a folder structured as:
+
+```
+<root folder>/<Category>/<Gender>/<Style>/
+    <CPC>_photo.jpg   - the final, studio-enhanced photo
+    <CPC>_data.csv    - the same data as the ERP CSV export (CPC, name, description, purity, gender, size, weights, staff, timestamps)
+```
+
+- **Category** — the trade category (Ring, Mangalsutra, Chain, Bangle, ...), resolved the same way the rest of the app resolves it, so "Chandrakanta" and "Chand Bali" (two names for the same thing) land in one "Chandbali" folder rather than two.
+- **Gender** — only present for categories that genuinely span more than one (Ring, Chain, Bangle, Kada, Bracelet, Pendant, Coin, Rakhi, Aakda, Mala). A category that's single-gender by convention (Mangalsutra, Nose Pin, Janwa, ...) skips this level entirely rather than adding a folder that would only ever have one subfolder in it.
+- **Style** — the store's own specific style name, exactly as typed or scanned (e.g. "Vati Mangalsutra", "Gents Casting Anguthi"). If that's just the bare category name with nothing more specific, it goes in a folder called "General" instead of nesting a folder under itself.
+
+Re-exporting a batch never re-uploads a product that's already in Drive — once a product is marked exported, it's skipped on every future export click, so retrying a batch or clicking Drive again only sends what's actually new.
 
 ## Troubleshooting
 
