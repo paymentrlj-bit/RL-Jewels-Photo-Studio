@@ -167,7 +167,7 @@ describe('aspect ratio branching', () => {
     for (const name of ['TENDULKAR', 'NAWABI HOLO', 'INDO-ITALIAN']) expect(resolveCategory(name)?.type, name).toBe('Chain');
     expect(resolveCategory('LONG PBB')?.type).toBe('Mangalsutra');
     expect(resolveCategory('SINGAPORE TOPS')?.type).toBe('J Hoop');
-    expect(resolveCategory('KANSAKALI')?.type).toBe('Ear Chain');
+    expect(resolveCategory('KANSAKALI')?.type).toBe('Kansakhali');
     expect(aspectRatioFor('KANSAKALI')).toBe('3:4');
     // Plain "tops" is still a stud.
     expect(resolveCategory('FANCY TOPS')?.type).toBe('Stud');

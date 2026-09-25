@@ -15,13 +15,22 @@ describe('driveFolderSegments', () => {
     expect(driveFolderSegments('Cocktail Ring', "women's")).toEqual(['Ring', "Women's", 'Cocktail Ring']);
   });
 
-  it('every ear-worn category lands under one "Earrings Category" folder, whatever its own trade name', () => {
-    // The real request this guards: a Jhumka, a Chandbali, an Ear Chain and
+  it('every ear-worn category lands under one "Tops Category" folder, whatever its own trade name', () => {
+    // The real request this guards: a Jhumka, a Chandbali, a Kansakhali and
     // Latkan Tops are different trade categories but the same shopping
     // department - the store wants them found in one place, not four.
-    expect(driveFolderSegments('Fancy Zumka 2', "women's")).toEqual(['Earrings Category', 'Jhumka', 'Fancy Zumka 2']);
-    expect(driveFolderSegments('Chandrakanta', "women's")).toEqual(['Earrings Category', 'Chandbali', 'Chandrakanta']);
-    expect(driveFolderSegments('Kansakali Design', "women's")).toEqual(['Earrings Category', 'Ear Chain', 'Kansakali Design']);
+    expect(driveFolderSegments('Fancy Zumka 2', "women's")).toEqual(['Tops Category', 'Jhumka', 'Fancy Zumka 2']);
+    expect(driveFolderSegments('Chandrakanta', "women's")).toEqual(['Tops Category', 'Chandbali', 'Chandrakanta']);
+    expect(driveFolderSegments('Kansakali Design', "women's")).toEqual(['Tops Category', 'Kansakhali', 'Kansakali Design']);
+  });
+
+  it('Bajuband, Bracelet and Chain each get their own department, not folded into Bangle/Necklace', () => {
+    // Owner's own corrections: Bajuband is not close to a bangle (-> Set
+    // Category); Bracelet wanted its own category; Chain wanted its own
+    // category rather than sharing with Necklace/Haar/Choker/Mala.
+    expect(driveFolderSegments('Bajuband', "women's")[0]).toBe('Set Category');
+    expect(driveFolderSegments('Charm Bracelet', "unisex")[0]).toBe('Bracelet Category');
+    expect(driveFolderSegments('Nawabi Holo Chain', "unisex")[0]).toBe('Chain Category');
   });
 
   it('every spelling/synonym of a category resolves to the same canonical category folder name', () => {
