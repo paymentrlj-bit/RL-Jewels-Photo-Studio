@@ -16,7 +16,7 @@ import { findUserById } from '../auth/users';
 import { buildExportRow, type ExportRow } from '../export/fields';
 import { buildCsv, buildProductJsonLd, rowsToCsv } from '../export/csv';
 import { allMappings, getMapping } from '../export/mappings';
-import { exportProductToDrive } from '../integrations/drive';
+import { exportProductToDrive, newFolderCache } from '../integrations/drive';
 
 export const exportRouter = express.Router();
 exportRouter.use(requireAuth);
@@ -208,6 +208,11 @@ exportRouter.post('/export/batch/:batchId/drive', async (req: AuthenticatedReque
   // root is the one link that is always where everything from this batch
   // actually is.
   const folderLink = `https://drive.google.com/drive/folders/${config.drive.rootFolderId}`;
+  // Shared across every product below: without it, each one re-searches
+  // Drive for its category/gender/style folder from scratch even when the
+  // previous product just resolved the identical path - the main reason a
+  // big batch felt slow.
+  const folderCache = newFolderCache();
 
   for (const product of toUpload) {
     const row = rowFor(product);
@@ -226,7 +231,7 @@ exportRouter.post('/export/batch/:batchId/drive', async (req: AuthenticatedReque
         photoBase64: readImageBuffer(photo).toString('base64'),
         photoMimeType: photo.mimeType,
         metadataCsv: rowsToCsv(mapping, [row], { bom: false }),
-      });
+      }, folderCache);
       uploaded.push({ productId: product.id, cpc: row.cpc, photoLink: result.photoLink });
       setProductStatus(product.id, 'exported');
     } catch (err) {

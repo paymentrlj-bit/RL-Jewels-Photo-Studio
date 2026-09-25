@@ -50,6 +50,20 @@ function normalizeFolderName(name: string): string {
   return name.trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
+/**
+ * Folder ids resolved during one export click, keyed by parentId + name.
+ * Without this, a batch of 20 Rings re-searched Drive for the exact same
+ * "Ring / Women's / Cocktail Ring" folder 20 times instead of once - most of
+ * a Drive export's wall-clock time was this redundant searching, not the
+ * actual file uploads. Scoped to a single call to exportBatchToDrive() /
+ * exportProductToDrive() loop, never persisted, so it can't ever serve a
+ * stale folder id across separate export clicks.
+ */
+export type FolderCache = Map<string, string>;
+export function newFolderCache(): FolderCache {
+  return new Map();
+}
+
 // Finds a folder under a given parent, creating it if it doesn't exist yet.
 // Used to build the Category/Gender/Style folder structure inside the
 // shared root folder on first use of each.
@@ -62,8 +76,12 @@ function normalizeFolderName(name: string): string {
 // sensitive, so the second upload's search for its own exact string never
 // found the first upload's folder. Comparing normalized names here means
 // only a genuinely different name creates a new folder.
-async function findOrCreateFolder(accessToken: string, name: string, parentId: string): Promise<string> {
+async function findOrCreateFolder(accessToken: string, name: string, parentId: string, cache: FolderCache): Promise<string> {
   const target = normalizeFolderName(name);
+  const cacheKey = `${parentId}::${target}`;
+  const cached = cache.get(cacheKey);
+  if (cached) return cached;
+
   const query = `'${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
   const searchRes = await fetch(`${DRIVE_FILES_URL}?q=${encodeURIComponent(query)}&fields=files(id,name)&pageSize=1000`, {
     headers: { Authorization: `Bearer ${accessToken}` },
@@ -71,6 +89,7 @@ async function findOrCreateFolder(accessToken: string, name: string, parentId: s
   const searchData: any = await searchRes.json();
   const existing = (searchData.files || []).find((f: any) => normalizeFolderName(f.name) === target);
   if (existing) {
+    cache.set(cacheKey, existing.id);
     return existing.id;
   }
 
@@ -87,17 +106,19 @@ async function findOrCreateFolder(accessToken: string, name: string, parentId: s
   if (!createData.id) {
     throw new Error(createData.error?.message || 'Failed to create Drive folder.');
   }
+  cache.set(cacheKey, createData.id);
   return createData.id;
 }
 
 // Walks/creates a chain of nested folders, root first, returning the
 // innermost folder's id. One find-or-create call per level - cheap once a
-// level exists (the search hits before any create is attempted), and no
-// worse than the old flat structure's single call on a repeat upload.
-async function findOrCreateFolderPath(accessToken: string, segments: string[], rootId: string): Promise<string> {
+// level exists (the search hits before any create is attempted, and is
+// skipped entirely on a cache hit), and no worse than the old flat
+// structure's single call on a repeat upload.
+async function findOrCreateFolderPath(accessToken: string, segments: string[], rootId: string, cache: FolderCache): Promise<string> {
   let parentId = rootId;
   for (const segment of segments) {
-    parentId = await findOrCreateFolder(accessToken, segment, parentId);
+    parentId = await findOrCreateFolder(accessToken, segment, parentId, cache);
   }
   return parentId;
 }
@@ -193,12 +214,17 @@ export interface DriveExportInput {
   metadataCsv: string;
 }
 
-export async function exportProductToDrive(input: DriveExportInput): Promise<{ folderLink: string; photoLink: string }> {
+export async function exportProductToDrive(
+  input: DriveExportInput,
+  // Pass the SAME cache across every product in one export click (see
+  // FolderCache above) - a fresh one per call defeats the point.
+  folderCache: FolderCache = newFolderCache()
+): Promise<{ folderLink: string; photoLink: string }> {
   const rootFolderId = config.drive.rootFolderId;
   if (!rootFolderId) throw new Error('GOOGLE_DRIVE_ROOT_FOLDER_ID is not configured.');
 
   const accessToken = await getAccessToken();
-  const categoryFolderId = await findOrCreateFolderPath(accessToken, driveFolderSegments(input.itemType, input.gender), rootFolderId);
+  const categoryFolderId = await findOrCreateFolderPath(accessToken, driveFolderSegments(input.itemType, input.gender), rootFolderId, folderCache);
 
   const match = input.photoBase64.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,(.+)$/);
   const mimeType = match ? match[1] : input.photoMimeType || 'image/jpeg';
