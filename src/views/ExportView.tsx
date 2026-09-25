@@ -15,7 +15,10 @@ export const ExportView: React.FC<ExportViewProps> = ({ driveConfigured }) => {
   const [mappings, setMappings] = useState<{ id: string; label: string; description?: string; columnCount: number }[]>([]);
   const [mapping, setMapping] = useState('generic');
   const [uploading, setUploading] = useState<string | null>(null);
-  const [result, setResult] = useState<{ batchId: string; uploaded: number; failed: number; folderLink: string } | null>(null);
+  const [result, setResult] = useState<{
+    batchId: string; uploaded: number; failed: number; folderLink: string;
+    failures: { cpc: string; error: string }[];
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -37,7 +40,13 @@ export const ExportView: React.FC<ExportViewProps> = ({ driveConfigured }) => {
     setResult(null);
     try {
       const response = await api.exportToDrive(batchId, mapping);
-      setResult({ batchId, uploaded: response.uploaded, failed: response.failedCount, folderLink: response.folderLink });
+      setResult({
+        batchId, uploaded: response.uploaded, failed: response.failedCount, folderLink: response.folderLink,
+        // This is the actual fix: the server always computed exactly why
+        // each item failed, but nothing kept it past this response - staff
+        // saw "2 failed" with no way to know why, forever, even on retry.
+        failures: response.failures || [],
+      });
       await load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Drive upload failed.');
@@ -142,6 +151,13 @@ export const ExportView: React.FC<ExportViewProps> = ({ driveConfigured }) => {
                   <a href={result.folderLink} target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-1 text-xs underline">
                     <FolderOpen className="w-3 h-3" /> Open the Drive folder
                   </a>
+                )}
+                {result.failures.length > 0 && (
+                  <ul className="mt-2 space-y-1 border-t border-amber-200 pt-2 text-xs">
+                    {result.failures.map((f) => (
+                      <li key={f.cpc}><strong>{f.cpc || 'unknown item'}:</strong> {f.error}</li>
+                    ))}
+                  </ul>
                 )}
               </div>
             )}

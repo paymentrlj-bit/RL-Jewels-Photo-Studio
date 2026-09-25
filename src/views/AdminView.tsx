@@ -68,12 +68,16 @@ const InsightsPanel: React.FC = () => {
       <section className="rounded-2xl border border-stone-200 bg-white p-5">
         <h3 className="font-semibold text-stone-900">Estimated AI cost</h3>
         <p className="mt-2 text-3xl font-semibold text-stone-900">
-          ${data.cost.totalEstimatedUsd.toFixed(2)}
-          {data.cost.avgPerPhotoUsd !== null && (
+          ₹{data.cost.totalEstimatedInr.toFixed(2)}
+          {data.cost.avgPerPhotoInr !== null && (
             <span className="ml-2 text-sm font-normal text-stone-500">
-              (${data.cost.avgPerPhotoUsd.toFixed(4)} per photo)
+              (₹{data.cost.avgPerPhotoInr.toFixed(3)} per photo)
             </span>
           )}
+        </p>
+        <p className="mt-1 text-xs text-stone-400">
+          ${data.cost.totalEstimatedUsd.toFixed(2)} at ₹{data.cost.usdToInrRate.toFixed(2)}/$
+          {data.cost.rateIsLive ? " (today's rate)" : ' (fallback rate - live rate unreachable)'} - Gemini bills in USD, this is a display conversion only.
         </p>
         <div className={`mt-3 rounded-lg px-3 py-2 text-xs ${data.cost.calibrated ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-900'}`}>
           {data.cost.note}

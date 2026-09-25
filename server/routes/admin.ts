@@ -21,6 +21,7 @@ import { queueDepth } from '../queue/jobs';
 import { storageStats } from '../storage/images';
 import { getCpcMasterStats } from '../integrations/cpcMaster';
 import { COSTS_ARE_CALIBRATED } from '../ai/client';
+import { getUsdToInrRate } from '../integrations/exchangeRate';
 import { AUDIT_CHECKS } from '../ai/operations';
 import { isAxiomConfigured, config } from '../config';
 
@@ -157,14 +158,21 @@ adminRouter.post('/prompt', (req: AuthenticatedRequest, res) => {
 // Analytics
 // ---------------------------------------------------------------------------
 
-adminRouter.get('/analytics/summary', (req, res) => {
+adminRouter.get('/analytics/summary', async (req, res) => {
   const days = Math.min(Math.max(Number(req.query.days) || 30, 1), 365);
   const sinceIso = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+  // Kicked off alongside the (synchronous) event reads below rather than
+  // awaited up front, so a slow or unreachable rate source never adds its
+  // latency on top of the event scan - both are ready by the time either is
+  // needed for the response.
+  const usdToInrPromise = getUsdToInrRate();
 
   const completions = readEvents({ sinceIso, types: ['pipeline.completed'] });
   const verdicts = readEvents({ sinceIso, types: ['pipeline.audit_verdict'] });
   const apiCalls = readEvents({ sinceIso, types: ['pipeline.api_call'] });
   const escalations = readEvents({ sinceIso, types: ['pipeline.escalated'] });
+  const usdToInr = await usdToInrPromise;
 
   const byStatus: Record<string, number> = {};
   let totalCostUsd = 0;
@@ -228,6 +236,18 @@ adminRouter.get('/analytics/summary', (req, res) => {
     cost: {
       totalEstimatedUsd: Number(totalCostUsd.toFixed(2)),
       avgPerPhotoUsd: processed > 0 ? Number((totalCostUsd / processed).toFixed(4)) : null,
+      // Gemini bills in USD; this is a display conversion for a store that
+      // thinks in rupees, not a second currency of billing. usdToInrRate
+      // is today's market rate where reachable (refreshed every few hours),
+      // falling back to the static USD_TO_INR_RATE config value otherwise -
+      // rateIsLive says which one this response used. It is still not
+      // necessarily Google's own invoice conversion rate; see
+      // server/integrations/exchangeRate.ts for why that number isn't
+      // available without Billing API credentials.
+      totalEstimatedInr: Number((totalCostUsd * usdToInr.rate).toFixed(2)),
+      avgPerPhotoInr: processed > 0 ? Number(((totalCostUsd / processed) * usdToInr.rate).toFixed(3)) : null,
+      usdToInrRate: usdToInr.rate,
+      rateIsLive: usdToInr.live,
       calibrated: COSTS_ARE_CALIBRATED,
       note: COSTS_ARE_CALIBRATED
         ? 'Using the COST_*_USD rates configured for this deployment.'

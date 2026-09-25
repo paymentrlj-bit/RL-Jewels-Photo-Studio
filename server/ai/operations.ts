@@ -13,6 +13,8 @@ import {
   ENHANCE_TIMEOUT_MS,
   AUDIT_TIMEOUT_MS,
   SEGMENT_TIMEOUT_MS,
+  extractUsage,
+  type TokenUsage,
 } from './client';
 import { buildAuditPrompt, buildCopyPrompt, type AuditContext, type CopyContext } from './prompts';
 import { buildAuditInventoryBlock, type DetailInventory, type ReferenceImage } from './inventory';
@@ -35,7 +37,8 @@ export async function enhanceImage(
   mimeType: string,
   prompt: string,
   aspectRatio: '1:1' | '3:4' = '1:1',
-  referenceImages: ReferenceImage[] = []
+  referenceImages: ReferenceImage[] = [],
+  onUsage?: (usage: TokenUsage | null) => void
 ): Promise<EnhanceResult | null> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), ENHANCE_TIMEOUT_MS);
@@ -61,6 +64,7 @@ export async function enhanceImage(
         abortSignal: controller.signal,
       } as never,
     });
+    onUsage?.(extractUsage(response));
     const parts = response.candidates?.[0]?.content?.parts || [];
     for (const part of parts) {
       if (part.inlineData?.data) {
@@ -159,7 +163,8 @@ export async function auditOutput(
   enhancedMime: string,
   context: AuditContext,
   model: string = MODEL_AUDIT,
-  grounding?: { inventory: DetailInventory; crops: ReferenceImage[] }
+  grounding?: { inventory: DetailInventory; crops: ReferenceImage[] },
+  onUsage?: (usage: TokenUsage | null) => void
 ): Promise<AuditResult> {
   const crops = grounding?.crops ?? [];
   const prompt = buildAuditPrompt(context, grounding ? buildAuditInventoryBlock(grounding.inventory, crops) : '');
@@ -182,6 +187,7 @@ export async function auditOutput(
         abortSignal: controller.signal,
       } as never,
     });
+    onUsage?.(extractUsage(response));
 
     const parsed = JSON.parse(response.text?.trim() || '{}') as Record<string, unknown>;
     const checklist = Object.fromEntries(
@@ -247,7 +253,8 @@ function parseExclusions(raw: unknown): Exclusion[] {
 export async function segmentJewelry(
   ai: GoogleGenAI,
   imageBase64: string,
-  mimeType: string
+  mimeType: string,
+  onUsage?: (usage: TokenUsage | null) => void
 ): Promise<SegmentationResult | null> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), SEGMENT_TIMEOUT_MS);
@@ -276,6 +283,7 @@ In "exclusions" give a tight box for each price tag or label together with its s
         abortSignal: controller.signal,
       } as never,
     });
+    onUsage?.(extractUsage(response));
 
     const parsed = JSON.parse(response.text?.trim() || '{}');
     // An object is what is asked for; a one-entry list is what the older
@@ -316,7 +324,8 @@ export async function generateCopy(
   ai: GoogleGenAI,
   imageBase64: string,
   mimeType: string,
-  context: CopyContext
+  context: CopyContext,
+  onUsage?: (usage: TokenUsage | null) => void
 ): Promise<GeneratedCopy | null> {
   const prompt = buildCopyPrompt(context);
 
@@ -333,6 +342,7 @@ export async function generateCopy(
         abortSignal: controller.signal,
       } as never,
     });
+    onUsage?.(extractUsage(response));
 
     const parsed = JSON.parse(response.text?.trim() || '{}') as Record<string, unknown>;
     if (!parsed.name || !parsed.description) return null;

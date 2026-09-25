@@ -36,7 +36,9 @@ import {
   SEGMENT_TIMEOUT_MS,
   INVENTORY_TIMEOUT_MS,
   withTransientRetry,
+  extractUsage,
   type RetryAttemptInfo,
+  type TokenUsage,
 } from './client';
 
 // libvips keeps a decoded-image cache and a thread per core by default. On a
@@ -239,7 +241,8 @@ async function callJson(
   ai: GoogleGenAI,
   model: string,
   parts: object[],
-  timeoutMs: number
+  timeoutMs: number,
+  onUsage?: (usage: TokenUsage | null) => void
 ): Promise<unknown> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -249,6 +252,7 @@ async function callJson(
       contents: { parts } as never,
       config: { responseMimeType: 'application/json', abortSignal: controller.signal } as never,
     });
+    onUsage?.(extractUsage(response));
     return JSON.parse(response.text?.trim() || 'null');
   } finally {
     clearTimeout(timeout);
@@ -259,7 +263,8 @@ export async function detectDetailRegions(
   ai: GoogleGenAI,
   imageBase64: string,
   mimeType: string,
-  item: InventoryItemContext
+  item: InventoryItemContext,
+  onUsage?: (usage: TokenUsage | null) => void
 ): Promise<DetailRegion[]> {
   const prompt = `This photo shows one jewelry piece: ${item.itemLine}.
 Find up to ${MAX_DETAIL_REGIONS} areas of the piece where the design detail is small and intricate enough to be easily miscounted or simplified when the piece is redrawn: clusters, rows or fringes of small beads, balls or tassels; granulation; rows or halos of small stones; black-bead sections; sections of chain or mesh whose link pattern is hard to see at full-photo size; engravings, carved or filigree motifs, enamel work.
@@ -268,7 +273,7 @@ Output a JSON list, most intricate first: [{"box_2d": [ymin, xmin, ymax, xmax], 
 
   let parsed: unknown;
   try {
-    parsed = await callJson(ai, MODEL_SEGMENT, [{ inlineData: { mimeType, data: imageBase64 } }, { text: prompt }], SEGMENT_TIMEOUT_MS);
+    parsed = await callJson(ai, MODEL_SEGMENT, [{ inlineData: { mimeType, data: imageBase64 } }, { text: prompt }], SEGMENT_TIMEOUT_MS, onUsage);
   } catch (err) {
     // Unparseable output is not worth a retry - carry on with no close-ups,
     // the count still runs on the full photo. API errors still propagate.
@@ -283,7 +288,8 @@ export async function countDetails(
   imageBase64: string,
   mimeType: string,
   refs: ReferenceImage[],
-  item: InventoryItemContext
+  item: InventoryItemContext,
+  onUsage?: (usage: TokenUsage | null) => void
 ): Promise<DetailInventory> {
   const closeUps = describeRefs(refs, 2, 'IMAGE');
 
@@ -323,7 +329,7 @@ Field guide:
     { text: prompt },
   ];
 
-  const inventory = parseInventory(await callJson(ai, MODEL_INVENTORY, parts, INVENTORY_TIMEOUT_MS));
+  const inventory = parseInventory(await callJson(ai, MODEL_INVENTORY, parts, INVENTORY_TIMEOUT_MS, onUsage));
   if (!inventory) throw new Error('The inventory model returned no usable inventory.');
   return inventory;
 }
@@ -336,11 +342,15 @@ export async function analyzeDetail(
   ai: GoogleGenAI,
   image: { buffer: Buffer; base64: string; mimeType: string },
   item: InventoryItemContext,
-  hooks: { deadline: number; onAttempt: (stage: string, model: string) => (info: RetryAttemptInfo) => void },
+  hooks: {
+    deadline: number;
+    onAttempt: (stage: string, model: string) => (info: RetryAttemptInfo) => void;
+    onUsage?: (stage: string, model: string) => (usage: TokenUsage | null) => void;
+  },
   angles: ReferenceImage[] = []
 ): Promise<{ analysis: InventoryAnalysis; crops: ReferenceImage[] }> {
   const regions = await withTransientRetry(
-    () => detectDetailRegions(ai, image.base64, image.mimeType, item),
+    () => detectDetailRegions(ai, image.base64, image.mimeType, item, hooks.onUsage?.('inventory-detect', MODEL_SEGMENT)),
     2,
     hooks.deadline,
     hooks.onAttempt('inventory-detect', MODEL_SEGMENT)
@@ -356,7 +366,7 @@ export async function analyzeDetail(
   const crops = cropped.map((c) => c.crop);
 
   const inventory = await withTransientRetry(
-    () => countDetails(ai, image.base64, image.mimeType, [...crops, ...angles], item),
+    () => countDetails(ai, image.base64, image.mimeType, [...crops, ...angles], item, hooks.onUsage?.('inventory-count', MODEL_INVENTORY)),
     2,
     hooks.deadline,
     hooks.onAttempt('inventory-count', MODEL_INVENTORY)
@@ -452,32 +462,64 @@ export function hiddenElements(inv: DetailInventory): InventoryElement[] {
 // on its own does not say which way to turn it. Matched against the AI's own
 // free-text description of the obstruction (the "arrangement" field), so a
 // keyword it never uses just falls through to the generic instruction below.
-function suggestAction(arrangement: string): string {
+//
+// wholeFrame marks the one case that is not really about a specific hidden
+// PART: the whole piece didn't fit in the shot. Naming which small detail
+// triggered that ("small beaded spheres between floral motifs: Move the
+// camera back...") is just jargon in front of a plain instruction - staff
+// don't need to know which bead the AI was looking at to move the camera
+// back, and two such findings on one photo used to print the same sentence
+// twice. Every other case genuinely is about one part, so naming it stays -
+// "turn it over" is more useful when it also says what needs turning.
+interface Action { instruction: string; wholeFrame: boolean }
+
+function suggestAction(arrangement: string): Action {
   const text = arrangement.toLowerCase();
-  if (/\btag\b|\bstring\b|\blabel\b/.test(text)) return 'Move the price tag out of the way and take another photo.';
-  if (/\bfinger|\bthumb|\bhand|\bholding/.test(text)) return 'Hold it somewhere else, or set it down, and take another photo without a finger over it.';
-  if (/other earring|the pair|its pair/.test(text)) return 'Photograph this one on its own, not next to its pair.';
-  if (/\bback\b|\breverse\b|\bbehind\b|\bunderside\b/.test(text)) return 'Turn the piece over and take a photo of the back.';
-  if (/out of frame|cut ?off|edge of the photo/.test(text)) return 'Move the camera back so the whole piece fits in the photo.';
-  return 'Turn the piece so this part faces the camera, and take another photo.';
+  if (/\btag\b|\bstring\b|\blabel\b/.test(text)) {
+    return { instruction: 'Move the price tag out of the way and take another photo.', wholeFrame: false };
+  }
+  if (/\bfinger|\bthumb|\bhand|\bholding/.test(text)) {
+    return { instruction: 'Hold it somewhere else, or set it down, and take another photo without a finger over it.', wholeFrame: false };
+  }
+  if (/other earring|the pair|its pair/.test(text)) {
+    return { instruction: 'Photograph this one on its own, not next to its pair.', wholeFrame: false };
+  }
+  if (/\bback\b|\breverse\b|\bbehind\b|\bunderside\b/.test(text)) {
+    return { instruction: 'Turn the piece over and take a photo of the back.', wholeFrame: false };
+  }
+  if (/out of frame|cut ?off|edge of the photo/.test(text)) {
+    return { instruction: 'Move the camera back so the whole piece fits in the photo.', wholeFrame: true };
+  }
+  return { instruction: 'Turn the piece so this part faces the camera, and take another photo.', wholeFrame: false };
 }
 
 export interface AngleRequest {
   /** One line per hidden part: what it is, and what to physically do about it. */
   items: { feature: string; instruction: string }[];
-  /** A single sentence version, for anywhere that only has room for plain text. */
+  /** Plain sentences to show staff - deduplicated, framing issues said once. */
+  instructions: string[];
+  /** The same sentences joined, for anywhere that only has room for plain text. */
   summary: string;
 }
 
 export function buildAngleRequest(hidden: InventoryElement[]): AngleRequest {
-  const items = hidden.slice(0, 3).map((e) => ({
-    feature: e.feature,
-    instruction: suggestAction(e.arrangement || ''),
-  }));
-  const summary = items
-    .map((i) => `${i.feature}: ${i.instruction}`)
-    .join(' ');
-  return { items, summary };
+  const found = hidden.slice(0, 3).map((e) => ({ feature: e.feature, action: suggestAction(e.arrangement || '') }));
+  const items = found.map((f) => ({ feature: f.feature, instruction: f.action.instruction }));
+
+  // Dedupe by the sentence staff would actually see: a "whole piece doesn't
+  // fit" finding is one instruction no matter how many details triggered it,
+  // and even a specific instruction is only worth repeating if it names a
+  // different part.
+  const instructions: string[] = [];
+  const seen = new Set<string>();
+  for (const f of found) {
+    const line = f.action.wholeFrame ? f.action.instruction : `${f.feature}: ${f.action.instruction}`;
+    if (seen.has(line)) continue;
+    seen.add(line);
+    instructions.push(line);
+  }
+
+  return { items, instructions, summary: instructions.join(' ') };
 }
 
 // Kept for anywhere that only stores or shows plain text (the audit_reason
