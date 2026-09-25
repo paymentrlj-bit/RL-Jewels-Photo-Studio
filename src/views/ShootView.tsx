@@ -15,7 +15,7 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   Camera, ScanLine, AlertTriangle, CheckCircle2,
-  RotateCcw, Video, History, Eye,
+  RotateCcw, Video, History, Eye, Plus, X,
 } from 'lucide-react';
 import { api, ApiError } from '../api';
 import { ITEM_TYPE_SUGGESTIONS } from '../itemTypes';
@@ -27,6 +27,7 @@ import { ScannerModal } from '../components/ScannerModal';
 import { downscaleImage, analyzeImageQuality, checkFlashFired, type PreflightIssue } from '../utils/imagePreflight';
 import { logClientEvent } from '../utils/analytics';
 import { computeNetWeight } from '../../server/catalog/weights';
+import { isElongated } from '../../server/catalog/taxonomy';
 
 // getUserMedia - the in-app live camera and the barcode scanner - is blocked
 // by browsers outside a secure context. On the shop LAN that means plain
@@ -39,6 +40,11 @@ import { computeNetWeight } from '../../server/catalog/weights';
 const IS_SECURE_CONTEXT =
   typeof window !== 'undefined' &&
   (window.isSecureContext || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+
+// Mirrors MAX_ANGLE_PHOTOS in server/ai/inventory.ts (not imported directly -
+// that file pulls in `sharp`, a native module that cannot run in the
+// browser bundle). Keep the two in sync by hand if either changes.
+const MAX_EXTRA_PHOTOS = 2;
 
 const PURITIES: GoldPurity[] = ['18kt', '22kt', '24kt'];
 const GENDERS: ProductGender[] = ["women's", "men's", 'unisex', "kids'"];
@@ -87,8 +93,15 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, n
   const [issuesAcknowledged, setIssuesAcknowledged] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [justQueued, setJustQueued] = useState<string | null>(null);
+  // Extra photos of the SAME piece, added up front rather than waiting for
+  // the pipeline to notice something was hidden and ask after the fact -
+  // useful for a long chain, a piece with detail on the back, or anything
+  // staff already know a single photo won't fully capture.
+  const [extraPhotos, setExtraPhotos] = useState<string[]>([]);
+  const [addingExtraPhoto, setAddingExtraPhoto] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const extraPhotoInputRef = useRef<HTMLInputElement | null>(null);
   const cpcInputRef = useRef<HTMLInputElement | null>(null);
 
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
@@ -100,6 +113,13 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, n
     () => computeNetWeight(form.grossWeightGrams, form.otherWeightGrams),
     [form.grossWeightGrams, form.otherWeightGrams]
   );
+
+  // Long pieces (chains, mangalsutras, haars, waist chains...) are the ones
+  // most likely to spill off a counter mat sized for a ring or a pair of
+  // earrings, and the ones a single photo most often fails to cover end to
+  // end. Known as soon as a CPC scan fills the item type in, or as soon as
+  // staff type/pick one - whichever happens first for this piece.
+  const isLongPiece = useMemo(() => Boolean(form.itemType.trim() && isElongated(form.itemType)), [form.itemType]);
 
   const runLookup = useCallback(async (cpc: string) => {
     if (!cpc.trim()) {
@@ -190,6 +210,28 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, n
     setPhoto(null);
     setPreflightIssues([]);
     setIssuesAcknowledged(false);
+    setExtraPhotos([]);
+  }, []);
+
+  const handleExtraPhoto = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      setAddingExtraPhoto(true);
+      try {
+        const scaled = await downscaleImage(String(reader.result), 2200, 0.92);
+        setExtraPhotos((prev) => [...prev, scaled].slice(0, MAX_EXTRA_PHOTOS));
+      } finally {
+        setAddingExtraPhoto(false);
+      }
+    };
+    reader.readAsDataURL(file);
+  }, []);
+
+  const removeExtraPhoto = useCallback((index: number) => {
+    setExtraPhotos((prev) => prev.filter((_, i) => i !== index));
   }, []);
 
   // A flagged photo is not blocked outright - staff sometimes know better than
@@ -210,6 +252,15 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, n
       const { product } = await api.createProduct({ ...form, batchId: batch?.id });
       await api.attachPhoto(product.id, photo, 'upload');
 
+      // Extra photos staff added up front (long piece, detail on the back)
+      // go in as angle photos, same as ones added reactively after an audit
+      // flag - the pipeline treats both the same way. Sequential, not
+      // parallel: they land on the same product record, and skipping one
+      // that fails is better than losing the whole submit over it.
+      for (const extra of extraPhotos) {
+        await api.addAngle(product.id, extra).catch(() => undefined);
+      }
+
       // Teach the catalogue about a CPC it did not know, so the next scan of
       // this product auto-fills instead of starting blank.
       if (lookup?.matchType === 'none' && lookup.productId && form.itemType.trim()) {
@@ -228,6 +279,7 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, n
       setPhoto(null);
       setPreflightIssues([]);
       setIssuesAcknowledged(false);
+      setExtraPhotos([]);
       setLookup(null);
       onQueued();
       cpcInputRef.current?.focus();
@@ -238,7 +290,7 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, n
     } finally {
       setSubmitting(false);
     }
-  }, [photo, form, batch, lookup, onQueued]);
+  }, [photo, form, batch, lookup, onQueued, extraPhotos]);
 
   const itemTypeOptions = useMemo(() => ITEM_TYPE_SUGGESTIONS, []);
 
@@ -297,6 +349,13 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, n
         <section className="bg-white rounded-2xl border border-stone-200 p-5">
           <h2 className="font-semibold text-stone-900 mb-4">1. Photograph the piece</h2>
 
+          {isLongPiece && (
+            <div className="mb-4 rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
+              This is a long piece. Use a background bigger than the piece, and hold the camera far enough back that both ends and the clasp fit in one photo.
+              {photo && ' Still doesn’t all fit? Use "Add another photo" below for the other end or the clasp.'}
+            </div>
+          )}
+
           {photo ? (
             <div className="space-y-3">
               <img src={photo} alt="Captured piece" className="w-full max-h-80 object-contain rounded-xl bg-stone-50" />
@@ -337,6 +396,49 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, n
                   )}
                 </div>
               )}
+
+              {/* Optional, up front: for a long chain, a piece with detail on
+                  the back, or anything staff already know one photo won't
+                  cover, this is faster than waiting for the pipeline to ask
+                  after the fact. Same photos, same limit, as the reactive
+                  "one more photo needed" flow after a failed check. */}
+              <div className="space-y-2">
+                {extraPhotos.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {extraPhotos.map((p, i) => (
+                      <div key={i} className="relative">
+                        <img src={p} alt={`Extra photo ${i + 1}`} className="h-16 w-16 rounded-lg object-cover bg-stone-100" />
+                        <button
+                          type="button"
+                          onClick={() => removeExtraPhoto(i)}
+                          aria-label="Remove this photo"
+                          className="absolute -right-1.5 -top-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-stone-900 text-white hover:bg-red-700"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {extraPhotos.length < MAX_EXTRA_PHOTOS && (
+                  <button
+                    type="button"
+                    onClick={() => extraPhotoInputRef.current?.click()}
+                    disabled={addingExtraPhoto}
+                    className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-dashed border-stone-300 px-3 py-2 text-sm text-stone-600 hover:bg-stone-50 disabled:opacity-60"
+                  >
+                    <Plus className="w-4 h-4" /> {addingExtraPhoto ? 'Adding…' : 'Add another photo (back, other angle)'}
+                  </button>
+                )}
+              </div>
+              <input
+                ref={extraPhotoInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="hidden"
+                onChange={handleExtraPhoto}
+              />
 
               <button
                 type="button"

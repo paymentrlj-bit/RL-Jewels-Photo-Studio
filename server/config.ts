@@ -126,6 +126,12 @@ export const config = {
   // Config, not code, specifically so pointing this at the store's real ERP
   // is a one-line change rather than a rewrite of the export module.
   erpMapping: process.env.ERP_MAPPING?.trim() || 'generic',
+
+  // Gemini is billed in USD; the store thinks in rupees. This is a display
+  // conversion only, not a billing figure - forex moves day to day, so treat
+  // the admin dashboard's ₹ number as a ballpark, not an invoice. Override
+  // with USD_TO_INR_RATE if the default drifts too far from reality.
+  usdToInrRate: Number(process.env.USD_TO_INR_RATE) || 96,
 };
 
 export function isDriveConfigured(): boolean {

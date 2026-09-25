@@ -24,6 +24,7 @@ import {
   ENABLE_SEGMENTATION_GROUNDING,
   PIPELINE_BUDGET_MS,
   type RetryAttemptInfo,
+  type TokenUsage,
 } from '../ai/client';
 import {
   enhanceImage,
@@ -251,6 +252,23 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
     });
   };
 
+  // Real token counts straight from Gemini, alongside the flat per-call
+  // placeholder estimate recordAttempt keeps above - see client.ts's
+  // TokenUsage comment for why this is the path to an exact cost figure
+  // instead of another guessed rate.
+  const recordUsage = (stage: string, model: string) => (usage: TokenUsage | null) => {
+    if (!usage) return;
+    logEvent('pipeline.token_usage', {
+      requestId,
+      productId: product.id,
+      stage,
+      model,
+      promptTokens: usage.promptTokens,
+      candidatesTokens: usage.candidatesTokens,
+      totalTokens: usage.totalTokens,
+    });
+  };
+
   const finish = (
     status: 'awaiting_review' | 'needs_angle' | 'needs_reshoot' | 'failed',
     detail: {
@@ -324,7 +342,7 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
     // re-uses the outline instead of paying for it again.
     const { result: segmentation, cacheHit } = await cachedSegmentation(
       cleanBase64,
-      () => segmentJewelry(ai, cleanBase64, mimeType)
+      () => segmentJewelry(ai, cleanBase64, mimeType, recordUsage('segment', MODEL_SEGMENT))
     );
     if (!cacheHit) {
       apiCallCount++;
@@ -357,7 +375,7 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
           ai,
           { buffer: originalBuffer, base64: cleanBase64, mimeType },
           { itemLine: item.line, itemNotes: item.notes, purity: product.purity || '22kt' },
-          { deadline, onAttempt: recordAttempt },
+          { deadline, onAttempt: recordAttempt, onUsage: recordUsage },
           angles
         );
         fresh.crops = out.crops;
@@ -407,7 +425,7 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
       // off for the enhance prompt. Cached by image, so usually free here.
       let outline = segmentation;
       if (!outline) {
-        const { result, cacheHit } = await cachedSegmentation(cleanBase64, () => segmentJewelry(ai, cleanBase64, mimeType));
+        const { result, cacheHit } = await cachedSegmentation(cleanBase64, () => segmentJewelry(ai, cleanBase64, mimeType, recordUsage('segment', MODEL_SEGMENT)));
         if (!cacheHit) {
           apiCallCount++;
           estimatedCostUsd += COST_PER_CALL_USD[MODEL_SEGMENT] || 0;
@@ -545,7 +563,7 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
 
   const runEnhance = (model: string, stage: string, prompt: string, refs: ReferenceImage[]) =>
     withTransientRetry(
-      () => enhanceImage(ai, model, cleanBase64, mimeType, prompt, aspectRatio, refs),
+      () => enhanceImage(ai, model, cleanBase64, mimeType, prompt, aspectRatio, refs, recordUsage(stage, model)),
       3,
       deadline,
       recordAttempt(stage, model)
@@ -608,7 +626,7 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
 
   setJobStage(job.id, 'auditing');
   let audit = await withTransientRetry(
-    () => auditOutput(ai, cleanBase64, mimeType, enhanced!.imageBase64, enhanced!.mimeType, auditContext, MODEL_AUDIT, auditGrounding),
+    () => auditOutput(ai, cleanBase64, mimeType, enhanced!.imageBase64, enhanced!.mimeType, auditContext, MODEL_AUDIT, auditGrounding, recordUsage('audit', MODEL_AUDIT)),
     3,
     deadline,
     recordAttempt('audit', MODEL_AUDIT)
@@ -686,7 +704,7 @@ Correct this specific issue while still following every rule above.`;
         // Stronger grader for the re-audit: this is the last gate before a
         // photo ships, and both passes have already been paid for.
         const retryAudit = await withTransientRetry(
-          () => auditOutput(ai, cleanBase64, mimeType, retryEnhanced.imageBase64, retryEnhanced.mimeType, auditContext, MODEL_AUDIT_STRONG, auditGrounding),
+          () => auditOutput(ai, cleanBase64, mimeType, retryEnhanced.imageBase64, retryEnhanced.mimeType, auditContext, MODEL_AUDIT_STRONG, auditGrounding, recordUsage('audit-strong', MODEL_AUDIT_STRONG)),
           3,
           deadline,
           recordAttempt('audit-strong', MODEL_AUDIT_STRONG)
@@ -789,6 +807,16 @@ async function runCopyJob(job: Job, workerId: string): Promise<void> {
           gender: product.gender,
           size: product.size,
           weight: product.netWeightGrams || product.grossWeightGrams,
+        }, (usage) => {
+          if (!usage) return;
+          logEvent('pipeline.token_usage', {
+            productId: product.id,
+            stage: 'copy',
+            model: MODEL_COPY,
+            promptTokens: usage.promptTokens,
+            candidatesTokens: usage.candidatesTokens,
+            totalTokens: usage.totalTokens,
+          });
         }),
       2
     );

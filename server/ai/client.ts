@@ -162,6 +162,32 @@ export function isTransientError(err: unknown): boolean {
   return false;
 }
 
+// Real token counts straight from Gemini's own response, not a guess. Costing
+// today (COST_PER_CALL_USD above) is a flat placeholder per call because
+// nobody had confirmed per-token rates against the real Cloud Billing
+// console yet. Logging the actual counts per call means that whenever those
+// rates ARE confirmed, exact cost is one multiplication away in Axiom -
+// no code change and no more guessing needed.
+export interface TokenUsage {
+  promptTokens: number;
+  candidatesTokens: number;
+  totalTokens: number;
+}
+
+export function extractUsage(response: {
+  usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number };
+}): TokenUsage | null {
+  const u = response?.usageMetadata;
+  if (!u) return null;
+  const promptTokens = u.promptTokenCount ?? 0;
+  const candidatesTokens = u.candidatesTokenCount ?? 0;
+  return {
+    promptTokens,
+    candidatesTokens,
+    totalTokens: u.totalTokenCount ?? promptTokens + candidatesTokens,
+  };
+}
+
 export interface RetryAttemptInfo {
   attempt: number;
   latencyMs: number;

@@ -35,6 +35,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ isOpen, onClose, onS
   const readerRef = useRef<CodeReader | null>(null);
   const openedAtRef = useRef(0);
   const doneRef = useRef(false);
+  const torchAutoTriedRef = useRef(false);
 
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<'starting' | 'scanning' | 'reading_photo' | 'done'>('starting');
@@ -76,6 +77,7 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ isOpen, onClose, onS
     let stream: MediaStream | null = null;
     doneRef.current = false;
     openedAtRef.current = Date.now();
+    torchAutoTriedRef.current = false;
     setError(null);
     setLastCode(null);
     setShowHint(false);
@@ -84,7 +86,27 @@ export const ScannerModal: React.FC<ScannerModalProps> = ({ isOpen, onClose, onS
     setZoomRange(null);
     setStatus('starting');
 
-    const hintTimer = window.setTimeout(() => setShowHint(true), HINT_AFTER_MS);
+    // A stalled scan is overwhelmingly a light/focus problem on a shiny tag,
+    // not a code the reader genuinely can't parse - and staff notice a
+    // dialog telling them to tap a torch button far less reliably than they
+    // notice the screen just get brighter. So this does it for them instead
+    // of only suggesting it, the moment the same signal that shows the
+    // "not reading?" hint fires. Never overrides a staff member's own choice
+    // to turn the torch back off (see toggleTorch below and its skip check).
+    const hintTimer = window.setTimeout(() => {
+      setShowHint(true);
+      const track = trackRef.current;
+      if (!track || torchAutoTriedRef.current) return;
+      const caps = (track.getCapabilities?.() ?? {}) as MediaTrackCapabilities & { torch?: boolean };
+      if (!caps.torch) return;
+      torchAutoTriedRef.current = true;
+      track.applyConstraints({ advanced: [{ torch: true }] } as unknown as MediaTrackConstraints)
+        .then(() => {
+          setTorchOn(true);
+          logClientEvent('scanner_auto_torch', { msToScan: Date.now() - openedAtRef.current });
+        })
+        .catch(() => undefined);
+    }, HINT_AFTER_MS);
 
     const start = async () => {
       const reader = await createCodeReader();

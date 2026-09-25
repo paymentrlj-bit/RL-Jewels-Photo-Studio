@@ -266,12 +266,29 @@ describe('asking for another angle', () => {
     const reason = buildAngleRequestReason([
       element({ feature: 'a', countConfidence: 'low', arrangement: 'behind the tag' }),
       element({ feature: 'b', countConfidence: 'low', arrangement: 'behind a finger' }),
-      element({ feature: 'c', countConfidence: 'low', arrangement: 'out of frame' }),
+      // out of frame is the one case that drops the feature name (see the
+      // dedup test below) - back of the pendant keeps a distinct third line.
+      element({ feature: 'c', countConfidence: 'low', arrangement: 'back of the pendant not visible' }),
       element({ feature: 'd', countConfidence: 'low', arrangement: 'behind the tag' }),
     ]);
     expect(reason).toContain('a:');
     expect(reason).toContain('b:');
     expect(reason).toContain('c:');
     expect(reason).not.toContain('d:');
+  });
+
+  it('says "move the camera back" once, not once per feature that was out of frame', () => {
+    // The real bug this guards: two different intricate details both flagged
+    // as out of frame produced "small beaded spheres...: Move the camera
+    // back... flat strip segments...: Move the camera back..." - the same
+    // instruction, twice, each time behind a feature name staff didn't need.
+    const reason = buildAngleRequestReason([
+      element({ feature: 'small beaded spheres between floral motifs', countConfidence: 'low', arrangement: 'right edge cut off, out of frame' }),
+      element({ feature: 'flat strip segments with vertical rows', countConfidence: 'low', arrangement: 'bottom is out of frame' }),
+    ]);
+    const occurrences = reason.match(/Move the camera back/g) || [];
+    expect(occurrences).toHaveLength(1);
+    expect(reason).not.toContain('small beaded spheres');
+    expect(reason).not.toContain('flat strip segments');
   });
 });

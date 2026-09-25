@@ -216,7 +216,19 @@ exportRouter.post('/export/batch/:batchId/drive', async (req: AuthenticatedReque
       uploaded.push({ productId: product.id, cpc: row.cpc, photoLink: result.photoLink });
       setProductStatus(product.id, 'exported');
     } catch (err) {
-      failed.push({ productId: product.id, cpc: row.cpc, error: debugDetail(err) });
+      const errorDetail = debugDetail(err);
+      // Per-item, not just the batch total: the summary event below only ever
+      // carried counts, so a systemic failure (bad OAuth token, wrong root
+      // folder) that failed every item, every time, left nobody able to see
+      // WHY without re-triggering the upload and reading the HTTP response
+      // in the moment - which staff have no reason to inspect.
+      logEvent('export.drive_item_failed', {
+        batchId: batch.id,
+        productId: product.id,
+        cpc: row.cpc,
+        errorMessage: errorDetail,
+      }, actorFrom(req.user));
+      failed.push({ productId: product.id, cpc: row.cpc, error: errorDetail });
     }
   }
 

@@ -139,7 +139,16 @@ export interface AnalyticsSummary {
     escalationRate: number | null;
     avgLatencyMs: number | null;
   };
-  cost: { totalEstimatedUsd: number; avgPerPhotoUsd: number | null; calibrated: boolean; note: string };
+  cost: {
+    totalEstimatedUsd: number;
+    avgPerPhotoUsd: number | null;
+    totalEstimatedInr: number;
+    avgPerPhotoInr: number | null;
+    usdToInrRate: number;
+    rateIsLive: boolean;
+    calibrated: boolean;
+    note: string;
+  };
   qualityChecks: { verdictsAnalyzed: number; failuresByCheck: Record<string, number>; note: string };
   stageLatency: Record<string, { calls: number; failures: number; timeouts: number; avgLatencyMs: number }>;
   system: {
