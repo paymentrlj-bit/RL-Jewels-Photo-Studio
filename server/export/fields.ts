@@ -4,7 +4,9 @@
 // Keeping this separate from the mappings means adding a new ERP is a matter
 // of listing columns, not writing code that reaches into the database.
 
-import type { Product } from '../db/products';
+import { getBatch, type Product } from '../db/products';
+import { getLatestPhoto, extensionForMime } from '../storage/images';
+import { findUserById } from '../auth/users';
 
 export const EXPORT_FIELDS = [
   'cpc',
@@ -74,4 +76,22 @@ export function buildExportRow(input: {
 
 export function isExportField(value: string): value is ExportField {
   return (EXPORT_FIELDS as readonly string[]).includes(value);
+}
+
+// The one place that turns a Product into its export row - CSV, ZIP, and the
+// Drive export worker (server/queue/driveExportWorker.ts) all call this
+// rather than each building their own version, which is how two of them
+// would eventually drift on something like the photo filename convention.
+export function rowFor(product: Product): ExportRow {
+  const creator = findUserById(product.createdBy);
+  const batch = product.batchId ? getBatch(product.batchId) : null;
+  const photo = getLatestPhoto(product.id, 'processed') || getLatestPhoto(product.id, 'original');
+  const cpc = product.cpc.trim() || 'RLJ-UNKNOWN';
+
+  return buildExportRow({
+    product,
+    staffName: creator?.displayName || creator?.username || 'Unknown',
+    batchName: batch?.name,
+    photoFilename: photo ? `${cpc}_photo.${extensionForMime(photo.mimeType)}` : '',
+  });
 }
