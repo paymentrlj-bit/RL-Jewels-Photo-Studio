@@ -39,7 +39,19 @@ export const MODEL_AUDIT_STRONG = 'gemini-3.1-pro-preview';
 // being too weak for genuinely specific, sellable writing, not just a prompt
 // problem. Verified against this account's real /v1beta/models list.
 export const MODEL_COPY = 'gemini-3.1-pro-preview';
-export const MODEL_SEGMENT = 'gemini-robotics-er-1.6-preview';
+// UNVERIFIED - could not check this against a live /v1beta/models list (no
+// API key in this environment), against the file's own rule above. 1.6-preview
+// was returning a hard 404 "not found... or is not supported for
+// generateContent" on every single call in production as of 2026-09-25 -
+// Google's own docs page for it still exists, but the model is evidently not
+// reachable through this account's standard generateContent call the way it
+// used to be. 2-preview is the newer release in the same robotics-ER line,
+// per Google's public announcement (30 Jul 2026) of it being "made publicly
+// available to developers via the Gemini API." Low-risk to try: this call
+// already fails open, so a wrong guess here costs nothing beyond today's
+// already-broken state. Confirm against real production logs after this
+// ships, and revert to a fresh /v1beta/models check if it also 404s.
+export const MODEL_SEGMENT = 'gemini-robotics-er-2-preview';
 // Counts and describes the piece's fine detail once, before enhancement. Both
 // the enhance call and the audit treat its output as ground truth, so a wrong
 // count here poisons both - which is why it gets the strong tier rather than
