@@ -195,7 +195,11 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, n
   // A flagged photo is not blocked outright - staff sometimes know better than
   // a heuristic - but it does need an explicit acknowledgement first.
   const needsAcknowledgement = preflightIssues.length > 0 && !issuesAcknowledged;
-  const canSubmit = Boolean(photo && form.itemType.trim() && netWeight.ok && !isSubmitting && !isChecking && !needsAcknowledgement);
+  // The real duplicate-work rule: this exact tag is already mid-process
+  // somewhere else in the system, so a new capture here would just be a
+  // second, parallel entry for the same physical piece.
+  const activeDuplicate = lookup?.activeDuplicate ?? null;
+  const canSubmit = Boolean(photo && form.itemType.trim() && netWeight.ok && !activeDuplicate && !isSubmitting && !isChecking && !needsAcknowledgement);
 
   const handleSubmit = useCallback(async () => {
     if (!photo || !form.itemType.trim()) return;
@@ -269,7 +273,9 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, n
                 )}
                 <div className="min-w-0 flex-1 basis-48">
                   <p className="text-sm font-medium text-stone-900">{product.cpc || product.itemType}</p>
-                  <p className="text-xs text-stone-600">{product.auditReason}</p>
+                  {/* Says what's hidden and exactly what to do about it (move
+                      the tag, turn it over, ...) - not just "another angle". */}
+                  <p className="text-sm leading-snug text-stone-700">{product.auditReason}</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <AngleCaptureButton productId={product.id} onAdded={onQueued} onError={setError} />
@@ -500,13 +506,14 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, n
           disabled={!canSubmit}
           className="min-h-[44px] w-full rounded-xl bg-amber-600 px-6 py-4 font-semibold text-white hover:bg-amber-700 disabled:bg-stone-300 disabled:cursor-not-allowed transition-colors"
         >
-          {isSubmitting ? 'Queueing…' : 'Queue for processing, shoot the next one'}
+          {isSubmitting ? 'Saving…' : 'Save and shoot the next one'}
         </button>
         {!canSubmit && !isSubmitting && (
           <p className="text-center text-sm text-stone-500">
             {!photo ? 'Take a photo to continue.'
               : isChecking ? 'Checking the photo…'
               : needsAcknowledgement ? 'Check the photo warnings above first.'
+              : activeDuplicate ? 'This tag is already in the system - see the note above.'
               : !netWeight.ok ? netWeight.error
               : 'Item type is required.'}
           </p>
@@ -555,16 +562,30 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, n
 };
 
 const LookupBanner: React.FC<{ lookup: CpcLookupResult }> = ({ lookup }) => {
+  // The hard stop: this exact tag already has a piece in progress. Shown
+  // whatever else the lookup found, and before anything else in this box -
+  // it is the one thing that actually needs to change what staff do next.
+  const duplicateNotice = lookup.activeDuplicate && (
+    <p className="text-xs font-medium text-red-800 bg-red-50 border border-red-200 rounded-lg px-2 py-1.5">
+      Already in the system: {lookup.activeDuplicate.itemType || 'no item type yet'}
+      {' '}({STATUS_LABELS[lookup.activeDuplicate.status]}). Open it in <strong>Review</strong> instead of shooting it again.
+    </p>
+  );
+
   if (lookup.matchType === 'none') {
     return (
-      <p className="mt-2 text-xs text-stone-500">
-        Not in the catalogue yet. Fill in the details and this CPC will be remembered for next time.
-      </p>
+      <div className="mt-2 space-y-1">
+        {duplicateNotice}
+        <p className="text-xs text-stone-500">
+          Not in the catalogue yet. Fill in the details and this CPC will be remembered for next time.
+        </p>
+      </div>
     );
   }
 
   return (
     <div className="mt-2 space-y-1">
+      {duplicateNotice}
       <p className={`text-xs ${lookup.matchType === 'certain' ? 'text-emerald-700' : 'text-amber-700'}`}>
         {lookup.matchType === 'certain' ? 'Matched:' : 'Best guess — check the size:'}{' '}
         <strong>{lookup.record?.styleName}</strong>

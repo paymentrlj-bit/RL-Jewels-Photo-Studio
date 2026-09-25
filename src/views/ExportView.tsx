@@ -93,14 +93,22 @@ export const ExportView: React.FC<ExportViewProps> = ({ driveConfigured }) => {
               </div>
 
               <div className="flex flex-wrap gap-2">
+                {/* download (not just href) matters on a phone: without it, tapping
+                    this hands the whole screen to the phone's file viewer with no
+                    way back to the app - especially bad when the app is opened
+                    from a home-screen icon, which has no browser bar under it at
+                    all. download keeps the tap inside the page and just saves the
+                    file, the same way it would on a computer. */}
                 <a
                   href={api.csvUrl(batch.id, mapping)}
+                  download
                   className="inline-flex items-center gap-1.5 rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-700 hover:bg-stone-50"
                 >
                   <Download className="w-4 h-4" /> CSV
                 </a>
                 <a
                   href={api.zipUrl(batch.id, mapping)}
+                  download
                   className="inline-flex items-center gap-1.5 rounded-lg bg-stone-900 px-3 py-2 text-sm text-white hover:bg-stone-800"
                 >
                   <Archive className="w-4 h-4" /> ZIP with photos

@@ -446,10 +446,44 @@ export function hiddenElements(inv: DetailInventory): InventoryElement[] {
   return inv.elements.filter((e) => e.countConfidence === 'low' && e.count !== null);
 }
 
+// Turns what usually hides a part into what staff should physically do about
+// it - "move the tag" beats "take another photo" alone, since the piece
+// already looks fine to the person holding it and "from a different angle"
+// on its own does not say which way to turn it. Matched against the AI's own
+// free-text description of the obstruction (the "arrangement" field), so a
+// keyword it never uses just falls through to the generic instruction below.
+function suggestAction(arrangement: string): string {
+  const text = arrangement.toLowerCase();
+  if (/\btag\b|\bstring\b|\blabel\b/.test(text)) return 'Move the price tag out of the way and take another photo.';
+  if (/\bfinger|\bthumb|\bhand|\bholding/.test(text)) return 'Hold it somewhere else, or set it down, and take another photo without a finger over it.';
+  if (/other earring|the pair|its pair/.test(text)) return 'Photograph this one on its own, not next to its pair.';
+  if (/\bback\b|\breverse\b|\bbehind\b|\bunderside\b/.test(text)) return 'Turn the piece over and take a photo of the back.';
+  if (/out of frame|cut ?off|edge of the photo/.test(text)) return 'Move the camera back so the whole piece fits in the photo.';
+  return 'Turn the piece so this part faces the camera, and take another photo.';
+}
+
+export interface AngleRequest {
+  /** One line per hidden part: what it is, and what to physically do about it. */
+  items: { feature: string; instruction: string }[];
+  /** A single sentence version, for anywhere that only has room for plain text. */
+  summary: string;
+}
+
+export function buildAngleRequest(hidden: InventoryElement[]): AngleRequest {
+  const items = hidden.slice(0, 3).map((e) => ({
+    feature: e.feature,
+    instruction: suggestAction(e.arrangement || ''),
+  }));
+  const summary = items
+    .map((i) => `${i.feature}: ${i.instruction}`)
+    .join(' ');
+  return { items, summary };
+}
+
+// Kept for anywhere that only stores or shows plain text (the audit_reason
+// column, an older client). Says what is hidden and what to do about each
+// part, then the fallback everyone always has.
 export function buildAngleRequestReason(hidden: InventoryElement[]): string {
-  const what = hidden
-    .slice(0, 3)
-    .map((e) => (e.arrangement ? `${e.feature} (${e.arrangement})` : e.feature))
-    .join('; ');
-  return `Part of this piece is hidden in the photo: ${what}. Add one more photo from an angle where it is fully visible, or choose "Process anyway".`;
+  const { summary } = buildAngleRequest(hidden);
+  return `${summary} Or choose "Process anyway" to send it as it is.`;
 }

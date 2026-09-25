@@ -102,6 +102,15 @@ export interface CpcLookupResult {
   normalizedPurity: GoldPurity | null;
   genderGuess: ProductGender | null;
   previousShoots: Product[];
+  /** This exact tag is already mid-process somewhere in the system. */
+  activeDuplicate: Product | null;
+}
+
+/** A failure that isn't about one photo - the whole queue is stuck until this clears. */
+export interface BlockingIssue {
+  code: 'billing_cap' | 'escalation_model_missing';
+  message: string;
+  since: string;
 }
 
 export interface QueueDepth {
@@ -118,19 +127,41 @@ export interface HealthFeatures {
 
 // Human-readable labels for the audit checklist keys the server returns.
 // Keys must match AUDIT_CHECKS in server/ai/operations.ts.
+// Plain, simple words on purpose - this is read by staff who may not be
+// native English speakers, not photographers. "No blown highlights" and
+// "neutral white balance" are correct camera terms nobody on the floor uses.
 export const AUDIT_CHECK_LABELS: Record<string, string> = {
-  sharpFocus: 'Sharp focus',
-  notCropped: 'Nothing cropped',
+  sharpFocus: 'In focus, not blurry',
+  notCropped: 'Whole piece in the photo',
   backgroundCleanWhite: 'Clean white background',
-  noBlownHighlights: 'No blown highlights',
-  neutralWhiteBalance: 'Neutral white balance',
+  noBlownHighlights: 'No harsh white glare',
+  neutralWhiteBalance: 'Natural colour, not yellow or blue',
   colorConsistentAcrossSurface: 'Even colour across the piece',
-  clearlyIdentifiableCategory: 'Clearly identifiable',
+  clearlyIdentifiableCategory: 'Easy to tell what it is',
   stoneCountMatches: 'Stone count unchanged',
   beadDetailPreserved: 'Bead and tassel count unchanged',
   chainPatternMatches: 'Chain and strand pattern unchanged',
   engravingPreserved: 'Engraving and motifs unchanged',
-  naturalDropPhysics: 'Natural drape and drop',
+  naturalDropPhysics: 'Hangs naturally, like the original',
+};
+
+// The same checks, worded as what's WRONG rather than what a pass looks
+// like - AUDIT_CHECK_LABELS above reads backwards when used to explain a
+// failure ("Bead and tassel count unchanged" next to a rejected photo reads
+// as if it passed). Used anywhere a failed check is the headline.
+export const AUDIT_CHECK_FAILURE_LABELS: Record<string, string> = {
+  sharpFocus: 'Photo is blurry',
+  notCropped: 'Part of the piece is cut off',
+  backgroundCleanWhite: "Background isn't clean white",
+  noBlownHighlights: 'Harsh white glare on the piece',
+  neutralWhiteBalance: 'Colour looks too yellow or too blue',
+  colorConsistentAcrossSurface: 'Colour is uneven across the piece',
+  clearlyIdentifiableCategory: "Hard to tell what it is",
+  stoneCountMatches: "Stone count doesn't match the original",
+  beadDetailPreserved: "Bead or tassel count doesn't match the original",
+  chainPatternMatches: "Chain or strand pattern doesn't match the original",
+  engravingPreserved: "Engraving or motifs don't match the original",
+  naturalDropPhysics: "Doesn't hang the way the original does",
 };
 
 export const STATUS_LABELS: Record<ProductStatus, string> = {

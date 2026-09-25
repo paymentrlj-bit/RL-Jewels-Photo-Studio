@@ -243,11 +243,35 @@ describe('asking for another angle', () => {
     expect(hiddenElements(inv).map((e) => e.feature)).toEqual(['hidden fringe']);
   });
 
-  it('says what is hidden and where, in words staff can act on', () => {
+  it('says what is hidden and gives a concrete action, not just "another angle"', () => {
     const reason = buildAngleRequestReason([
       element({ feature: 'halo diamonds', countConfidence: 'low', arrangement: 'two hidden behind the thumb' }),
     ]);
-    expect(reason).toContain('halo diamonds (two hidden behind the thumb)');
+    expect(reason).toContain('halo diamonds:');
+    expect(reason).toMatch(/without a finger over it/);
     expect(reason).toMatch(/Process anyway/);
+  });
+
+  it('matches the obstruction to a specific instruction', () => {
+    const act = (arrangement: string) =>
+      buildAngleRequestReason([element({ feature: 'x', countConfidence: 'low', arrangement })]);
+    expect(act('back half hidden behind the price tag')).toMatch(/Move the price tag/);
+    expect(act('hidden behind the other earring')).toMatch(/on its own/);
+    expect(act('back of the pendant not visible')).toMatch(/Turn the piece over/);
+    expect(act('right edge is cut off, out of frame')).toMatch(/Move the camera back/);
+    expect(act('a shadow falls across it')).toMatch(/Turn the piece so this part faces the camera/);
+  });
+
+  it('covers up to three hidden parts', () => {
+    const reason = buildAngleRequestReason([
+      element({ feature: 'a', countConfidence: 'low', arrangement: 'behind the tag' }),
+      element({ feature: 'b', countConfidence: 'low', arrangement: 'behind a finger' }),
+      element({ feature: 'c', countConfidence: 'low', arrangement: 'out of frame' }),
+      element({ feature: 'd', countConfidence: 'low', arrangement: 'behind the tag' }),
+    ]);
+    expect(reason).toContain('a:');
+    expect(reason).toContain('b:');
+    expect(reason).toContain('c:');
+    expect(reason).not.toContain('d:');
   });
 });

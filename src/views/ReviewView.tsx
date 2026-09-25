@@ -5,24 +5,38 @@
 // that way is 40 separate passes through a four-step flow; here it is one
 // screen you work down.
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
-  CheckCircle2, XCircle, RefreshCw, AlertTriangle, Sparkles, ChevronDown, ChevronUp, Wand2, Image as ImageIcon,
+  CheckCircle2, XCircle, RefreshCw, AlertTriangle, Sparkles, ChevronDown, ChevronUp, Wand2, Image as ImageIcon, Trash2,
 } from 'lucide-react';
 import { api, ApiError } from '../api';
 import { AngleCaptureButton } from '../components/AngleCaptureButton';
 import { FixPanel } from '../components/FixPanel';
 import type { Product } from '../types';
-import { AUDIT_CHECK_LABELS, STATUS_LABELS } from '../types';
+import { AUDIT_CHECK_LABELS, AUDIT_CHECK_FAILURE_LABELS, STATUS_LABELS } from '../types';
 
 interface ReviewViewProps {
   products: Product[];
   onChanged: () => void;
 }
 
+// What staff actually need to know is "what's wrong", in their own words -
+// not the AI's paragraph of reasoning ("Bead count mismatch: original had
+// 14 gold balls (7 per side), enhanced image has 16 gold balls (8 per
+// side)."). Where a checklist exists, this turns the failed checks into the
+// same short phrases used everywhere else in the app (AUDIT_CHECK_LABELS),
+// and keeps the AI's full sentence as an optional "Details" underneath
+// rather than the headline.
+function plainSummary(product: Product): string | null {
+  const failed = Object.entries(product.auditChecklist || {}).filter(([, passed]) => !passed);
+  if (failed.length === 0) return null;
+  return failed.map(([key]) => AUDIT_CHECK_FAILURE_LABELS[key] || AUDIT_CHECK_LABELS[key] || key).join(', ');
+}
+
 export const ReviewView: React.FC<ReviewViewProps> = ({ products, onChanged }) => {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [clearingAll, setClearingAll] = useState(false);
 
   const act = useCallback(async (id: string, action: () => Promise<unknown>) => {
     setBusyId(id);
@@ -39,12 +53,53 @@ export const ReviewView: React.FC<ReviewViewProps> = ({ products, onChanged }) =
 
   const awaiting = products.filter((p) => p.status === 'awaiting_review');
   const problems = products.filter((p) => p.status === 'needs_reshoot' || p.status === 'needs_angle' || p.status === 'failed');
+  // Everything on this screen that is not a finished catalogue entry -
+  // "pending" in the plainest sense. Approved and exported items are never
+  // part of this list, so "Clear all" can never touch finished work.
+  const pendingIds = useMemo(() => [...awaiting, ...problems].map((p) => p.id), [awaiting, problems]);
+
+  const deleteOne = useCallback(async (id: string) => {
+    if (!window.confirm('Delete this photo and its details for good? This cannot be undone.')) return;
+    await act(id, () => api.deleteProduct(id));
+  }, [act]);
+
+  const clearAllPending = useCallback(async () => {
+    if (pendingIds.length === 0) return;
+    if (!window.confirm(
+      `Delete all ${pendingIds.length} pending item${pendingIds.length === 1 ? '' : 's'} on this screen for good? This cannot be undone.`
+    )) return;
+    setClearingAll(true);
+    setError(null);
+    try {
+      await api.bulkDeleteProducts(pendingIds);
+      onChanged();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not clear everything.');
+    } finally {
+      setClearingAll(false);
+    }
+  }, [pendingIds, onChanged]);
 
   return (
     <div className="space-y-8">
       {error && (
         <div className="flex items-start gap-2 rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-red-800 text-sm">
           <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" /><span>{error}</span>
+        </div>
+      )}
+
+      {pendingIds.length > 0 && (
+        // A hard reset for a whole batch gone wrong - a bad lighting setup,
+        // a wrong CPC used all morning - without deleting each item by hand.
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={() => void clearAllPending()}
+            disabled={clearingAll}
+            className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-red-200 px-3 py-2 text-sm text-red-700 hover:bg-red-50 disabled:opacity-60"
+          >
+            <Trash2 className="w-4 h-4" /> {clearingAll ? 'Clearing…' : `Clear all pending (${pendingIds.length})`}
+          </button>
         </div>
       )}
 
@@ -65,6 +120,7 @@ export const ReviewView: React.FC<ReviewViewProps> = ({ products, onChanged }) =
                 busy={busyId === product.id}
                 onApprove={() => act(product.id, () => api.approve(product.id))}
                 onReject={(note) => act(product.id, () => api.reject(product.id, note))}
+                onDelete={() => void deleteOne(product.id)}
                 onChanged={onChanged}
                 onError={setError}
               />
@@ -86,6 +142,7 @@ export const ReviewView: React.FC<ReviewViewProps> = ({ products, onChanged }) =
                 busy={busyId === product.id}
                 onRequeue={() => act(product.id, () => api.requeue(product.id))}
                 onProceed={() => act(product.id, () => api.requeue(product.id, { proceedWithoutAngle: true }))}
+                onDelete={() => void deleteOne(product.id)}
                 onChanged={onChanged}
                 onError={setError}
               />
@@ -102,9 +159,10 @@ const ReviewCard: React.FC<{
   busy: boolean;
   onApprove: () => void;
   onReject: (note: string) => void;
+  onDelete: () => void;
   onChanged: () => void;
   onError: (message: string) => void;
-}> = ({ product, busy, onApprove, onReject, onChanged, onError }) => {
+}> = ({ product, busy, onApprove, onReject, onDelete, onChanged, onError }) => {
   const [showChecks, setShowChecks] = useState(false);
   const [mode, setMode] = useState<'idle' | 'rejecting' | 'fixing'>('idle');
   const [note, setNote] = useState('');
@@ -247,6 +305,16 @@ const ReviewCard: React.FC<{
             >
               Reshoot
             </button>
+            <button
+              type="button"
+              onClick={onDelete}
+              disabled={busy}
+              aria-label="Delete for good"
+              title="Delete for good"
+              className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg border border-stone-300 px-3 py-2 text-stone-500 hover:bg-red-50 hover:text-red-700 disabled:opacity-60"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
           </div>
         )}
       </div>
@@ -259,10 +327,14 @@ const ProblemRow: React.FC<{
   busy: boolean;
   onRequeue: () => void;
   onProceed: () => void;
+  onDelete: () => void;
   onChanged: () => void;
   onError: (message: string) => void;
-}> = ({ product, busy, onRequeue, onProceed, onChanged, onError }) => {
+}> = ({ product, busy, onRequeue, onProceed, onDelete, onChanged, onError }) => {
   const [fixing, setFixing] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
+  const rawReason = product.auditReason || product.reviewNote || product.job?.lastError || 'No reason recorded.';
+  const summary = plainSummary(product);
   return (
     <div className="rounded-xl border border-stone-200 bg-white p-4">
       <div className="flex flex-wrap items-center gap-4">
@@ -279,9 +351,23 @@ const ProblemRow: React.FC<{
               {STATUS_LABELS[product.status]}
             </span>
           </p>
-          <p className="mt-0.5 text-xs text-stone-600">
-            {product.auditReason || product.reviewNote || product.job?.lastError || 'No reason recorded.'}
-          </p>
+          {/* The short version first - what's actually wrong, in the same
+              plain words used everywhere else. The AI's full sentence is one
+              tap away for anyone who wants it, not the first thing read. */}
+          <p className="mt-0.5 text-xs text-stone-600">{summary || rawReason}</p>
+          {summary && rawReason && (
+            <button
+              type="button"
+              onClick={() => setShowDetails((s) => !s)}
+              className="-ml-1 mt-0.5 flex min-h-[32px] items-center gap-0.5 px-1 text-xs text-stone-400 hover:text-stone-700"
+            >
+              {showDetails ? 'Hide details' : 'Show details'}
+              {showDetails ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+            </button>
+          )}
+          {showDetails && summary && (
+            <p className="mt-1 rounded-lg bg-stone-50 p-2 text-xs text-stone-500">{rawReason}</p>
+          )}
           {product.status === 'failed' && (
             // The distinction matters: needs_reshoot means go and rephotograph
             // the piece; failed means the photo is fine and something went wrong
@@ -326,6 +412,16 @@ const ProblemRow: React.FC<{
               <RefreshCw className={`w-4 h-4 ${busy ? 'animate-spin' : ''}`} /> Retry
             </button>
           )}
+          <button
+            type="button"
+            onClick={onDelete}
+            disabled={busy}
+            aria-label="Delete for good"
+            title="Delete for good"
+            className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg border border-stone-300 px-3 py-2 text-stone-500 hover:bg-red-50 hover:text-red-700 disabled:opacity-60"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
         </div>
       </div>
       {fixing && (

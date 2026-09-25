@@ -17,6 +17,7 @@ import type express from 'express';
 import { initDatabase, closeDatabase, getDb } from '../db';
 import { createApp } from '../index';
 import { createUser } from '../auth/users';
+import { getProduct } from '../db/products';
 
 let app: express.Express;
 let dir: string;
@@ -319,5 +320,66 @@ describe('client event logging', () => {
       .send({ events: [{ type: 'js_error', data: { message: 'boom', line: 12 } }] });
     const row = getDb().prepare("SELECT payload FROM events WHERE type = 'client.js_error'").get() as { payload: string };
     expect(JSON.parse(row.payload)).toMatchObject({ message: 'boom', line: 12 });
+  });
+});
+
+describe('duplicate CPC prevention', () => {
+  async function staff() {
+    await createUser({ username: 'staffer', password: 'a-real-password-1', isAdmin: false });
+    return (await loginAs('staffer', 'a-real-password-1')).cookie!;
+  }
+
+  it('refuses a second product for a CPC already in progress', async () => {
+    const cookie = await staff();
+    const first = await request(app).post('/api/products').set('Cookie', cookie).send({ cpc: '1516L350', itemType: 'Pendant' });
+    expect(first.status).toBe(201);
+
+    const second = await request(app).post('/api/products').set('Cookie', cookie).send({ cpc: '1516l350', itemType: 'Pendant' });
+    expect(second.status).toBe(409);
+    expect(second.body.existingProductId).toBe(first.body.product.id);
+  });
+
+  it('allows a fresh shoot once the earlier one is approved or exported', async () => {
+    const cookie = await staff();
+    const first = await request(app).post('/api/products').set('Cookie', cookie).send({ cpc: '1516L351', itemType: 'Pendant' });
+    getDb().prepare("UPDATE products SET status = 'approved' WHERE id = ?").run(first.body.product.id);
+
+    const second = await request(app).post('/api/products').set('Cookie', cookie).send({ cpc: '1516L351', itemType: 'Pendant' });
+    expect(second.status).toBe(201);
+  });
+
+  it('the CPC lookup surfaces the same duplicate before anyone submits', async () => {
+    const cookie = await staff();
+    await request(app).post('/api/products').set('Cookie', cookie).send({ cpc: '1516L352', itemType: 'Ring' });
+    const res = await request(app).get('/api/cpc-lookup?cpc=1516L352').set('Cookie', cookie);
+    expect(res.body.activeDuplicate?.itemType).toBe('Ring');
+  });
+});
+
+describe('bulk delete', () => {
+  async function staff() {
+    await createUser({ username: 'staffer', password: 'a-real-password-1', isAdmin: false });
+    return (await loginAs('staffer', 'a-real-password-1')).cookie!;
+  }
+
+  it('deletes pending items and skips approved/exported ones, even if asked to delete them', async () => {
+    const cookie = await staff();
+    const pending = await request(app).post('/api/products').set('Cookie', cookie).send({ cpc: '9001L1', itemType: 'Ring' });
+    const approved = await request(app).post('/api/products').set('Cookie', cookie).send({ cpc: '9001L2', itemType: 'Ring' });
+    getDb().prepare("UPDATE products SET status = 'approved' WHERE id = ?").run(approved.body.product.id);
+
+    const res = await request(app).post('/api/products/bulk-delete').set('Cookie', cookie)
+      .send({ ids: [pending.body.product.id, approved.body.product.id, 'not-a-real-id'] });
+    expect(res.status).toBe(200);
+    expect(res.body.deleted).toBe(1);
+    expect(res.body.skipped).toEqual([approved.body.product.id]);
+    expect(getProduct(pending.body.product.id)).toBeNull();
+    expect(getProduct(approved.body.product.id)).not.toBeNull();
+  });
+
+  it('needs at least one id', async () => {
+    const cookie = await staff();
+    const res = await request(app).post('/api/products/bulk-delete').set('Cookie', cookie).send({ ids: [] });
+    expect(res.status).toBe(400);
   });
 });

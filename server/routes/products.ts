@@ -16,6 +16,7 @@ import {
   listProducts,
   countProductsByStatus,
   findPreviousShoots,
+  findActiveDuplicate,
   deleteProduct,
   createBatch,
   getBatch,
@@ -36,6 +37,7 @@ import {
   type PhotoSource,
 } from '../storage/images';
 import { enqueueJob, getLatestJobForProduct, queueDepth, requeueJob, getJob } from '../queue/jobs';
+import { getBlockingIssue } from '../queue/systemStatus';
 import { findUserById } from '../auth/users';
 import { deriveProductIdFromCpc } from '../integrations/cpcMaster';
 import { computeNetWeight } from '../catalog/weights';
@@ -150,6 +152,21 @@ productsRouter.post('/products', (req: AuthenticatedRequest, res) => {
   const body = req.body || {};
 
   const cpc = String(body.cpc || '').trim();
+
+  // The same rule the Shoot screen checks before submitting, enforced here
+  // too so a slow connection or a stale screen can never create a second
+  // product for a tag that is already being worked on.
+  if (cpc) {
+    const duplicate = findActiveDuplicate(cpc);
+    if (duplicate) {
+      res.status(409).json({
+        error: `${cpc} is already in the system (${duplicate.itemType || 'no item type yet'}, ${duplicate.status.replace('_', ' ')}). Open it in Review instead of shooting it again.`,
+        existingProductId: duplicate.id,
+      });
+      return;
+    }
+  }
+
   // Net is derived, never taken from the request: Gross - Other, or Gross
   // when there is no other weight.
   const weights = computeNetWeight(body.grossWeightGrams, body.otherWeightGrams);
@@ -245,6 +262,37 @@ productsRouter.delete('/products/:id', (req: AuthenticatedRequest, res) => {
   deleteProduct(product.id);
   logEvent('product.deleted', { productId: product.id, cpc: product.cpc }, actorFrom(req.user));
   res.json({ success: true });
+});
+
+// Deletes several products in one tap - "Clear all pending" in Review, for a
+// batch that needs to be wiped and reshot, or a run of test/mistake entries.
+// Never touches an approved or exported product, even if its id is somehow
+// passed in: those are finished catalogue entries, not "pending" by any
+// definition, and this is a delete with no undo.
+productsRouter.post('/products/bulk-delete', (req: AuthenticatedRequest, res) => {
+  const rawIds: unknown[] = Array.isArray(req.body?.ids) ? req.body.ids : [];
+  const ids: string[] = [...new Set(rawIds.map((v) => String(v)))].slice(0, 500);
+  if (ids.length === 0) {
+    res.status(400).json({ error: 'ids is required and must be a non-empty list.' });
+    return;
+  }
+
+  let deleted = 0;
+  const skipped: string[] = [];
+  for (const id of ids) {
+    const product = getProduct(id);
+    if (!product) continue;
+    if (product.status === 'approved' || product.status === 'exported') {
+      skipped.push(id);
+      continue;
+    }
+    deleteImagesForProduct(product.id);
+    deleteProduct(product.id);
+    deleted++;
+  }
+
+  logEvent('product.bulk_deleted', { requested: ids.length, deleted, skipped: skipped.length }, actorFrom(req.user));
+  res.json({ success: true, deleted, skipped });
 });
 
 // ---------------------------------------------------------------------------
@@ -483,7 +531,7 @@ productsRouter.post('/products/:id/requeue', (req: AuthenticatedRequest, res) =>
 // ---------------------------------------------------------------------------
 
 productsRouter.get('/queue/status', (_req, res) => {
-  res.json({ depth: queueDepth(), productCounts: countProductsByStatus() });
+  res.json({ depth: queueDepth(), productCounts: countProductsByStatus(), blockingIssue: getBlockingIssue() });
 });
 
 productsRouter.get('/jobs/:id', (req, res) => {
