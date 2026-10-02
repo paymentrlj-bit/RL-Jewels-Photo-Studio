@@ -16,10 +16,23 @@ services:
     # network; the internet cannot.
     expose:
       - "3000"
+    # Caps this container's memory so a leak or spike gets killed and
+    # auto-restarted (restart: unless-stopped) in isolation, instead of the
+    # kernel's OOM killer picking victims across the whole host - which is
+    # what happened on 2026-09-22 and again on 2026-10-01/02, taking down
+    # sshd, fwupd, and unattended-upgrades along with the app itself on a
+    # box with no swap. Sized for the box's real ~1GB of RAM; raise this if
+    # the instance is ever resized per ORACLE_CLOUD_SETUP.md's documented
+    # 12GB shape.
+    mem_limit: 500m
     environment:
       NODE_ENV: production
       DATA_DIR: /data
       PORT: 3000
+      # Caps V8's heap below the container's mem_limit so Node fails fast
+      # and predictably (a clean crash-and-restart) instead of RSS creeping
+      # until the kernel OOM-kills the process mid-request.
+      NODE_OPTIONS: --max-old-space-size=384
 
       SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env - a long random string, never changed}
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:?set BOOTSTRAP_ADMIN_PASSWORD in .env}
@@ -50,6 +63,8 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    # See the studio service's mem_limit comment above - same reasoning.
+    mem_limit: 150m
     ports:
       - "80:80"
       - "443:443"
