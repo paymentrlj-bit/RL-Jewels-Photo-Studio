@@ -44,16 +44,23 @@ Once all four are set and the server restarts, the "Upload to Google Drive" opti
 Each product's photo and data file land in a folder structured as:
 
 ```
-<root folder>/<Category>/<Gender>/<Style>/
+<root folder>/<Group>/<Category>/<Gender>/<Style>/
     <CPC>_photo.jpg   - the final, studio-enhanced photo
     <CPC>_data.csv    - the same data as the ERP CSV export (CPC, name, description, purity, gender, size, weights, staff, timestamps)
 ```
 
+- **Group** — the merchandising department several trade categories are shopped under together, matched to the store's own department names where they've confirmed one: every ear-worn style (Jhumka, Chandbali, Bali, studs, Kansakhali, Latkan Tops...) lands under one "Tops Category" folder; every bangle-family piece (Bangle, Kada) under "Bangles Category"; Bracelet has its own "Bracelet Category"; Chain has its own "Chain Category"; the small odds-and-ends the store's own POS also lumps together (Bajuband, Aakda, Bindi, Rakhi, Anklet, Waist Chain) live under "Set Category". Only present for categories that share a department with others — a category distinct enough on its own (Ring, Mangalsutra, Nose Pin, Janwa...) skips straight to the next level.
 - **Category** — the trade category (Ring, Mangalsutra, Chain, Bangle, ...), resolved the same way the rest of the app resolves it, so "Chandrakanta" and "Chand Bali" (two names for the same thing) land in one "Chandbali" folder rather than two.
 - **Gender** — only present for categories that genuinely span more than one (Ring, Chain, Bangle, Kada, Bracelet, Pendant, Coin, Rakhi, Aakda, Mala). A category that's single-gender by convention (Mangalsutra, Nose Pin, Janwa, ...) skips this level entirely rather than adding a folder that would only ever have one subfolder in it.
 - **Style** — the store's own specific style name, exactly as typed or scanned (e.g. "Vati Mangalsutra", "Gents Casting Anguthi"). If that's just the bare category name with nothing more specific, it goes in a folder called "General" instead of nesting a folder under itself.
 
+Which categories share a Group (and which don't) is a config table in `server/catalog/taxonomy.ts` (the `group` field on each `Category` entry) — a one-line change per category to move something, no folder logic to touch.
+
 Re-exporting a batch never re-uploads a product that's already in Drive — once a product is marked exported, it's skipped on every future export click, so retrying a batch or clicking Drive again only sends what's actually new.
+
+## Uploads run in the background
+
+Clicking "Drive" queues the batch's uploads and returns immediately — it does not hold the page open while every product uploads one at a time. The Export screen polls for progress ("Uploading… 12 of 20 done") and shows the final tally once everything's through, the same way photo processing already works elsewhere in the app. You're free to leave the screen; the upload keeps going.
 
 ## Troubleshooting
 

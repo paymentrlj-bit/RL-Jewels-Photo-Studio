@@ -1,7 +1,7 @@
 // Batch export. One CSV and one ZIP for a whole shoot, rather than v1's one
 // file per product.
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Download, Archive, CloudUpload, Check, AlertTriangle, Loader2, FolderOpen } from 'lucide-react';
 import { api, ApiError } from '../api';
 import type { Batch } from '../types';
@@ -10,16 +10,30 @@ interface ExportViewProps {
   driveConfigured: boolean;
 }
 
+// How often to re-check progress on a Drive export in flight. Fast enough
+// that staff aren't left staring at a stale number, cheap enough (one small
+// GET) that polling it costs nothing real.
+const DRIVE_POLL_MS = 1500;
+
+interface DriveProgress {
+  batchId: string;
+  total: number;
+  succeeded: number;
+  inProgress: number;
+  failed: number;
+  alreadyExported: number;
+  folderLink: string;
+  failures: { cpc: string; error: string }[];
+}
+
 export const ExportView: React.FC<ExportViewProps> = ({ driveConfigured }) => {
   const [batches, setBatches] = useState<Batch[]>([]);
   const [mappings, setMappings] = useState<{ id: string; label: string; description?: string; columnCount: number }[]>([]);
   const [mapping, setMapping] = useState('generic');
   const [uploading, setUploading] = useState<string | null>(null);
-  const [result, setResult] = useState<{
-    batchId: string; uploaded: number; failed: number; alreadyExported: number; folderLink: string;
-    failures: { cpc: string; error: string }[];
-  } | null>(null);
+  const [progress, setProgress] = useState<DriveProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const pollTimer = useRef<number | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -34,27 +48,52 @@ export const ExportView: React.FC<ExportViewProps> = ({ driveConfigured }) => {
 
   useEffect(() => { void load(); }, [load]);
 
+  // Stop polling if the component unmounts (or a new export starts) mid-run
+  // - otherwise a stray timer keeps firing against a screen nobody's on.
+  useEffect(() => () => { if (pollTimer.current) window.clearTimeout(pollTimer.current); }, []);
+
+  const poll = useCallback(async (batchId: string, alreadyExportedAtStart: number) => {
+    try {
+      const status = await api.driveExportStatus(batchId);
+      setProgress({
+        batchId,
+        total: status.total,
+        succeeded: status.succeeded,
+        inProgress: status.inProgress,
+        failed: status.failed,
+        alreadyExported: alreadyExportedAtStart,
+        folderLink: status.folderLink,
+        failures: status.failures,
+      });
+      if (status.inProgress > 0) {
+        pollTimer.current = window.setTimeout(() => void poll(batchId, alreadyExportedAtStart), DRIVE_POLL_MS);
+      } else {
+        setUploading(null);
+        await load();
+      }
+    } catch (err) {
+      setUploading(null);
+      setError(err instanceof ApiError ? err.message : 'Could not check Drive export progress.');
+    }
+  }, [load]);
+
   const handleDrive = useCallback(async (batchId: string) => {
+    if (pollTimer.current) window.clearTimeout(pollTimer.current);
     setUploading(batchId);
     setError(null);
-    setResult(null);
+    setProgress(null);
     try {
       const response = await api.exportToDrive(batchId, mapping);
-      setResult({
-        batchId, uploaded: response.uploaded, failed: response.failedCount,
-        alreadyExported: response.alreadyExported, folderLink: response.folderLink,
-        // This is the actual fix: the server always computed exactly why
-        // each item failed, but nothing kept it past this response - staff
-        // saw "2 failed" with no way to know why, forever, even on retry.
-        failures: response.failures || [],
-      });
-      await load();
+      // Queued, not finished - handleDrive returns right away and poll()
+      // takes over reporting progress. This is the actual fix for "why does
+      // it take so long": staff are never stuck on this click waiting for
+      // every product to finish uploading one at a time.
+      await poll(batchId, response.alreadyExported);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Drive upload failed.');
-    } finally {
       setUploading(null);
+      setError(err instanceof ApiError ? err.message : 'Drive upload failed.');
     }
-  }, [mapping, load]);
+  }, [mapping, poll]);
 
   const active = mappings.find((m) => m.id === mapping);
 
@@ -139,24 +178,36 @@ export const ExportView: React.FC<ExportViewProps> = ({ driveConfigured }) => {
               </div>
             </div>
 
-            {result?.batchId === batch.id && (
-              <div className={`mt-3 rounded-lg px-3 py-2 text-sm ${result.failed > 0 ? 'bg-amber-50 text-amber-900' : 'bg-emerald-50 text-emerald-800'}`}>
+            {progress?.batchId === batch.id && (
+              <div
+                className={`mt-3 rounded-lg px-3 py-2 text-sm ${
+                  progress.inProgress > 0
+                    ? 'bg-blue-50 text-blue-900'
+                    : progress.failed > 0
+                      ? 'bg-amber-50 text-amber-900'
+                      : 'bg-emerald-50 text-emerald-800'
+                }`}
+              >
                 <div className="flex items-center gap-2">
-                  {result.failed > 0 ? <AlertTriangle className="w-4 h-4" /> : <Check className="w-4 h-4" />}
+                  {progress.inProgress > 0
+                    ? <Loader2 className="w-4 h-4 animate-spin" />
+                    : progress.failed > 0 ? <AlertTriangle className="w-4 h-4" /> : <Check className="w-4 h-4" />}
                   <span>
-                    {result.uploaded} uploaded
-                    {result.alreadyExported > 0 && `, ${result.alreadyExported} already in Drive (skipped)`}
-                    {result.failed > 0 && `, ${result.failed} failed — retry to pick up just the failures`}
+                    {progress.inProgress > 0
+                      ? `Uploading… ${progress.succeeded} of ${progress.total} done`
+                      : `${progress.succeeded} uploaded`}
+                    {progress.alreadyExported > 0 && `, ${progress.alreadyExported} already in Drive (skipped)`}
+                    {progress.failed > 0 && progress.inProgress === 0 && `, ${progress.failed} failed — retry to pick up just the failures`}
                   </span>
                 </div>
-                {result.folderLink && (
-                  <a href={result.folderLink} target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-1 text-xs underline">
+                {progress.folderLink && progress.inProgress === 0 && (
+                  <a href={progress.folderLink} target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-1 text-xs underline">
                     <FolderOpen className="w-3 h-3" /> Open the Drive folder
                   </a>
                 )}
-                {result.failures.length > 0 && (
+                {progress.failures.length > 0 && progress.inProgress === 0 && (
                   <ul className="mt-2 space-y-1 border-t border-amber-200 pt-2 text-xs">
-                    {result.failures.map((f) => (
+                    {progress.failures.map((f) => (
                       <li key={f.cpc}><strong>{f.cpc || 'unknown item'}:</strong> {f.error}</li>
                     ))}
                   </ul>

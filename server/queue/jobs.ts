@@ -15,7 +15,7 @@
 
 import { getDb, newId, nowIso } from '../db';
 
-export type JobType = 'enhance' | 'copy';
+export type JobType = 'enhance' | 'copy' | 'drive_export';
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'needs_reshoot';
 
 export interface Job {
