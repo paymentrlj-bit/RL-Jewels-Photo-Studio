@@ -54,6 +54,7 @@ import {
   type ReferenceImage,
 } from '../ai/inventory';
 import { aspectRatioFor, describeItemType, parseLengthInches } from '../catalog/taxonomy';
+import { indexProduct } from '../similarity';
 import { computeRisk } from '../catalog/risk';
 import { describeNameRules } from '../catalog/copyRules';
 import { buildStaffTagsBlock } from '../catalog/tags';
@@ -585,6 +586,7 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
       // A successful Gemini call at all (the outline call this needed) is
       // proof the account isn't billing-capped, whichever path got here.
       clearBlockingIssue();
+      await indexProduct(product.id, 'studio');
       // No checklist: the audit's verdict was about the AI version, not this.
       finish('awaiting_review', { reason, checklist: null, modelUsed: 'faithful', attemptCount: why.attemptCount, renderMode: 'faithful' });
       setProductStatus(product.id, 'awaiting_review');
@@ -914,6 +916,7 @@ Correct this specific issue while still following every rule above.`;
 
   clearBlockingIssue();
   await attachCutOut();
+  await indexProduct(product.id, 'studio');
   finish('awaiting_review', { reason: audit.reason, checklist: audit.checklist, modelUsed, attemptCount });
   setProductStatus(product.id, 'awaiting_review');
   completeJob(job.id, 'succeeded', {

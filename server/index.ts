@@ -31,6 +31,8 @@ import { catalogRouter } from './routes/catalog';
 import { exportRouter } from './routes/exports';
 import { adminRouter, clientRouter } from './routes/admin';
 import { publicRouter } from './routes/publicFeed';
+import { similarRouter } from './routes/similar';
+import { startSimilarityBackfill } from './similarity';
 
 // Builds the API app: JSON body parsing, every router, and the /api 404
 // fallback. Split out from main() so tests can mount exactly what production
@@ -79,6 +81,7 @@ export function createApp(): express.Express {
   app.use('/api', authRouter);
   app.use('/api', productsRouter);
   app.use('/api', catalogRouter);
+  app.use('/api', similarRouter);
   app.use('/api', exportRouter);
   app.use('/api', clientRouter);
   app.use('/api/admin', adminRouter);
@@ -178,6 +181,7 @@ async function main(): Promise<void> {
   }, 5 * 60 * 1000);
   heartbeat.unref();
   startModelHealthChecks();
+  startSimilarityBackfill();
 
   const server = app.listen(config.port, () => {
     console.log(`\nRL Jewels Photo Studio`);

@@ -39,7 +39,7 @@ afterAll(() => {
 // one test can't bleed into the next.
 beforeEach(() => {
   const db = getDb();
-  db.exec('DELETE FROM fix_requests; DELETE FROM jobs; DELETE FROM photos; DELETE FROM products; DELETE FROM batches; DELETE FROM users; DELETE FROM login_attempts; DELETE FROM events;');
+  db.exec('DELETE FROM product_vectors; DELETE FROM fix_requests; DELETE FROM jobs; DELETE FROM photos; DELETE FROM products; DELETE FROM batches; DELETE FROM users; DELETE FROM login_attempts; DELETE FROM events;');
 });
 
 async function loginAs(username: string, password: string) {
@@ -340,6 +340,44 @@ describe('sharing and the Meta catalogue feed', () => {
     expect((await request(app).patch(`/api/products/${id}`).set('Cookie', cookie).send({ priceInr: 'a lot' })).status).toBe(400);
     const ok = await request(app).patch(`/api/products/${id}`).set('Cookie', cookie).send({ priceInr: 'Rs. 1,25,000' });
     expect(ok.body.product.priceInr).toBe('125000');
+  });
+});
+
+describe('look-alike search', () => {
+  async function photoOf(bar: boolean) {
+    const sharp = (await import('sharp')).default;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300"><rect width="100%" height="100%" fill="#222244"/>${bar
+      ? '<rect x="40" y="130" width="220" height="40" fill="#c9a227"/>'
+      : '<circle cx="150" cy="150" r="70" fill="none" stroke="#c9a227" stroke-width="22"/>'}</svg>`;
+    return 'data:image/jpeg;base64,' + (await sharp(Buffer.from(svg)).jpeg().toBuffer()).toString('base64');
+  }
+
+  it('warns before shooting a design that is already in the system, and says nothing for a new one', async () => {
+    await createUser({ username: 'looker', password: 'a-real-password-1', isAdmin: false });
+    const cookie = (await loginAs('looker', 'a-real-password-1')).cookie!;
+    const created = await request(app).post('/api/products').set('Cookie', cookie).send({ itemType: 'Pendant', name: 'Ring pendant' });
+    const id = created.body.product.id as string;
+    const ring = await photoOf(false);
+    await request(app).post(`/api/products/${id}/photo`).set('Cookie', cookie).send({ imageBase64: ring });
+    await new Promise((r) => setTimeout(r, 400)); // the fingerprint is made in the background
+
+    const same = await request(app).post('/api/similar/check').set('Cookie', cookie).send({ imageBase64: ring });
+    expect(same.status).toBe(200);
+    expect(same.body.matches[0]).toMatchObject({ productId: id, tier: 'same', name: 'Ring pendant' });
+
+    const other = await request(app).post('/api/similar/check').set('Cookie', cookie).send({ imageBase64: await photoOf(true) });
+    expect(other.body.matches).toEqual([]);
+
+    const mine = await request(app).get(`/api/products/${id}/similar`).set('Cookie', cookie);
+    expect(mine.status).toBe(200);
+  });
+
+  it('does not stop a shoot when the photo cannot be read', async () => {
+    await createUser({ username: 'looker2', password: 'a-real-password-1', isAdmin: false });
+    const cookie = (await loginAs('looker2', 'a-real-password-1')).cookie!;
+    const res = await request(app).post('/api/similar/check').set('Cookie', cookie).send({ imageBase64: 'data:image/jpeg;base64,AAAA' });
+    expect(res.status).toBe(200);
+    expect(res.body.matches).toEqual([]);
   });
 });
 

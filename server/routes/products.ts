@@ -41,6 +41,7 @@ import { getBlockingIssue } from '../queue/systemStatus';
 import { findUserById } from '../auth/users';
 import { deriveProductIdFromCpc } from '../integrations/cpcMaster';
 import { computeNetWeight } from '../catalog/weights';
+import { indexProduct } from '../similarity';
 import { cleanPrice } from '../sharing/caption';
 import { cleanTags, cleanStaffNote, recordTagsPicked, recordTagsApproved } from '../catalog/tags';
 import { isFixCode, cleanNote, USE_REAL_PHOTO } from '../catalog/fixes';
@@ -360,6 +361,8 @@ productsRouter.post('/products/:id/photo', (req: AuthenticatedRequest, res) => {
   });
 
   setProductStatus(product.id, 'queued');
+  // Fingerprint the new counter photo so the next shoot can be checked against it.
+  void indexProduct(product.id, 'original');
   logEvent('product.photo_attached', {
     productId: product.id,
     photoId: photo.id,
@@ -541,6 +544,7 @@ productsRouter.post('/products/:id/use-cutout', (req: AuthenticatedRequest, res)
     mimeType: cutout.mimeType,
     source: 'faithful',
   });
+  void indexProduct(product.id, 'studio');
   logEvent('product.cutout_chosen', { productId: product.id, cpc: product.cpc, photoId: photo.id, itemType: product.itemType || null }, actorFrom(req.user));
   res.json({ product: decorate(product.id) });
 });

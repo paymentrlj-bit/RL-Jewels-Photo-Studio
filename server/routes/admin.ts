@@ -18,6 +18,8 @@ import {
 import { getEnhancePromptState, setEnhancePrompt, resetEnhancePrompt } from '../settings';
 import { countProductsByStatus, listOutcomeRows } from '../db/products';
 import { summariseOutcomes } from '../catalog/outcomes';
+import { findDuplicatePairs, KIND_STUDIO } from '../similarity';
+import { describeMatches } from './similar';
 import { buildMetaFeed } from '../sharing/metaFeed';
 import { baseUrlFor, collectFeedProducts } from './publicFeed';
 import { queueDepth } from '../queue/jobs';
@@ -301,6 +303,19 @@ adminRouter.get('/meta-feed', (req, res) => {
     skipped,
     hasLinkBase: Boolean(config.catalogLinkBase),
     hasPublicBaseUrl: Boolean(config.publicBaseUrl),
+  });
+});
+
+// Pieces in the catalogue that look like each other: likely the same design
+// shot twice, or lots of one design. For tidying the catalogue; nothing here is
+// deleted automatically.
+adminRouter.get('/duplicates', (_req, res) => {
+  const pairs = findDuplicatePairs(KIND_STUDIO, undefined, 40);
+  const describe = (id: string) => describeMatches([{ productId: id, score: 0, tier: 'similar' }])[0];
+  res.json({
+    pairs: pairs
+      .map((p) => ({ score: p.score, tier: p.tier, a: describe(p.a), b: describe(p.b) }))
+      .filter((p) => p.a && p.b),
   });
 });
 

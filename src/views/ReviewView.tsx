@@ -13,6 +13,7 @@ import { api, ApiError } from '../api';
 import { AngleCaptureButton } from '../components/AngleCaptureButton';
 import { FixPanel } from '../components/FixPanel';
 import { PhotoViewer, type ViewerPhoto } from '../components/PhotoViewer';
+import { SimilarPieces } from '../components/SimilarList';
 import type { Product } from '../types';
 import { AUDIT_CHECK_LABELS, AUDIT_CHECK_FAILURE_LABELS, STATUS_LABELS } from '../types';
 
@@ -264,6 +265,8 @@ const ReviewCard: React.FC<{
             {showChecks ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
           </button>
         )}
+
+        <SimilarPieces productId={product.id} />
 
         {showChecks && product.auditChecklist && (
           <ul className="space-y-1 rounded-lg bg-stone-50 p-2">

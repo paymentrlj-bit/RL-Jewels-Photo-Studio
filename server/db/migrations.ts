@@ -241,6 +241,26 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE products ADD COLUMN price_inr TEXT NOT NULL DEFAULT '';
     `,
   },
+  {
+    version: 6,
+    name: 'visual fingerprints for duplicate and similar-product search',
+    up: `
+      -- One row per product per kind of photo (see similarity/features.ts).
+      -- 'kind' is the key to growing this later: a learned embedding model
+      -- becomes just another kind, searched by the same code.
+      CREATE TABLE product_vectors (
+        product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+        kind       TEXT NOT NULL,
+        dim        INTEGER NOT NULL,
+        vec        BLOB NOT NULL,
+        dhash      TEXT NOT NULL DEFAULT '',
+        aspect     REAL NOT NULL DEFAULT 1,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (product_id, kind)
+      );
+      CREATE INDEX idx_product_vectors_kind ON product_vectors (kind);
+    `,
+  },
 ];
 
 export function runMigrations(db: BetterSqlite3.Database): void {
