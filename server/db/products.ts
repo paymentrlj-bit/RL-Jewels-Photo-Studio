@@ -404,6 +404,13 @@ export function countProductsByStatus(): Record<string, number> {
   return Object.fromEntries(rows.map((r) => [r.status, r.n]));
 }
 
+export function listOutcomeRows(sinceIso: string): { itemType: string; status: string; riskTier: string; riskScore: number | null }[] {
+  const rows = getDb()
+    .prepare("SELECT item_type, status, risk_tier, risk_score FROM products WHERE created_at >= ? AND status NOT IN ('draft')")
+    .all(sinceIso) as { item_type: string; status: string; risk_tier: string; risk_score: number | null }[];
+  return rows.map((r) => ({ itemType: r.item_type, status: r.status, riskTier: r.risk_tier, riskScore: r.risk_score }));
+}
+
 // "Have we already shot this?" - the question a 3,247-SKU catalogue run needs
 // answered constantly and v1 could not answer at all, because it kept no
 // history. Matches on the catalog ProductId, so a different lot of the same

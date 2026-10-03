@@ -139,3 +139,25 @@ describe('hidden detail', () => {
     expect(hiddenElements(inv!).map((e) => e.feature)).toEqual(['black bead string']);
   });
 });
+
+import { summariseOutcomes } from '../catalog/outcomes';
+
+describe('approval rate by category', () => {
+  const row = (itemType: string, status: string, riskTier = 'low', riskScore: number | null = 10) => ({ itemType, status, riskTier, riskScore });
+
+  it('counts approved against reshoot, ignores pieces still waiting, and lists the weakest first', () => {
+    const { byCategory } = summariseOutcomes([
+      row('Ring', 'approved'), row('Ring', 'exported'), row('Ring', 'needs_reshoot'), row('Ring', 'awaiting_review'),
+      row('Long chain pot', 'needs_reshoot', 'high', 80), row('Long chain pot', 'failed', 'high', 90),
+      row('xyzzy', 'queued'),
+    ]);
+    expect(byCategory[0]).toMatchObject({ label: 'Mangalsutra', approved: 0, reshoot: 2, approvalRate: 0, avgRisk: 85 });
+    expect(byCategory.find((g) => g.label === 'Ring')).toMatchObject({ total: 4, approved: 2, reshoot: 1, approvalRate: 66.7 });
+    expect(byCategory.find((g) => g.label === 'Not recognised')?.approvalRate).toBeNull();
+  });
+
+  it('splits by risk tier so the score can be checked against reality', () => {
+    const { byRiskTier } = summariseOutcomes([row('Ring', 'approved', 'low'), row('Ring', 'needs_reshoot', 'high', 70)]);
+    expect(byRiskTier.map((g) => [g.label, g.approvalRate])).toEqual([['low', 100], ['high', 0]]);
+  });
+});

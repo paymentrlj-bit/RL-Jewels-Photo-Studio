@@ -77,6 +77,11 @@ export function isModelNotFoundError(err: unknown): boolean {
   return /not found|NOT_FOUND|is not supported|does not exist|unknown model/i.test(message);
 }
 
+// Output resolution of the enhanced photo. 1K is plenty for web/catalogue use
+// and about a third cheaper; set ENHANCE_IMAGE_SIZE=2K to go to 2K without a
+// code change if pinch-zoom detail or print ever matters.
+export const ENHANCE_IMAGE_SIZE: '1K' | '2K' = process.env.ENHANCE_IMAGE_SIZE?.trim().toUpperCase() === '2K' ? '2K' : '1K';
+
 export const COST_PER_CALL_USD: Record<string, number> = {
   [MODEL_ENHANCE_DEFAULT]: Number(process.env.COST_ENHANCE_DEFAULT_USD) || 0.04,
   [MODEL_ENHANCE_ESCALATED]: Number(process.env.COST_ENHANCE_ESCALATED_USD) || 0.13,

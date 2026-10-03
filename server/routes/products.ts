@@ -56,6 +56,13 @@ function decorate(productId: string) {
 
   const original = getLatestPhoto(productId, 'original');
   const processed = getLatestPhoto(productId, 'processed');
+  // The real-photo cut-out kept beside an AI render that passed, so the
+  // reviewer can compare the two. Only for the current original, and only while
+  // the catalogue photo is still the AI one.
+  const cutout = getLatestPhoto(productId, 'cutout');
+  const showCutout = Boolean(
+    cutout && original && processed && processed.source !== 'faithful' && cutout.createdAt >= original.createdAt
+  );
   // Only angles taken for the current original - an older shoot's angles no
   // longer describe what is being processed.
   const angles = original
@@ -71,6 +78,7 @@ function decorate(productId: string) {
     processedPhotoId: processed?.id || null,
     // 'faithful' = the piece cut out of the real photo, nothing generated.
     renderMode: processed ? (processed.source === 'faithful' ? 'faithful' : 'ai') : null,
+    cutoutPhotoId: showCutout ? cutout!.id : null,
     anglePhotoIds: angles.map((p) => p.id),
     job: job
       ? {
@@ -495,6 +503,30 @@ productsRouter.post('/products/:id/fix', (req: AuthenticatedRequest, res) => {
     itemType: product.itemType || null,
   }, actorFrom(req.user));
   res.status(202).json({ product: decorate(product.id), jobId: job.id });
+});
+
+// "Use the real photo": makes the cut-out kept beside the AI render the
+// catalogue photo. No AI call - it is already made - so it is instant and free.
+productsRouter.post('/products/:id/use-cutout', (req: AuthenticatedRequest, res) => {
+  const product = getProduct(req.params.id);
+  if (!product) {
+    res.status(404).json({ error: 'Product not found.' });
+    return;
+  }
+  const cutout = getLatestPhoto(product.id, 'cutout');
+  if (!cutout || !imageExists(cutout)) {
+    res.status(400).json({ error: 'There is no real-photo version to switch to for this piece.' });
+    return;
+  }
+  const photo = saveImage({
+    productId: product.id,
+    kind: 'processed',
+    data: readImageBuffer(cutout),
+    mimeType: cutout.mimeType,
+    source: 'faithful',
+  });
+  logEvent('product.cutout_chosen', { productId: product.id, cpc: product.cpc, photoId: photo.id, itemType: product.itemType || null }, actorFrom(req.user));
+  res.json({ product: decorate(product.id) });
 });
 
 // Re-runs the pipeline on the photo already on file - for a transient failure,

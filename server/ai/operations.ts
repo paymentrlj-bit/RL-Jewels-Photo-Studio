@@ -11,6 +11,7 @@ import {
   MODEL_SEGMENT,
   MODEL_COPY,
   ENHANCE_TIMEOUT_MS,
+  ENHANCE_IMAGE_SIZE,
   AUDIT_TIMEOUT_MS,
   SEGMENT_TIMEOUT_MS,
   extractUsage,
@@ -61,7 +62,7 @@ export async function enhanceImage(
         // 1K is visually indistinguishable from 2K at normal web/catalogue
         // display sizes and costs roughly 33% less per image - 2K only
         // matters for print or heavy pinch-zoom, neither of which applies here.
-        imageConfig: { aspectRatio, imageSize: '1K' },
+        imageConfig: { aspectRatio, imageSize: ENHANCE_IMAGE_SIZE },
         abortSignal: controller.signal,
       } as never,
     });

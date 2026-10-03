@@ -18,6 +18,7 @@ import { initDatabase, closeDatabase, getDb } from '../db';
 import { createApp } from '../index';
 import { createUser } from '../auth/users';
 import { getProduct } from '../db/products';
+import { saveImage } from '../storage/images';
 import { config } from '../config';
 
 let app: express.Express;
@@ -254,6 +255,38 @@ describe('net weight is worked out, never typed', () => {
     const cookie = await staff();
     const res = await request(app).post('/api/products').set('Cookie', cookie)
       .send({ itemType: 'Ring', grossWeightGrams: '1', otherWeightGrams: '2' });
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('real photo beside the AI render', () => {
+  const jpeg = 'data:image/jpeg;base64,' + Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString('base64');
+
+  it('shows the cut-out next to an AI render and lets the reviewer switch to it', async () => {
+    await createUser({ username: 'cutter', password: 'a-real-password-1', isAdmin: false });
+    const cookie = (await loginAs('cutter', 'a-real-password-1')).cookie!;
+    const created = await request(app).post('/api/products').set('Cookie', cookie).send({ itemType: 'Ring' });
+    const id = created.body.product.id as string;
+    await request(app).post(`/api/products/${id}/photo`).set('Cookie', cookie).send({ imageBase64: jpeg });
+    saveImage({ productId: id, kind: 'processed', data: jpeg, source: 'upload' });
+    const cut = saveImage({ productId: id, kind: 'cutout', data: jpeg, source: 'faithful' });
+
+    const list = await request(app).get(`/api/products/${id}`).set('Cookie', cookie);
+    expect(list.body.product.renderMode).toBe('ai');
+    expect(list.body.product.cutoutPhotoId).toBe(cut.id);
+
+    const res = await request(app).post(`/api/products/${id}/use-cutout`).set('Cookie', cookie);
+    expect(res.status).toBe(200);
+    // Now the catalogue photo IS the real photo, so there is nothing left to compare.
+    expect(res.body.product.renderMode).toBe('faithful');
+    expect(res.body.product.cutoutPhotoId).toBeNull();
+  });
+
+  it('refuses when there is no cut-out', async () => {
+    await createUser({ username: 'nocut', password: 'a-real-password-1', isAdmin: false });
+    const cookie = (await loginAs('nocut', 'a-real-password-1')).cookie!;
+    const created = await request(app).post('/api/products').set('Cookie', cookie).send({ itemType: 'Ring' });
+    const res = await request(app).post(`/api/products/${created.body.product.id}/use-cutout`).set('Cookie', cookie);
     expect(res.status).toBe(400);
   });
 });

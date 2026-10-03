@@ -12,6 +12,7 @@ import {
 import { api, ApiError } from '../api';
 import { AngleCaptureButton } from '../components/AngleCaptureButton';
 import { FixPanel } from '../components/FixPanel';
+import { PhotoViewer, type ViewerPhoto } from '../components/PhotoViewer';
 import type { Product } from '../types';
 import { AUDIT_CHECK_LABELS, AUDIT_CHECK_FAILURE_LABELS, STATUS_LABELS } from '../types';
 
@@ -167,27 +168,55 @@ const ReviewCard: React.FC<{
   const [mode, setMode] = useState<'idle' | 'rejecting' | 'fixing'>('idle');
   const [note, setNote] = useState('');
   const isFaithful = product.renderMode === 'faithful';
+  const [viewerAt, setViewerAt] = useState<number | null>(null);
+
+  // Every photo of this piece that exists, in the order they are compared.
+  const photos: ViewerPhoto[] = [];
+  if (product.processedPhotoId) photos.push({ label: isFaithful ? 'Real photo, cut out' : 'Studio', url: api.photoUrl(product.processedPhotoId) });
+  if (product.originalPhotoId) photos.push({ label: 'Original', url: api.photoUrl(product.originalPhotoId) });
+  if (product.cutoutPhotoId) photos.push({ label: 'Real photo, cut out', url: api.photoUrl(product.cutoutPhotoId) });
+  const indexOf = (url: string) => photos.findIndex((p) => p.url === url);
+  const thumbs = photos.slice(1);
+
+  const useCutout = async () => {
+    try {
+      await api.useCutout(product.id);
+      onChanged();
+    } catch (err) {
+      onError(err instanceof ApiError ? err.message : 'Could not switch to the real photo.');
+    }
+  };
 
   const failedChecks = Object.entries(product.auditChecklist || {}).filter(([, passed]) => !passed);
 
   return (
     <article className="flex flex-col overflow-hidden rounded-2xl border border-stone-200 bg-white">
-      <div className="grid grid-cols-2 gap-px bg-stone-200">
-        <figure className="bg-white">
-          {product.originalPhotoId && (
-            <img src={api.photoUrl(product.originalPhotoId)} alt="Original counter photo" className="aspect-square w-full object-contain bg-stone-50" />
-          )}
-          <figcaption className="px-2 py-1 text-center text-[11px] uppercase tracking-wide text-stone-500">Original</figcaption>
-        </figure>
-        <figure className="bg-white">
-          {product.processedPhotoId && (
-            <img src={api.photoUrl(product.processedPhotoId)} alt="Studio-finished photo" className="aspect-square w-full object-contain bg-stone-50" />
-          )}
-          <figcaption className={`px-2 py-1 text-center text-[11px] uppercase tracking-wide ${isFaithful ? 'text-emerald-700' : 'text-amber-700'}`}>
-            {isFaithful ? 'Real photo, cut out' : 'Studio'}
-          </figcaption>
-        </figure>
+      <div className="space-y-px bg-stone-200">
+        {/* The finished photo is the one being judged, so it gets the width. */}
+        {photos[0] && (
+          <figure className="bg-white">
+            <button type="button" onClick={() => setViewerAt(0)} aria-label={`View ${photos[0].label} photo full size`} className="block w-full">
+              <img src={photos[0].url} alt={`${photos[0].label} photo`} className="aspect-square w-full object-contain bg-stone-50" />
+            </button>
+            <figcaption className={`px-2 py-1 text-center text-[11px] uppercase tracking-wide ${isFaithful ? 'text-emerald-700' : 'text-amber-700'}`}>
+              {photos[0].label} · tap to view full size
+            </figcaption>
+          </figure>
+        )}
+        {thumbs.length > 0 && (
+          <div className={`grid gap-px ${thumbs.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
+            {thumbs.map((p) => (
+              <figure key={p.url} className="bg-white">
+                <button type="button" onClick={() => setViewerAt(indexOf(p.url))} aria-label={`View ${p.label} photo full size`} className="block w-full">
+                  <img src={p.url} alt={`${p.label} photo`} className={`w-full object-contain bg-stone-50 ${thumbs.length > 1 ? 'aspect-square' : 'aspect-[4/3]'}`} />
+                </button>
+                <figcaption className="px-2 py-1 text-center text-[11px] uppercase tracking-wide text-stone-500">{p.label}</figcaption>
+              </figure>
+            ))}
+          </div>
+        )}
       </div>
+      {viewerAt !== null && <PhotoViewer photos={photos} startIndex={viewerAt} onClose={() => setViewerAt(null)} />}
 
       <div className="flex-1 space-y-2 p-4">
         <p className="text-sm font-semibold text-stone-900">{product.name || product.itemType || 'Untitled'}</p>
@@ -289,7 +318,7 @@ const ReviewCard: React.FC<{
             </div>
           </div>
         ) : (
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <button
               type="button"
               onClick={onApprove}
@@ -298,6 +327,17 @@ const ReviewCard: React.FC<{
             >
               <CheckCircle2 className="w-4 h-4" /> Approve
             </button>
+            {product.cutoutPhotoId && (
+              <button
+                type="button"
+                onClick={useCutout}
+                disabled={busy}
+                title="Use the real photo cut out onto white instead of the AI version"
+                className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-emerald-600 px-3 py-2 text-sm text-emerald-800 hover:bg-emerald-50 disabled:opacity-60"
+              >
+                <ImageIcon className="w-4 h-4" /> Use real photo
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setMode('fixing')}
