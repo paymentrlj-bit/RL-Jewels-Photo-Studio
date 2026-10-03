@@ -163,8 +163,8 @@ export default function App() {
   const tabs: { key: Tab; label: string; icon: typeof Camera; badge?: number; adminOnly?: boolean }[] = [
     { key: 'shoot', label: 'Shoot', icon: Camera },
     { key: 'review', label: 'Review', icon: ClipboardCheck, badge: awaitingCount + problemCount },
-    { key: 'share', label: 'Share', icon: Share2 },
     { key: 'export', label: 'Export', icon: PackageOpen },
+    { key: 'share', label: 'Share', icon: Share2 },
     { key: 'admin', label: 'Admin', icon: Settings, adminOnly: true },
   ];
 
