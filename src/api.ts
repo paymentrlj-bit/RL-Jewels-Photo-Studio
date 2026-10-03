@@ -141,6 +141,19 @@ export const api = {
   analytics: (days = 30) => request<AnalyticsSummary>(`/admin/analytics/summary?days=${days}`),
 };
 
+export interface StaffScore {
+  userId: string;
+  name: string;
+  shot: number;
+  approved: number;
+  reshoot: number;
+  needAngle: number;
+  approvalRate: number | null;
+  avgRisk: number | null;
+  topIssue: { check: string; count: number } | null;
+  fewShots: boolean;
+}
+
 export interface SimilarMatch {
   productId: string;
   score: number;
@@ -193,6 +206,7 @@ export interface AnalyticsSummary {
     note: string;
   };
   qualityChecks: { verdictsAnalyzed: number; failuresByCheck: Record<string, number>; note: string };
+  staff: StaffScore[];
   outcomes: {
     byCategory: OutcomeGroup[];
     byRiskTier: OutcomeGroup[];

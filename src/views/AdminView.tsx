@@ -4,10 +4,22 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Users, Wand2, BarChart3, AlertTriangle, Check, UserPlus, RotateCcw, KeyRound } from 'lucide-react';
 import { api, ApiError, type AnalyticsSummary, type MetaFeedStatus } from '../api';
 import { SimilarList } from '../components/SimilarList';
+import { AUDIT_CHECK_FAILURE_LABELS } from '../types';
 import type { SessionUser } from '../types';
 import { AUDIT_CHECK_LABELS } from '../types';
 
 type Tab = 'insights' | 'staff' | 'prompt';
+
+// What to tell someone whose pieces keep failing the same check - the fixes
+// that live at the counter rather than in the prompt.
+const COACHING: Record<string, string> = {
+  sharpFocus: 'Tap the piece on the screen to focus; rest the phone on something steady.',
+  notCropped: 'Step back so the whole piece sits inside the frame.',
+  backgroundCleanWhite: 'Clear the tag, ruler and anything else from the velvet.',
+  noBlownHighlights: 'Turn the flash off; use the lightbox.',
+  neutralWhiteBalance: 'Shoot under the same light each time.',
+  clearlyIdentifiableCategory: 'Lay the piece out the way the shooting tip says.',
+};
 
 export const AdminView: React.FC = () => {
   const [tab, setTab] = useState<Tab>('insights');
@@ -145,6 +157,46 @@ const InsightsPanel: React.FC = () => {
           )}
         </section>
       )}
+
+      <section className="rounded-2xl border border-stone-200 bg-white p-5">
+        <h3 className="font-semibold text-stone-900">Staff scorecard</h3>
+        <p className="mt-1 text-xs text-stone-500">
+          How each person&apos;s shoots turned out in the last {data.windowDays} days. A coaching tool: with few pieces the rates mean little, so read the counts first.
+        </p>
+        {data.staff.length === 0 ? (
+          <p className="mt-3 text-sm text-stone-500">Nothing shot in this period yet.</p>
+        ) : (
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full min-w-[560px] text-sm">
+              <thead>
+                <tr className="border-b border-stone-200 text-left text-xs uppercase tracking-wide text-stone-500">
+                  <th className="pb-2">Name</th><th className="pb-2">Shot</th><th className="pb-2">Approved</th>
+                  <th className="pb-2">Reshoot</th><th className="pb-2">Asked for another photo</th><th className="pb-2">Approval</th><th className="pb-2">Most common problem</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.staff.map((s) => (
+                  <tr key={s.userId} className="border-b border-stone-100 align-top">
+                    <td className="py-2 font-medium text-stone-800">{s.name}</td>
+                    <td className="py-2">{s.shot}</td>
+                    <td className="py-2">{s.approved}</td>
+                    <td className="py-2">{s.reshoot}</td>
+                    <td className="py-2">{s.needAngle}</td>
+                    <td className="py-2">
+                      {s.approvalRate === null ? '—' : `${s.approvalRate}%`}
+                      {s.fewShots && <span className="ml-1 text-[11px] text-stone-400">(few pieces)</span>}
+                    </td>
+                    <td className="py-2 text-stone-600">
+                      {s.topIssue ? `${AUDIT_CHECK_FAILURE_LABELS[s.topIssue.check] ?? s.topIssue.check} (${s.topIssue.count})` : '—'}
+                      {s.topIssue && COACHING[s.topIssue.check] && <span className="block text-[11px] text-stone-400">{COACHING[s.topIssue.check]}</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
 
       {dupes && (
         <section className="rounded-2xl border border-stone-200 bg-white p-5">
