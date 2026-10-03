@@ -12,10 +12,10 @@
 // testing at the store it never worked the way it needed to, and keeping a
 // half-working second capture route around is worse than not having one.
 
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Camera, ScanLine, AlertTriangle, CheckCircle2,
-  RotateCcw, Video, History, Eye, Plus, X,
+  RotateCcw, Video, History, Eye, Plus, X, Crop,
 } from 'lucide-react';
 import { api, ApiError } from '../api';
 import { ITEM_TYPE_SUGGESTIONS } from '../itemTypes';
@@ -24,11 +24,13 @@ import { STATUS_LABELS } from '../types';
 import { CameraModal } from '../components/CameraModal';
 import { AngleCaptureButton } from '../components/AngleCaptureButton';
 import { ScannerModal } from '../components/ScannerModal';
+import { PhotoEditor } from '../components/PhotoEditor';
 import { downscaleImage, analyzeImageQuality, checkFlashFired, type PreflightIssue } from '../utils/imagePreflight';
 import { logClientEvent } from '../utils/analytics';
 import { computeNetWeight } from '../../server/catalog/weights';
-import { isElongated } from '../../server/catalog/taxonomy';
+import { isElongated, resolveCategory } from '../../server/catalog/taxonomy';
 import { checkWeight } from '../../server/catalog/plausibility';
+import { shootingTipFor } from '../../server/catalog/shootingTips';
 
 // getUserMedia - the in-app live camera and the barcode scanner - is blocked
 // by browsers outside a secure context. On the shop LAN that means plain
@@ -81,6 +83,12 @@ interface ShootViewProps {
 export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, needsAngle }) => {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [photo, setPhoto] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+  // Quick design tags: suggested per category (learned from approved photos),
+  // tapped by staff, and passed to the AI as hints.
+  const [tagOptions, setTagOptions] = useState<string[]>([]);
+  const [chosenTags, setChosenTags] = useState<string[]>([]);
+  const [staffNote, setStaffNote] = useState('');
   const [lookup, setLookup] = useState<CpcLookupResult | null>(null);
   const [isCameraOpen, setCameraOpen] = useState(false);
   const [isScannerOpen, setScannerOpen] = useState(false);
@@ -247,6 +255,29 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, n
     () => (netWeight.ok && netWeight.net ? checkWeight(form.itemType, netWeight.net) : null),
     [form.itemType, netWeight]
   );
+  // Suggestions follow the item type (debounced - it changes as staff type).
+  // Picks belong to one category, so changing the category starts them afresh.
+  const tagCategory = useMemo(() => resolveCategory(form.itemType)?.type ?? '', [form.itemType]);
+  useEffect(() => {
+    setChosenTags([]);
+    if (!tagCategory) {
+      setTagOptions([]);
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      api.designTags(form.itemType).then((r) => !cancelled && setTagOptions(r.tags)).catch(() => !cancelled && setTagOptions([]));
+    }, 300);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+    // form.itemType is deliberately not a dependency: only a change of category matters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tagCategory]);
+  const toggleTag = (tag: string) => setChosenTags((prev) => (prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]));
+
+  const shootingTip = useMemo(() => shootingTipFor(form.itemType), [form.itemType]);
   const canSubmit = Boolean(photo && form.itemType.trim() && netWeight.ok && !activeDuplicate && !isSubmitting && !isChecking && !needsAcknowledgement);
 
   const handleSubmit = useCallback(async () => {
@@ -255,7 +286,7 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, n
     setError(null);
 
     try {
-      const { product } = await api.createProduct({ ...form, batchId: batch?.id });
+      const { product } = await api.createProduct({ ...form, batchId: batch?.id, tags: chosenTags, staffNote });
       await api.attachPhoto(product.id, photo, 'upload');
 
       // Extra photos staff added up front (long piece, detail on the back)
@@ -282,6 +313,8 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, n
       setJustQueued(form.cpc || form.itemType);
       // Reset immediately - this is what makes the next capture instant.
       setForm(EMPTY_FORM);
+      setChosenTags([]);
+      setStaffNote('');
       setPhoto(null);
       setPreflightIssues([]);
       setIssuesAcknowledged(false);
@@ -446,13 +479,34 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, n
                 onChange={handleExtraPhoto}
               />
 
-              <button
-                type="button"
-                onClick={clearPhoto}
-                className="inline-flex min-h-[44px] items-center gap-2 text-sm text-stone-600 hover:text-stone-900"
-              >
-                <RotateCcw className="w-4 h-4" /> Retake
-              </button>
+              <div className="flex flex-wrap gap-x-4">
+                <button
+                  type="button"
+                  onClick={() => setEditing(true)}
+                  className="inline-flex min-h-[44px] items-center gap-2 text-sm font-medium text-amber-800 hover:text-amber-900"
+                >
+                  <Crop className="w-4 h-4" /> Rotate / crop
+                </button>
+                <button
+                  type="button"
+                  onClick={clearPhoto}
+                  className="inline-flex min-h-[44px] items-center gap-2 text-sm text-stone-600 hover:text-stone-900"
+                >
+                  <RotateCcw className="w-4 h-4" /> Retake
+                </button>
+              </div>
+              {editing && photo && (
+                <PhotoEditor
+                  src={photo}
+                  onCancel={() => setEditing(false)}
+                  onDone={(edited) => {
+                    setEditing(false);
+                    // Re-run the free quality checks on what will actually be sent.
+                    void acceptPhoto(edited);
+                    logClientEvent('photo_edited', {});
+                  }}
+                />
+              )}
             </div>
           ) : (
             <div className={`grid gap-3 ${IS_SECURE_CONTEXT ? 'sm:grid-cols-2' : ''}`}>
@@ -572,6 +626,43 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, n
               </select>
             </div>
           </div>
+
+          {shootingTip && (
+            <p className="flex items-start gap-2 rounded-lg bg-stone-50 p-3 text-xs text-stone-700">
+              <Camera className="mt-0.5 h-3.5 w-3.5 shrink-0 text-stone-500" />
+              <span><span className="font-medium">How to shoot this:</span> {shootingTip}</span>
+            </p>
+          )}
+
+          {tagOptions.length > 0 && (
+            <div>
+              <p className="mb-1.5 text-sm font-medium text-stone-700">What does it have? <span className="font-normal text-stone-400">(optional - helps the AI)</span></p>
+              <div className="flex flex-wrap gap-2">
+                {tagOptions.map((tag) => {
+                  const on = chosenTags.includes(tag);
+                  return (
+                    <button
+                      key={tag}
+                      type="button"
+                      aria-pressed={on}
+                      onClick={() => toggleTag(tag)}
+                      className={`min-h-[44px] rounded-full border px-4 text-sm ${on ? 'border-amber-500 bg-amber-100 text-amber-900' : 'border-stone-300 bg-white text-stone-700 hover:bg-stone-50'}`}
+                    >
+                      {tag}
+                    </button>
+                  );
+                })}
+              </div>
+              <input
+                value={staffNote}
+                onChange={(e) => setStaffNote(e.target.value)}
+                maxLength={160}
+                placeholder="Anything else? e.g. both end stones are red"
+                aria-label="Note about this piece"
+                className="mt-2 w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-400 focus:border-amber-400"
+              />
+            </div>
+          )}
 
           <div className="grid grid-cols-3 gap-3">
             {([

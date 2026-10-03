@@ -17,6 +17,7 @@ import {
   getCpcMasterStats,
   type CpcMasterRecord,
 } from '../integrations/cpcMaster';
+import { suggestTags } from '../catalog/tags';
 import { findPreviousShoots, findActiveDuplicate } from '../db/products';
 
 export const catalogRouter = express.Router();
@@ -54,6 +55,12 @@ catalogRouter.get('/cpc-lookup', (req: AuthenticatedRequest, res) => {
     // uses to stop that before it happens.
     activeDuplicate: findActiveDuplicate(cpc),
   });
+});
+
+// The quick design tags to offer for a category: learned from approved photos,
+// seeds filling the gaps (catalog/tags.ts).
+catalogRouter.get('/tags', (req: AuthenticatedRequest, res) => {
+  res.json({ tags: suggestTags(String(req.query.itemType || '')) });
 });
 
 // Shared body parsing for /learn and /correct - both take the same shape, the

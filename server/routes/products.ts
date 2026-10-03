@@ -41,6 +41,7 @@ import { getBlockingIssue } from '../queue/systemStatus';
 import { findUserById } from '../auth/users';
 import { deriveProductIdFromCpc } from '../integrations/cpcMaster';
 import { computeNetWeight } from '../catalog/weights';
+import { cleanTags, cleanStaffNote, recordTagsPicked, recordTagsApproved } from '../catalog/tags';
 import { isFixCode, cleanNote, USE_REAL_PHOTO } from '../catalog/fixes';
 import { recordFixRequest } from '../db/fixRequests';
 
@@ -195,7 +196,10 @@ productsRouter.post('/products', (req: AuthenticatedRequest, res) => {
     otherWeightGrams: String(body.otherWeightGrams || ''),
     netWeightGrams: weights.net,
     name: String(body.name || ''),
+    tags: cleanTags(body.tags),
+    staffNote: cleanStaffNote(body.staffNote),
   });
+  recordTagsPicked(product.itemType, product.tags);
 
   logEvent('product.created', { productId: product.id, cpc, batchId: product.batchId }, actorFrom(user));
   res.status(201).json({ product: decorate(product.id) });
@@ -434,7 +438,9 @@ productsRouter.post('/products/:id/approve', (req: AuthenticatedRequest, res) =>
   }
 
   setProductStatus(product.id, 'approved', { reviewNote: String(req.body?.note || '') });
-  logEvent('product.approved', { productId: product.id, cpc: product.cpc }, actorFrom(req.user));
+  // Everything now known to describe a good photo of this category joins its tag list.
+  recordTagsApproved(product.itemType, product.tags, product.aiTags);
+  logEvent('product.approved', { productId: product.id, cpc: product.cpc, tags: product.tags.join(','), aiTags: product.aiTags.join(',') }, actorFrom(req.user));
   res.json({ product: decorate(product.id) });
 });
 

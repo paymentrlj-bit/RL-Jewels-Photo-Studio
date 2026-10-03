@@ -55,6 +55,10 @@ export interface Product {
   riskScore: number | null;
   riskTier: '' | 'low' | 'medium' | 'high';
   riskReasons: string[];
+  /** Design tags staff tapped when shooting, and what the AI saw. */
+  tags: string[];
+  aiTags: string[];
+  staffNote: string;
   modelUsed: string;
   attemptCount: number;
   estimatedCostUsd: number;
@@ -91,6 +95,9 @@ interface ProductRow {
   risk_score: number | null;
   risk_tier: string;
   risk_reasons: string;
+  tags: string;
+  ai_tags: string;
+  staff_note: string;
   model_used: string;
   attempt_count: number;
   estimated_cost_usd: number;
@@ -145,6 +152,9 @@ function toProduct(row: ProductRow): Product {
     riskScore: row.risk_score,
     riskTier: (row.risk_tier || '') as Product['riskTier'],
     riskReasons: parseStringArray(row.risk_reasons),
+    tags: parseStringArray(row.tags),
+    aiTags: parseStringArray(row.ai_tags),
+    staffNote: row.staff_note,
     modelUsed: row.model_used,
     attemptCount: row.attempt_count,
     estimatedCostUsd: row.estimated_cost_usd,
@@ -211,6 +221,9 @@ export function createProduct(input: { createdBy: string; batchId?: string | nul
     risk_score: null,
     risk_tier: '',
     risk_reasons: '[]',
+    tags: JSON.stringify(input.tags ?? []),
+    ai_tags: '[]',
+    staff_note: input.staffNote ?? '',
     model_used: '',
     attempt_count: 0,
     estimated_cost_usd: 0,
@@ -315,6 +328,10 @@ export function recordAuditResult(
       nowIso(),
       id
     );
+}
+
+export function recordAiTags(id: string, tags: string[]): void {
+  getDb().prepare('UPDATE products SET ai_tags = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(tags), nowIso(), id);
 }
 
 export function recordRisk(id: string, risk: { score: number; tier: string; reasons: string[] }): void {

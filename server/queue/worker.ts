@@ -55,6 +55,8 @@ import {
 } from '../ai/inventory';
 import { aspectRatioFor, describeItemType, parseLengthInches } from '../catalog/taxonomy';
 import { computeRisk } from '../catalog/risk';
+import { describeNameRules } from '../catalog/copyRules';
+import { buildStaffTagsBlock } from '../catalog/tags';
 import { buildFixBlock, AUDIT_CHECK_TO_FIX, isFixCode } from '../catalog/fixes';
 import { designMemoryFor, buildDesignMemoryBlock, recordFixRequest } from '../db/fixRequests';
 import { buildFaithfulImage, FaithfulUnavailableError } from '../imaging/faithful';
@@ -77,6 +79,7 @@ import {
   setProductStatus,
   recordAuditResult,
   recordRisk,
+  recordAiTags,
   applyGeneratedCopy,
 } from '../db/products';
 import { getLatestPhoto, listPhotos, saveImage, readImageBase64, readImageBuffer, imageExists } from '../storage/images';
@@ -360,12 +363,14 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
   const ai = getGeminiClient();
   const promptTemplate = getEnhancePrompt();
   const lengthInches = parseLengthInches(product.size);
+  const staffTags = buildStaffTagsBlock(product.tags, product.staffNote);
   let contextBlock = buildContextBlock({
     itemType: product.itemType,
     purity: product.purity,
     gender: product.gender,
     weight: product.netWeightGrams || product.grossWeightGrams,
     lengthInches,
+    staffTags,
   });
 
   // Branched by category. An elongated piece forced into a square is either
@@ -628,6 +633,7 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
 
   detailInventoryUsed = Boolean(detail);
   identity = identityFound;
+  if (identity && identity.tags.length > 0) recordAiTags(product.id, identity.tags);
   identityVerdict = compareIdentity(product.itemType, identity);
   if (identityVerdict.status === 'mismatch' && identity) {
     // Staff chose to process anyway: the form's category is probably wrong, so
@@ -639,6 +645,7 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
     lengthInches,
     weight: product.netWeightGrams || product.grossWeightGrams,
     identity,
+    staffTags,
   });
 
   // The form and the photo disagree (a mangalsutra typed as earrings), or the
@@ -933,7 +940,9 @@ async function runCopyJob(job: Job, workerId: string): Promise<void> {
     return;
   }
 
-  const photo = getLatestPhoto(product.id, 'processed') || getLatestPhoto(product.id, 'original');
+  // The ORIGINAL photo: the studio render can carry the AI's mistakes, and copy
+  // written from it would describe those instead of the real piece.
+  const photo = getLatestPhoto(product.id, 'original') || getLatestPhoto(product.id, 'processed');
   if (!photo || !imageExists(photo)) {
     failJob(job.id, 'No photo available to write copy from.', false);
     return;
@@ -952,6 +961,12 @@ async function runCopyJob(job: Job, workerId: string): Promise<void> {
           gender: product.gender,
           size: product.size,
           weight: product.netWeightGrams || product.grossWeightGrams,
+          categoryLine: describeItemType(product.itemType).line,
+          categoryNotes: describeItemType(product.itemType).notes,
+          nameRules: describeNameRules(product.itemType, { purity: product.purity, weight: product.netWeightGrams || product.grossWeightGrams, size: product.size }),
+          // Staff's own tags first, then what the AI saw.
+          tags: [...new Set([...product.tags, ...product.aiTags])],
+          staffNote: product.staffNote,
         }, (usage) => {
           if (!usage) return;
           logEvent('pipeline.token_usage', {

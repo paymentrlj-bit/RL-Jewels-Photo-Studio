@@ -55,6 +55,9 @@ export interface Product {
   riskScore: number | null;
   riskTier: '' | 'low' | 'medium' | 'high';
   riskReasons: string[];
+  tags: string[];
+  aiTags: string[];
+  staffNote: string;
   modelUsed: string;
   attemptCount: number;
   estimatedCostUsd: number;

@@ -152,27 +152,43 @@ export interface CopyContext {
   gender?: string;
   size?: string;
   weight?: string;
+  /** What the piece is, from the form: category line + notes (describeItemType). */
+  categoryLine?: string;
+  categoryNotes?: string | null;
+  /** The per-category name rules (catalog/copyRules.ts describeNameRules). */
+  nameRules?: string;
+  /** Design tags staff picked and the AI saw, and the staff note. */
+  tags?: string[];
+  staffNote?: string;
 }
 
-export function buildCopyPrompt({ itemType, purity, gender, size, weight }: CopyContext): string {
-  return `You are writing catalogue copy for "RL Jewels", an Indian fine jewelry retailer, for the studio-finished product photo attached. This copy has to work at real catalogue scale (2,000+ SKUs and growing), most of which are everyday, non-ornate designs - so the specificity has to come from precisely observing THIS piece, not from hoping for an elaborate motif that usually isn't there.
-Item: ${purity || '22kt'} gold ${itemType || 'jewellery'}, for ${gender || "women's"}${size && size !== 'DEFAULT' ? `, size ${size}` : ''}${weight ? `, ${weight}g` : ''}.
+export function buildCopyPrompt({ itemType, purity, gender, size, weight, categoryLine, categoryNotes, nameRules, tags, staffNote }: CopyContext): string {
+  const inches = /(\d+(?:\.\d+)?)\s*inch/i.exec(size ?? '')?.[1];
+  const known = [
+    `${purity || '22kt'} gold ${categoryLine || itemType || 'jewellery'}`,
+    `for ${gender || "women's"}`,
+    inches ? `about ${inches} inches long` : size && size !== 'DEFAULT' ? `size ${size}` : '',
+    weight ? `net weight ${weight} g` : '',
+  ].filter(Boolean).join(', ');
+  return `You are writing catalogue copy for "RL Jewels", an Indian fine jewellery retailer, from the ORIGINAL counter photo of the piece attached (the studio-finished picture does not exist yet and is not what the copy is about). The same copy is used on the website, WhatsApp, the printed catalogue, the app, Pinterest and Instagram, so it must read well on its own in any of them.
+What the store knows: ${known}.${categoryNotes ? `\nAbout this category: ${categoryNotes}` : ''}${tags && tags.length ? `\nDesign features noted: ${tags.join(', ')}.` : ''}${staffNote ? `\nStaff note: "${staffNote}".` : ''}
+The photo is the final truth. Ignore the price tag, hands, stand, ruler and the background - they are not part of the piece.
 
-Look closely and identify what's genuinely true of THIS piece, in this order:
-1. An ornamental motif or technique, if one is actually present, by its real jewelry-trade name - e.g. peacock, floral, temple, kundan, polki, meenakari, filigree, cutwork, jali/lattice, antique or oxidized finish, geometric.
-2. If there is no ornamental motif - true of most pieces in this catalogue - it still has a real, specific silhouette and finish. Describe THAT instead of defaulting to "plain" or "solid" as the whole identity. Use real jewelry-trade terms for what you actually see: tapered, domed, knife-edge, flat-top, beaded-edge, twisted, fluted, ribbed, milgrain-edged, high-polish, brushed/satin, hammered.
-3. Pick exactly ONE style-character word that's genuinely true of the piece, from this list: Classic, Contemporary, Minimalist, Statement, Traditional, Ornate. This is a real descriptive category to select honestly, not marketing filler to insert everywhere.
-
-The way leading jewelry retailers handle this: they never let a plain gold band read as just "a gold ring" - they name its actual finish and profile, use accurate-but-elevated material language ("handcrafted," "expertly finished," not just "gold"), and give even simple pieces a confident, specific identity built from real visual facts. That precision is what has to carry 2,000+ SKUs of mostly-simple designs - never invented ornamentation standing in for it.
+Look closely and describe what is genuinely true of THIS piece, in this order:
+1. An ornamental motif or technique, if one is actually present, by its real trade name - peacock, floral, temple, kundan, polki, meenakari, filigree, cutwork, jali, antique or oxidised finish, geometric, patti, nano, and so on.
+2. If there is no motif - true of most pieces here - it still has a real silhouette and finish. Describe THAT (tapered, domed, hammered, beaded-edge, twisted, high-polish, matte, flat links...) instead of calling it "plain".
+Most pieces in this catalogue are everyday, non-ornate designs: precision about what you actually see is what carries them, never invented ornament.
 
 Write:
-1. "name" (6-10 words): [style-character word] + [specific finish/profile OR motif] + material + purity + item type. E.g. "Classic High-Polish 22kt Gold Tapered Band Ring" or "Contemporary Peacock Motif 22kt Gold Jhumka Earrings." Never just "[Purity] Gold [Item Type]" alone - there is always a real finish/profile/style word to add even on the plainest piece.
-2. "description" (3-4 sentences): open by naming the real finish/silhouette/motif specifically, not generically. Describe the craftsmanship using accurate-but-elevated language. Mention purity and item type naturally (customers search by these). Close with one sentence on wearability (daily wear, layering, gifting) ONLY if genuinely supported by the piece's actual scale and style - never claim an occasion like "bridal" that doesn't fit. Never invent stones, engravings, or features not visible. Write like a knowledgeable jeweler proud of this specific piece, not generic ad copy and not a dry inventory listing.
-3. "metaTitle" - a search-engine page title, 50-60 characters MAX, built from the same style-word + finish/motif + material + item type as "name," tightened to fit.
-4. "metaDescription" - a search-engine snippet, 150-160 characters MAX, stating what it is and its real standout feature in complete sentences, same grounding rules as "description."
-5. "imageAltText" - 8-12 words plainly describing what's literally visible, for screen readers and image search - a factual visual description, not a sales pitch (e.g. "22kt gold tapered band ring with high-polish finish").
-6. "searchKeywords" - 5-8 comma-separated phrases real customers would search for this exact piece, grounded only in what's visible/known (item type, purity, gender, the finish/profile/motif you identified, and general non-invented category terms like "everyday wear" ONLY if genuinely evident - never claim an occasion the piece doesn't support).
-7. "urlSlug" - a short, lowercase, hyphen-separated URL slug built from the same keywords as "name."
+1. "name" (4-9 words, Title Case): the most distinctive TRUE feature + the word customers actually search for + the item. Use the Marathi/Hindi trade word where customers use it - Mangalsutra, Pote, Haar, Jhumka, Kada, Nath, Kansakhali, Vati, Payal - not a long English paraphrase; "Rani Haar" beats "Long Necklace Set". Good: "Peacock Meenakari Rani Haar", "Long Patti Pote Mangalsutra", "Hammered Gold Kada for Men". Do NOT start with a filler style word (Classic, Traditional, Contemporary...) unless it truly separates this piece from the next. Never put the city, the store name or a weight in the name unless the rules below say so.
+Name rules for this category:
+${nameRules || '- Purity, weight and length stay out of the name.'}
+2. "description" (2-4 short sentences): open with the real motif, finish or silhouette. Say it is ${purity || '22kt'} gold and name the piece with its trade word. Mention length${weight ? ' and, once, the approximate weight' : ''} only if known and useful. Close with one line on wearing it (daily wear, festive, gifting) ONLY if the piece's real scale and style support it - never claim "bridal" or an occasion that does not fit. Never invent stones, engraving or features that are not visible. Write like a jeweller proud of this piece, not like an advert or an inventory list.
+3. "metaTitle" - search page title, 50-60 characters MAX, name-based, with the purity (e.g. "... | 22kt Gold").
+4. "metaDescription" - search snippet, 150-160 characters MAX, complete sentences: what it is and its real standout feature.
+5. "imageAltText" - 8-12 words, plainly what is literally visible, for screen readers and image search.
+6. "searchKeywords" - 6-10 comma-separated phrases real customers search: the item in English AND its Marathi/Hindi trade name in Roman letters (and the main one once in Devanagari, e.g. मंगळसूत्र), purity, gender, the real motif or finish. Only what is true of the piece.
+7. "urlSlug" - short lowercase hyphen-separated slug from the name (no city, no weight unless in the name).
 
 Respond ONLY as JSON: {"name": string, "description": string, "metaTitle": string, "metaDescription": string, "imageAltText": string, "searchKeywords": string, "urlSlug": string}`;
 }

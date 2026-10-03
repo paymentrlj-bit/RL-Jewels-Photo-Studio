@@ -210,6 +210,27 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE products ADD COLUMN risk_reasons TEXT NOT NULL DEFAULT '[]';
     `,
   },
+  {
+    version: 4,
+    name: 'quick design tags, staff note, learned tag vocabulary',
+    up: `
+      -- tags: what staff tapped when shooting; ai_tags: what the identity check saw.
+      ALTER TABLE products ADD COLUMN tags       TEXT NOT NULL DEFAULT '[]';
+      ALTER TABLE products ADD COLUMN ai_tags    TEXT NOT NULL DEFAULT '[]';
+      ALTER TABLE products ADD COLUMN staff_note TEXT NOT NULL DEFAULT '';
+
+      -- The learned per-category tag list. 'approved' counts pieces approved
+      -- with the tag, 'picked' counts times staff tapped it.
+      CREATE TABLE tag_vocab (
+        category   TEXT NOT NULL,
+        tag        TEXT NOT NULL,
+        picked     INTEGER NOT NULL DEFAULT 0,
+        approved   INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (category, tag)
+      );
+    `,
+  },
 ];
 
 export function runMigrations(db: BetterSqlite3.Database): void {
