@@ -41,6 +41,7 @@ import { getBlockingIssue } from '../queue/systemStatus';
 import { findUserById } from '../auth/users';
 import { deriveProductIdFromCpc } from '../integrations/cpcMaster';
 import { computeNetWeight } from '../catalog/weights';
+import { cleanPrice } from '../sharing/caption';
 import { cleanTags, cleanStaffNote, recordTagsPicked, recordTagsApproved } from '../catalog/tags';
 import { isFixCode, cleanNote, USE_REAL_PHOTO } from '../catalog/fixes';
 import { recordFixRequest } from '../db/fixRequests';
@@ -235,6 +236,15 @@ productsRouter.patch('/products/:id', (req: AuthenticatedRequest, res) => {
     'grossWeightGrams', 'otherWeightGrams', 'reviewNote',
   ]) {
     if (key in body) fields[key] = String(body[key] ?? '');
+  }
+
+  if ('priceInr' in body) {
+    const price = cleanPrice(body.priceInr);
+    if (String(body.priceInr ?? '').trim() && !price) {
+      res.status(400).json({ error: 'The price must be a whole number of rupees, e.g. 45000.' });
+      return;
+    }
+    fields.priceInr = price;
   }
 
   // Any change to either weight recomputes net from the merged values; a net

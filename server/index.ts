@@ -30,6 +30,7 @@ import { productsRouter } from './routes/products';
 import { catalogRouter } from './routes/catalog';
 import { exportRouter } from './routes/exports';
 import { adminRouter, clientRouter } from './routes/admin';
+import { publicRouter } from './routes/publicFeed';
 
 // Builds the API app: JSON body parsing, every router, and the /api 404
 // fallback. Split out from main() so tests can mount exactly what production
@@ -70,6 +71,10 @@ export function createApp(): express.Express {
     });
     next();
   });
+
+  // No login: Meta's catalogue importer cannot sign in. Secured by a feed key
+  // and signed photo links instead (routes/publicFeed.ts).
+  app.use(publicRouter);
 
   app.use('/api', authRouter);
   app.use('/api', productsRouter);

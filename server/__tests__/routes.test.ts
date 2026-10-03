@@ -291,6 +291,58 @@ describe('real photo beside the AI render', () => {
   });
 });
 
+describe('sharing and the Meta catalogue feed', () => {
+  const jpeg = 'data:image/jpeg;base64,' + Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString('base64');
+  const cfg = config as { metaFeedKey: string; publicBaseUrl: string };
+
+  async function approvedProduct(price?: string) {
+    await createUser({ username: 'sharer', password: 'a-real-password-1', isAdmin: false });
+    const cookie = (await loginAs('sharer', 'a-real-password-1')).cookie!;
+    const created = await request(app).post('/api/products').set('Cookie', cookie).send({ itemType: 'Jhumka', cpc: 'SH1' });
+    const id = created.body.product.id as string;
+    const photo = saveImage({ productId: id, kind: 'processed', data: jpeg, source: 'upload' });
+    await request(app).patch(`/api/products/${id}`).set('Cookie', cookie).send({ name: 'Peacock Meenakari Jhumka', description: 'A jhumka.', ...(price ? { priceInr: price } : {}) });
+    getDb().prepare("UPDATE products SET status = 'approved' WHERE id = ?").run(id);
+    return { cookie, id, photoId: photo.id };
+  }
+
+  it('keeps the feed off until a key is set, and answers 404 either way to a wrong key', async () => {
+    cfg.metaFeedKey = '';
+    expect((await request(app).get('/feeds/meta-catalog.csv?key=anything')).status).toBe(404);
+    cfg.metaFeedKey = 'secret-feed-key';
+    expect((await request(app).get('/feeds/meta-catalog.csv?key=wrong')).status).toBe(404);
+    expect((await request(app).get('/feeds/meta-catalog.csv')).status).toBe(404);
+  });
+
+  it('lists only approved products that have a price, with a signed photo link', async () => {
+    cfg.metaFeedKey = 'secret-feed-key';
+    cfg.publicBaseUrl = 'https://studio.example.com';
+    const { photoId } = await approvedProduct('₹45,000');
+    const res = await request(app).get('/feeds/meta-catalog.csv?key=secret-feed-key');
+    expect(res.status).toBe(200);
+    expect(res.text).toMatch(/^id,title,description,availability,condition,price,link,image_link,brand,product_type/);
+    expect(res.text).toMatch(/SH1,Peacock Meenakari Jhumka,A jhumka\.,in stock,new,45000\.00 INR,/);
+    const link = /(https:\/\/studio\.example\.com\/public\/photo\/[^,\r\n]+)/.exec(res.text)![1];
+    // The link works with no login; a tampered token does not.
+    expect((await request(app).get(link.replace('https://studio.example.com', ''))).status).toBe(200);
+    expect((await request(app).get(`/public/photo/${photoId}/not-the-token`)).status).toBe(404);
+  });
+
+  it('leaves out a product with no price rather than guessing one', async () => {
+    cfg.metaFeedKey = 'secret-feed-key';
+    await approvedProduct();
+    const res = await request(app).get('/feeds/meta-catalog.csv?key=secret-feed-key');
+    expect(res.text.trim().split('\r\n')).toHaveLength(1);
+  });
+
+  it('only takes a price that is a whole number of rupees', async () => {
+    const { cookie, id } = await approvedProduct();
+    expect((await request(app).patch(`/api/products/${id}`).set('Cookie', cookie).send({ priceInr: 'a lot' })).status).toBe(400);
+    const ok = await request(app).patch(`/api/products/${id}`).set('Cookie', cookie).send({ priceInr: 'Rs. 1,25,000' });
+    expect(ok.body.product.priceInr).toBe('125000');
+  });
+});
+
 describe('one-tap fix', () => {
   const tinyJpeg = 'data:image/jpeg;base64,' + Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString('base64');
 

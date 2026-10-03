@@ -269,3 +269,27 @@ describe('photo edit geometry', () => {
     expect(isFullCrop({ x: 0.1, y: 0, w: 0.9, h: 1 })).toBe(false);
   });
 });
+
+import { buildShareCaption, cleanPrice, formatRupees, hashtagsFrom } from '../sharing/caption';
+
+describe('share caption', () => {
+  it('cleans prices and writes them the Indian way', () => {
+    expect(cleanPrice('₹ 45,000')).toBe('45000');
+    expect(cleanPrice('Rs. 1,25,000.50')).toBe('125000');
+    expect(cleanPrice('abc')).toBe('');
+    expect(cleanPrice('0')).toBe('');
+    expect(formatRupees('125000')).toBe('₹1,25,000');
+    expect(formatRupees('950')).toBe('₹950');
+    expect(formatRupees('12345')).toBe('₹12,345');
+  });
+
+  it('makes hashtags from keywords, letters only', () => {
+    expect(hashtagsFrom('peacock jhumka, झुमका, 22kt gold earrings!, one two three four five')).toEqual(['#PeacockJhumka', '#22ktGoldEarrings']);
+  });
+
+  it('puts name, description, price and tags together', () => {
+    const caption = buildShareCaption({ name: 'Peacock Jhumka', description: 'Gold jhumka.', searchKeywords: 'jhumka', priceInr: '45000' });
+    expect(caption).toBe('Peacock Jhumka\n\nGold jhumka.\n\nPrice: ₹45,000\n\n#Jhumka #RLJewels');
+    expect(buildShareCaption({ name: 'X', description: '' })).toBe('X\n\n#RLJewels');
+  });
+});

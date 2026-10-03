@@ -1,16 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Camera, ClipboardCheck, PackageOpen, Settings, LogOut, WifiOff, AlertTriangle, RefreshCw } from 'lucide-react';
+import { Camera, ClipboardCheck, PackageOpen, Settings, Share2, LogOut, WifiOff, AlertTriangle, RefreshCw } from 'lucide-react';
 import { api, ApiError, setUnauthorizedHandler } from './api';
 import type { Batch, BlockingIssue, HealthFeatures, Product, QueueDepth, SessionUser } from './types';
 import { ShootView } from './views/ShootView';
 import { ReviewView } from './views/ReviewView';
 import { ExportView } from './views/ExportView';
+import { ShareView } from './views/ShareView';
 import { AdminView } from './views/AdminView';
 import { LoginView } from './views/LoginView';
 import { BrandLogo } from './components/BrandLogo';
 import { useNetworkStatus } from './utils/useNetworkStatus';
 
-type Tab = 'shoot' | 'review' | 'export' | 'admin';
+type Tab = 'shoot' | 'review' | 'share' | 'export' | 'admin';
 
 // How often the queue and product lists refresh. Three seconds is frequent
 // enough that a finished photo appears while the staff member is still
@@ -162,6 +163,7 @@ export default function App() {
   const tabs: { key: Tab; label: string; icon: typeof Camera; badge?: number; adminOnly?: boolean }[] = [
     { key: 'shoot', label: 'Shoot', icon: Camera },
     { key: 'review', label: 'Review', icon: ClipboardCheck, badge: awaitingCount + problemCount },
+    { key: 'share', label: 'Share', icon: Share2 },
     { key: 'export', label: 'Export', icon: PackageOpen },
     { key: 'admin', label: 'Admin', icon: Settings, adminOnly: true },
   ];
@@ -282,6 +284,7 @@ export default function App() {
           />
         )}
         {tab === 'review' && <ReviewView products={products} onChanged={refresh} />}
+        {tab === 'share' && <ShareView />}
         {tab === 'export' && <ExportView driveConfigured={features?.driveExport ?? false} />}
         {tab === 'admin' && user.isAdmin && <AdminView />}
       </main>

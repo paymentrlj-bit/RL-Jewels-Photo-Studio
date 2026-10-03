@@ -55,6 +55,13 @@ services:
       ANGLE_REQUESTS: ${ANGLE_REQUESTS:-on}
       FAITHFUL_MODE: ${FAITHFUL_MODE:-on}
       DESIGN_MEMORY: ${DESIGN_MEMORY:-on}
+      # Output resolution of the studio photo: 1K (default) or 2K.
+      ENHANCE_IMAGE_SIZE: ${ENHANCE_IMAGE_SIZE:-1K}
+      # Meta (Instagram / Facebook / WhatsApp) catalogue feed. Off until
+      # META_FEED_KEY is set in .env to a long random secret.
+      META_FEED_KEY: ${META_FEED_KEY:-}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://${STUDIO_DOMAIN}}
+      CATALOG_LINK_BASE: ${CATALOG_LINK_BASE:-}
     volumes:
       # THE shoot. Every product, every photo, the whole database.
       # This is the one thing that must be backed up.

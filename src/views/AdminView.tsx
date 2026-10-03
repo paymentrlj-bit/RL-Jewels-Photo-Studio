@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { Users, Wand2, BarChart3, AlertTriangle, Check, UserPlus, RotateCcw, KeyRound } from 'lucide-react';
-import { api, ApiError, type AnalyticsSummary } from '../api';
+import { api, ApiError, type AnalyticsSummary, type MetaFeedStatus } from '../api';
 import type { SessionUser } from '../types';
 import { AUDIT_CHECK_LABELS } from '../types';
 
@@ -41,10 +41,12 @@ export const AdminView: React.FC = () => {
 
 const InsightsPanel: React.FC = () => {
   const [data, setData] = useState<AnalyticsSummary | null>(null);
+  const [feed, setFeed] = useState<MetaFeedStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     api.analytics(30).then(setData).catch((err) => setError(err.message));
+    api.metaFeed().then(setFeed).catch(() => setFeed(null));
   }, []);
 
   if (error) return <ErrorBox message={error} />;
@@ -118,6 +120,28 @@ const InsightsPanel: React.FC = () => {
           </>
         )}
       </section>
+
+      {feed && (
+        <section className="rounded-2xl border border-stone-200 bg-white p-5">
+          <h3 className="font-semibold text-stone-900">Meta catalogue feed (Instagram, Facebook, WhatsApp)</h3>
+          {!feed.enabled ? (
+            <p className="mt-2 text-sm text-stone-600">
+              Switched off. Set <code className="rounded bg-stone-100 px-1">META_FEED_KEY</code> (a long random secret) and <code className="rounded bg-stone-100 px-1">PUBLIC_BASE_URL</code> on the server to turn it on.
+            </p>
+          ) : (
+            <>
+              <p className="mt-2 text-sm text-stone-600">
+                Paste this address into Meta Commerce Manager as a scheduled feed (daily). {feed.included} product{feed.included === 1 ? ' is' : 's are'} complete enough to be in it;
+                {' '}{feed.skipped} approved product{feed.skipped === 1 ? ' is' : 's are'} left out for lacking a price, photo or description.
+              </p>
+              <input readOnly value={feed.url ?? ''} onFocus={(e) => e.currentTarget.select()} aria-label="Feed address" className="mt-2 w-full rounded-lg border border-stone-300 bg-stone-50 px-3 py-2 font-mono text-xs" />
+              <p className="mt-2 text-xs text-stone-500">Treat the address like a password: it contains the feed key.</p>
+              {!feed.hasPublicBaseUrl && <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">PUBLIC_BASE_URL is not set, so photo links use this page&apos;s address. Set it to the public address of the studio.</p>}
+              {!feed.hasLinkBase && <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">CATALOG_LINK_BASE is not set, so the feed&apos;s product link column is empty. Meta requires a link to the product on the store&apos;s website for Instagram/Facebook shops.</p>}
+            </>
+          )}
+        </section>
+      )}
 
       <section className="rounded-2xl border border-stone-200 bg-white p-5">
         <h3 className="font-semibold text-stone-900">Approval rate by category</h3>

@@ -58,6 +58,7 @@ export interface Product {
   tags: string[];
   aiTags: string[];
   staffNote: string;
+  priceInr: string;
   modelUsed: string;
   attemptCount: number;
   estimatedCostUsd: number;

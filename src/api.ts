@@ -134,8 +134,18 @@ export const api = {
   getPrompt: () => request<{ prompt: string; isCustom: boolean; updatedAt: string | null; updatedBy: string | null }>('/admin/prompt'),
   savePrompt: (prompt: string) => post<{ prompt: string; isCustom: boolean }>('/admin/prompt', { prompt }),
   resetPrompt: () => post<{ prompt: string; isCustom: boolean }>('/admin/prompt', { reset: true }),
+  metaFeed: () => request<MetaFeedStatus>('/admin/meta-feed'),
   analytics: (days = 30) => request<AnalyticsSummary>(`/admin/analytics/summary?days=${days}`),
 };
+
+export interface MetaFeedStatus {
+  enabled: boolean;
+  url: string | null;
+  included: number;
+  skipped: number;
+  hasLinkBase: boolean;
+  hasPublicBaseUrl: boolean;
+}
 
 export interface OutcomeGroup {
   label: string;
