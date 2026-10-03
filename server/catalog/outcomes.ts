@@ -51,3 +51,62 @@ export function summariseOutcomes(rows: OutcomeRow[]): { byCategory: OutcomeGrou
     .filter((g) => g.total > 0);
   return { byCategory, byRiskTier };
 }
+
+// ---------------------------------------------------------------------------
+// Staff scorecard: how each person's shoots turn out. A coaching tool, not a
+// league table - rates over a handful of pieces mean little, so each row says
+// how many it rests on.
+// ---------------------------------------------------------------------------
+
+export interface StaffRow {
+  userId: string;
+  name: string;
+  status: string;
+  riskScore: number | null;
+  /** Audit checklist as stored, or null. */
+  checklist: Record<string, boolean> | null;
+}
+
+export interface StaffScore {
+  userId: string;
+  name: string;
+  shot: number;
+  approved: number;
+  reshoot: number;
+  /** Pieces the pipeline stopped on to ask for another photo. */
+  needAngle: number;
+  approvalRate: number | null;
+  avgRisk: number | null;
+  /** The audit check that failed most often on their pieces, with its count. */
+  topIssue: { check: string; count: number } | null;
+  /** Fewer than FEW_SHOTS pieces: do not read much into the rates. */
+  fewShots: boolean;
+}
+
+export const FEW_SHOTS = 10;
+
+export function summariseStaff(rows: StaffRow[]): StaffScore[] {
+  const byUser = new Map<string, StaffRow[]>();
+  for (const r of rows) byUser.set(r.userId, [...(byUser.get(r.userId) ?? []), r]);
+  const out: StaffScore[] = [];
+  for (const [userId, rs] of byUser) {
+    const base = group('', rs.map((r) => ({ itemType: '', status: r.status, riskTier: '', riskScore: r.riskScore })));
+    const failures = new Map<string, number>();
+    for (const r of rs) for (const [check, ok] of Object.entries(r.checklist ?? {})) if (ok === false) failures.set(check, (failures.get(check) ?? 0) + 1);
+    const top = [...failures].sort((a, b) => b[1] - a[1])[0];
+    out.push({
+      userId,
+      name: rs[0].name,
+      shot: rs.length,
+      approved: base.approved,
+      reshoot: base.reshoot,
+      needAngle: rs.filter((r) => r.status === 'needs_angle').length,
+      approvalRate: base.approvalRate,
+      avgRisk: base.avgRisk,
+      topIssue: top ? { check: top[0], count: top[1] } : null,
+      fewShots: rs.length < FEW_SHOTS,
+    });
+  }
+  // Most pieces first: the people doing the work come first, not the best or worst rate.
+  return out.sort((a, b) => b.shot - a.shot);
+}

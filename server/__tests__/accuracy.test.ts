@@ -293,3 +293,27 @@ describe('share caption', () => {
     expect(buildShareCaption({ name: 'X', description: '' })).toBe('X\n\n#RLJewels');
   });
 });
+
+import { summariseStaff, FEW_SHOTS } from '../catalog/outcomes';
+
+describe('staff scorecard', () => {
+  const row = (userId: string, status: string, checklist: Record<string, boolean> | null = null, riskScore: number | null = 10) => ({ userId, name: userId.toUpperCase(), status, riskScore, checklist });
+
+  it('counts each person\'s pieces, rates only what is decided, and names the problem they hit most', () => {
+    const rows = [
+      row('a', 'approved'), row('a', 'exported'), row('a', 'needs_reshoot', { sharpFocus: false, notCropped: true }),
+      row('a', 'needs_reshoot', { sharpFocus: false, notCropped: false }), row('a', 'needs_angle'), row('a', 'awaiting_review'),
+      row('b', 'approved'),
+    ];
+    const [a, b] = summariseStaff(rows);
+    expect(a).toMatchObject({ userId: 'a', shot: 6, approved: 2, reshoot: 2, needAngle: 1, approvalRate: 50, fewShots: true });
+    expect(a.topIssue).toEqual({ check: 'sharpFocus', count: 2 });
+    expect(b).toMatchObject({ shot: 1, approvalRate: 100, topIssue: null });
+  });
+
+  it('stops saying "few pieces" at the threshold and lists the busiest person first', () => {
+    const many = Array.from({ length: FEW_SHOTS }, () => row('busy', 'approved'));
+    const out = summariseStaff([row('quiet', 'approved'), ...many]);
+    expect(out[0]).toMatchObject({ userId: 'busy', fewShots: false });
+  });
+});

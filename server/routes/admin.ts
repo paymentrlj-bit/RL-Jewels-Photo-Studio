@@ -16,8 +16,8 @@ import {
   countAdmins,
 } from '../auth/users';
 import { getEnhancePromptState, setEnhancePrompt, resetEnhancePrompt } from '../settings';
-import { countProductsByStatus, listOutcomeRows } from '../db/products';
-import { summariseOutcomes } from '../catalog/outcomes';
+import { countProductsByStatus, listOutcomeRows, listStaffRows } from '../db/products';
+import { summariseOutcomes, summariseStaff } from '../catalog/outcomes';
 import { findDuplicatePairs, KIND_STUDIO } from '../similarity';
 import { describeMatches } from './similar';
 import { buildMetaFeed } from '../sharing/metaFeed';
@@ -266,6 +266,7 @@ adminRouter.get('/analytics/summary', async (req, res) => {
     },
 
     outcomes: summariseOutcomes(listOutcomeRows(sinceIso)),
+    staff: summariseStaff(listStaffRows(sinceIso)),
 
     stageLatency: Object.fromEntries(
       Object.entries(stages).map(([stage, s]) => [

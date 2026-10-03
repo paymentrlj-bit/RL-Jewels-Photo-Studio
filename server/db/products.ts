@@ -434,6 +434,26 @@ export function listOutcomeRows(sinceIso: string): { itemType: string; status: s
   return rows.map((r) => ({ itemType: r.item_type, status: r.status, riskTier: r.risk_tier, riskScore: r.risk_score }));
 }
 
+export function listStaffRows(sinceIso: string): { userId: string; name: string; status: string; riskScore: number | null; checklist: Record<string, boolean> | null }[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT p.created_by AS user_id, COALESCE(NULLIF(u.display_name, ''), u.username, 'Unknown') AS name,
+              p.status, p.risk_score, p.audit_checklist
+         FROM products p LEFT JOIN users u ON u.id = p.created_by
+        WHERE p.created_at >= ? AND p.status NOT IN ('draft')`
+    )
+    .all(sinceIso) as { user_id: string; name: string; status: string; risk_score: number | null; audit_checklist: string | null }[];
+  return rows.map((r) => {
+    let checklist: Record<string, boolean> | null = null;
+    try {
+      checklist = r.audit_checklist ? (JSON.parse(r.audit_checklist) as Record<string, boolean>) : null;
+    } catch {
+      checklist = null;
+    }
+    return { userId: r.user_id, name: r.name, status: r.status, riskScore: r.risk_score, checklist };
+  });
+}
+
 // "Have we already shot this?" - the question a 3,247-SKU catalogue run needs
 // answered constantly and v1 could not answer at all, because it kept no
 // history. Matches on the catalog ProductId, so a different lot of the same
