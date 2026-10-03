@@ -19,6 +19,7 @@ import { initDatabase, getDb, closeDatabase } from './db';
 import { ensureBootstrapAdmin } from './auth/users';
 import { initCpcMaster } from './integrations/cpcMaster';
 import { startWorkers, stopWorkers } from './queue/worker';
+import { startModelHealthChecks } from './ai/modelHealth';
 import { queueDepth } from './queue/jobs';
 import { logEvent, flushLogs, pruneOldEvents, actorFrom } from './logging';
 import { getSessionUser } from './auth/session';
@@ -171,6 +172,7 @@ async function main(): Promise<void> {
     });
   }, 5 * 60 * 1000);
   heartbeat.unref();
+  startModelHealthChecks();
 
   const server = app.listen(config.port, () => {
     console.log(`\nRL Jewels Photo Studio`);

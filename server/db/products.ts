@@ -51,6 +51,10 @@ export interface Product {
   reviewNote: string;
   auditChecklist: Record<AuditCheck, boolean> | null;
   auditReason: string;
+  /** Fidelity risk of the AI render (catalog/risk.ts). Null until the pipeline has run. */
+  riskScore: number | null;
+  riskTier: '' | 'low' | 'medium' | 'high';
+  riskReasons: string[];
   modelUsed: string;
   attemptCount: number;
   estimatedCostUsd: number;
@@ -84,6 +88,9 @@ interface ProductRow {
   review_note: string;
   audit_checklist: string | null;
   audit_reason: string;
+  risk_score: number | null;
+  risk_tier: string;
+  risk_reasons: string;
   model_used: string;
   attempt_count: number;
   estimated_cost_usd: number;
@@ -92,6 +99,15 @@ interface ProductRow {
   updated_at: string;
   approved_at: string | null;
   exported_at: string | null;
+}
+
+function parseStringArray(json: string | null): string[] {
+  try {
+    const v = JSON.parse(json || '[]');
+    return Array.isArray(v) ? v.map(String) : [];
+  } catch {
+    return [];
+  }
 }
 
 function toProduct(row: ProductRow): Product {
@@ -126,6 +142,9 @@ function toProduct(row: ProductRow): Product {
     reviewNote: row.review_note,
     auditChecklist,
     auditReason: row.audit_reason,
+    riskScore: row.risk_score,
+    riskTier: (row.risk_tier || '') as Product['riskTier'],
+    riskReasons: parseStringArray(row.risk_reasons),
     modelUsed: row.model_used,
     attemptCount: row.attempt_count,
     estimatedCostUsd: row.estimated_cost_usd,
@@ -189,6 +208,9 @@ export function createProduct(input: { createdBy: string; batchId?: string | nul
     review_note: '',
     audit_checklist: null,
     audit_reason: '',
+    risk_score: null,
+    risk_tier: '',
+    risk_reasons: '[]',
     model_used: '',
     attempt_count: 0,
     estimated_cost_usd: 0,
@@ -293,6 +315,12 @@ export function recordAuditResult(
       nowIso(),
       id
     );
+}
+
+export function recordRisk(id: string, risk: { score: number; tier: string; reasons: string[] }): void {
+  getDb()
+    .prepare('UPDATE products SET risk_score = ?, risk_tier = ?, risk_reasons = ?, updated_at = ? WHERE id = ?')
+    .run(risk.score, risk.tier, JSON.stringify(risk.reasons), nowIso(), id);
 }
 
 export function applyGeneratedCopy(

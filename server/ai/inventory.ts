@@ -237,7 +237,7 @@ export async function cropDetailRegions(
 // retry, and so a failure is never cached) and fail soft on odd output.
 // ---------------------------------------------------------------------------
 
-async function callJson(
+export async function callJson(
   ai: GoogleGenAI,
   model: string,
   parts: object[],
@@ -268,6 +268,7 @@ export async function detectDetailRegions(
 ): Promise<DetailRegion[]> {
   const prompt = `This photo shows one jewelry piece: ${item.itemLine}.
 Find up to ${MAX_DETAIL_REGIONS} areas of the piece where the design detail is small and intricate enough to be easily miscounted or simplified when the piece is redrawn: clusters, rows or fringes of small beads, balls or tassels; granulation; rows or halos of small stones; black-bead sections; sections of chain or mesh whose link pattern is hard to see at full-photo size; engravings, carved or filigree motifs, enamel work.
+For a long strand (mangalsutra, haar, mala, chain with pendant), choose the pendant or centre piece, one stretch of the strand where the bead or piece types alternate, and the end stones or clasp - not the whole strand.
 Prefer areas with small countable elements. Keep each box tight around that detail - never the whole piece, never plain smooth metal, never a price tag, hand, stand or background. If the piece is a matching pair (e.g. two earrings), choose the area on only one of them unless the two genuinely differ.
 Output a JSON list, most intricate first: [{"box_2d": [ymin, xmin, ymax, xmax], "label": "short description, e.g. 'bead fringe along the base of the left jhumka'"}]. Coordinates normalized 0-1000. Output [] if the piece has no such detail.`;
 
@@ -300,6 +301,7 @@ IMAGE 1 is the full counter photo.${closeUps}
 Rules:
 - Wherever a close-up covers an area, count from the close-up - it shows far more detail than IMAGE 1.
 - Photos from another angle show the SAME single piece. Use them to count anything hidden or unclear in IMAGE 1, but never add the views together: an element seen in two photos is one element.
+- On a long strand, record the REPEATING SEQUENCE (e.g. "3 black beads, 1 gold patti, repeat") and how many times it repeats, plus the centrepiece and each end separately. Two stones at the two ends of a strand are separate elements: record the colour of each.
 - Count literally, one element at a time. Do not estimate, round, or assume symmetry: if two sides of a pair differ, record both.
 - If part of a group is hidden (behind a finger, a tag, the other earring, or out of frame), set countConfidence to "low" and say what is hidden in "arrangement", rather than guessing the hidden part.
 - Record colour and material exactly as seen: black beads are black beads, enamel is enamel (name its colours), white stones are white stones - never describe any of them as plain gold.
@@ -453,7 +455,9 @@ ${lines.join('\n')}`;
  * the counter, not after a failed audit.
  */
 export function hiddenElements(inv: DetailInventory): InventoryElement[] {
-  return inv.elements.filter((e) => e.countConfidence === 'low' && e.count !== null);
+  // A bead or stone group the inspector could not count at all (count null)
+  // is just as hidden as one it counted with low confidence.
+  return inv.elements.filter((e) => e.countConfidence === 'low' && (e.count !== null || /bead|stone|drop|pearl|tassel|strand/i.test(e.feature)));
 }
 
 // Turns what usually hides a part into what staff should physically do about

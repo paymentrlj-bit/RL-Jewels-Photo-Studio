@@ -200,7 +200,13 @@ export const CATEGORIES: Category[] = [
     // Not "thali": in this store's POS a thali is a plate ("PUJA THALI",
     // ".THALI PLAIN-1" in silver), and matching it sent those to Mangalsutra.
     type: 'Mangalsutra', defaultGender: "women's", aspectRatio: '3:4',
-    synonyms: ['mangalsutram', 'mangal sutra', 'pote', 'chain pote', 'pote chain', 'pbb', 'mangalpote', 'braclet pote', 'bracelet pote', 'tanmani', 'tanmaniya', 'tanmanya'],
+    synonyms: [
+      'mangalsutram', 'mangal sutra', 'pote', 'chain pote', 'pote chain', 'pbb', 'mangalpote', 'braclet pote', 'bracelet pote', 'tanmani', 'tanmaniya', 'tanmanya',
+      // "Pot" is how the POS spells pote ("LONG CHAIN POT", "PATTI POT"): a
+      // black-bead mangalsutra, never a vessel and never earrings. Bare "pot"
+      // is guarded in resolveCategory so silver pots and puja items stay out.
+      'pot', 'chain pot', 'pot chain', 'long pot', 'short pot', 'patti pot', 'nano pot', 'designer pot',
+    ],
     modelNotes: 'A mangalsutra: gold chain combined with strings or sections of small black glass beads (pote / kaala mani), usually with a gold pendant or two small cup-shaped vati. The black beads are its defining feature: they must stay black, at the same count and positions, and must never be rendered as gold beads. Black beads set inside small gold cages must keep both the cage and the black bead inside it. Any black enamel (meena) on the vati or pendant must stay.',
   },
   // Not "lucky": the store's "LUCKY STONE" is a loose gemstone, not a bracelet.
@@ -250,6 +256,9 @@ const STYLE_NOTES: { words: string[]; note: string }[] = [
   { words: ['motikudi'], note: 'Motikudi: a large, ornate stud set with pearls - keep every pearl.' },
 ];
 
+// Words that make a "pot" a container rather than pote (black beads).
+const VESSEL_WORDS = /(^| )(silver|steel|brass|copper|puja|pooja|thali|kalash|lota|glass|flower|plant|diya|bowl|utensil)( |$)/;
+
 const DEFAULT_ASPECT_RATIO: AspectRatio = '1:1';
 
 function normalize(value: string): string {
@@ -277,6 +286,8 @@ export function resolveCategory(text: string): Category | null {
   if (!haystack) return null;
 
   for (const { category, needle } of MATCHERS) {
+    // "pot" is also a vessel in the store's silver and puja stock.
+    if (needle.endsWith('pot') && VESSEL_WORDS.test(haystack)) continue;
     // Word-boundary-ish containment: guards against "bar" matching inside
     // "barfi" or "bali" inside "balaji".
     if (haystack === needle) return category;
@@ -342,7 +353,7 @@ export function describeItemType(itemType: string | undefined): { line: string; 
   // resolve to Bracelet and Pendant, which say nothing about beads, so the
   // black-bead rule rides along with any name that carries the word.
   const name = normalize(raw);
-  const blackBeads = category?.type !== 'Mangalsutra' && /(^| )(pote|pbb)( |$)/.test(name) ? BLACK_BEAD_NOTE : null;
+  const blackBeads = category?.type !== 'Mangalsutra' && hasPoteWord(name) ? BLACK_BEAD_NOTE : null;
   const style = STYLE_NOTES.filter(({ words }) => words.some((w) => new RegExp(`(^| )${normalize(w)}( |$)`).test(name))).map((s) => s.note);
   if (!category) {
     const notes = [blackBeads, ...style].filter(Boolean).join(' ');
@@ -353,4 +364,57 @@ export function describeItemType(itemType: string | undefined): { line: string; 
   return { line, notes: notes || null };
 }
 
+/** "pote" / "pbb" / "pot" (unless it is a vessel) in a normalized name. */
+function hasPoteWord(name: string): boolean {
+  return /(^| )(pote|pbb)( |$)/.test(name) || (/(^| )pot( |$)/.test(name) && !VESSEL_WORDS.test(name));
+}
+
+/** Inches out of a CPC size name such as "28INCH", "18 inch" or `24"`. Null when there is none. */
+export function parseLengthInches(size: string | undefined | null): number | null {
+  const m = /(\d+(?:\.\d+)?)\s*(?:inch(?:es)?|in\b|")/i.exec(String(size ?? ''));
+  if (!m) return null;
+  const n = Number(m[1]);
+  return n > 0 && n <= 100 ? n : null;
+}
+
 const BLACK_BEAD_NOTE = 'This piece includes pote: small black glass beads. They must stay black, at the same count and positions, and must never be rendered as gold beads.';
+
+// ---------------------------------------------------------------------------
+// Product family: the coarse "what kind of thing is this" that must never
+// change between the form, the original photo and the studio render. A
+// mangalsutra drawn as earrings is the worst error this app can make, so the
+// pipeline compares families, not the finer category names.
+// ---------------------------------------------------------------------------
+
+export type ProductFamily = 'earring' | 'neckpiece' | 'mangalsutra' | 'ring' | 'wrist' | 'nose' | 'other';
+
+export const PRODUCT_FAMILIES: ProductFamily[] = ['earring', 'neckpiece', 'mangalsutra', 'ring', 'wrist', 'nose', 'other'];
+
+const FAMILY_BY_TYPE: Record<string, ProductFamily> = {
+  Ring: 'ring',
+  Jhumka: 'earring', Chandbali: 'earring', Bali: 'earring', 'U Hoop': 'earring', Stud: 'earring', 'Latkan Tops': 'earring',
+  Earrings: 'earring', 'J Hoop': 'earring', Kansakhali: 'earring', Kayamat: 'earring', 'Sui Dhaga': 'earring',
+  Pendant: 'neckpiece', 'Pendant Set': 'neckpiece', Chain: 'neckpiece', Necklace: 'neckpiece', Haar: 'neckpiece',
+  Choker: 'neckpiece', Mala: 'neckpiece',
+  Mangalsutra: 'mangalsutra',
+  Bangle: 'wrist', Kada: 'wrist', Bracelet: 'wrist', Bajuband: 'wrist',
+  'Nose Pin': 'nose',
+};
+
+/**
+ * The family a form category belongs to. Null when the category is unknown, and
+ * 'other' for sets, coins and oddities where no family claim is made - those
+ * never raise a mismatch.
+ */
+export function familyFor(itemType: string | undefined): ProductFamily | null {
+  const category = resolveCategory(itemType ?? '');
+  if (category) return FAMILY_BY_TYPE[category.type] ?? 'other';
+  // An unresolved POS name that still carries pote is a mangalsutra.
+  return hasPoteWord(normalize(itemType ?? '')) ? 'mangalsutra' : null;
+}
+
+/** Plain-language name for a family, for staff-facing messages. */
+export const FAMILY_LABEL: Record<ProductFamily, string> = {
+  earring: 'earrings', neckpiece: 'a chain or necklace', mangalsutra: 'a mangalsutra (black-bead pote)',
+  ring: 'a ring', wrist: 'a bangle or bracelet', nose: 'a nose pin', other: 'something else',
+};

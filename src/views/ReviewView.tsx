@@ -195,6 +195,15 @@ const ReviewCard: React.FC<{
           {product.cpc || 'No CPC'} · {product.purity} · {product.netWeightGrams || '—'}g · {product.staffName}
         </p>
 
+        {(product.riskTier === 'high' || product.riskTier === 'medium') && (
+          // Where to look first: the AI's own sense of how likely this render
+          // is to be wrong, and why. Informational; nothing is blocked.
+          <p className={`rounded-lg p-2 text-xs ${product.riskTier === 'high' ? 'bg-red-50 text-red-900' : 'bg-amber-50 text-amber-900'}`}>
+            <span className="font-semibold">{product.riskTier === 'high' ? 'Check this one closely' : 'Worth a careful look'}</span>
+            {product.riskReasons.length > 0 && <> — {product.riskReasons.join(', ')}</>}
+          </p>
+        )}
+
         {isFaithful && (
           // A cut-out skips the AI's own checks, so the reviewer is the check:
           // say plainly what they are looking at and why.
