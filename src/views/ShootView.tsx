@@ -17,7 +17,7 @@ import {
   Camera, ScanLine, AlertTriangle, CheckCircle2,
   RotateCcw, Video, History, Eye, Plus, X, Crop,
 } from 'lucide-react';
-import { api, ApiError } from '../api';
+import { api, ApiError, type SimilarMatch } from '../api';
 import { ITEM_TYPE_SUGGESTIONS } from '../itemTypes';
 import type { Batch, CpcLookupResult, GoldPurity, Product, ProductGender } from '../types';
 import { STATUS_LABELS } from '../types';
@@ -25,6 +25,7 @@ import { CameraModal } from '../components/CameraModal';
 import { AngleCaptureButton } from '../components/AngleCaptureButton';
 import { ScannerModal } from '../components/ScannerModal';
 import { PhotoEditor } from '../components/PhotoEditor';
+import { SimilarList } from '../components/SimilarList';
 import { downscaleImage, analyzeImageQuality, checkFlashFired, type PreflightIssue } from '../utils/imagePreflight';
 import { logClientEvent } from '../utils/analytics';
 import { computeNetWeight } from '../../server/catalog/weights';
@@ -84,6 +85,8 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, n
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [photo, setPhoto] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
+  // Pieces already in the system that look like the photo just taken.
+  const [similar, setSimilar] = useState<SimilarMatch[]>([]);
   // Quick design tags: suggested per category (learned from approved photos),
   // tapped by staff, and passed to the AI as hints.
   const [tagOptions, setTagOptions] = useState<string[]>([]);
@@ -176,6 +179,9 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, n
       // 2200px on the long edge.
       const scaled = await downscaleImage(dataUrl, 2200, 0.92);
       setPhoto(scaled);
+      // Has this design been shot already? Information only - never blocks shooting.
+      setSimilar([]);
+      api.similarCheck(scaled).then((r) => setSimilar(r.matches)).catch(() => undefined);
 
       const { issues } = await analyzeImageQuality(scaled);
 
@@ -217,6 +223,7 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, n
 
   const clearPhoto = useCallback(() => {
     setPhoto(null);
+    setSimilar([]);
     setPreflightIssues([]);
     setIssuesAcknowledged(false);
     setExtraPhotos([]);
@@ -313,6 +320,7 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, n
       setJustQueued(form.cpc || form.itemType);
       // Reset immediately - this is what makes the next capture instant.
       setForm(EMPTY_FORM);
+      setSimilar([]);
       setChosenTags([]);
       setStaffNote('');
       setPhoto(null);
@@ -400,6 +408,16 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, n
               <img src={photo} alt="Captured piece" className="w-full max-h-80 object-contain rounded-xl bg-stone-50" />
 
               {isChecking && <p className="text-sm text-stone-500">Checking the photo…</p>}
+
+              {similar.length > 0 && (
+                <div className="space-y-2 rounded-xl border border-amber-300 bg-amber-50 p-3">
+                  <p className="text-sm font-medium text-amber-900">
+                    {similar[0].tier === 'same' ? 'This looks like a piece already shot.' : 'Similar pieces are already in the system.'}
+                  </p>
+                  <SimilarList matches={similar} />
+                  <p className="text-xs text-amber-800">If this is a different piece or another lot, carry on - nothing is blocked.</p>
+                </div>
+              )}
 
               {preflightIssues.length > 0 && (
                 <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 space-y-3">

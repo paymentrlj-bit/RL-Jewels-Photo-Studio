@@ -7,6 +7,7 @@ import { Share2, Copy, Download, MessageCircle, Search, Check, AlertTriangle } f
 import { api, ApiError } from '../api';
 import type { Product } from '../types';
 import { buildShareCaption, cleanPrice, formatRupees } from '../../server/sharing/caption';
+import { SimilarPieces } from '../components/SimilarList';
 import { shareProduct, copyText, savePhoto, whatsappTextUrl } from '../utils/share';
 
 export const ShareView: React.FC = () => {
@@ -121,6 +122,7 @@ const ShareCard: React.FC<{ product: Product; onUpdated: (p: Product) => void }>
           />
         </label>
         {cleanPrice(price) && <p className="text-xs text-stone-400">Shows as {formatRupees(price)}</p>}
+        <SimilarPieces productId={product.id} />
         {!product.description && <p className="text-xs text-amber-700">The description is not written yet - the caption will be short.</p>}
       </div>
       <div className="space-y-2 border-t border-stone-200 p-3">

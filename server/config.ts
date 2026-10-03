@@ -105,6 +105,13 @@ export const config = {
   metaFeedKey: process.env.META_FEED_KEY?.trim() || '',
   catalogLinkBase: (process.env.CATALOG_LINK_BASE?.trim() || '').replace(/\/+$/, ''),
 
+  // Look-alike search (server/similarity). Scores run 0..1. At or above
+  // SIMILAR_SCORE a piece is listed as similar; at or above SAME_SCORE it is
+  // called "very likely the same piece". The first values are a starting guess -
+  // every check is logged (similarity.check) so they can be tuned from real data.
+  similarScore: Number(process.env.SIMILAR_SCORE) || 0.8,
+  sameScore: Number(process.env.SAME_SCORE) || 0.92,
+
   axiom: {
     token: optional('AXIOM_TOKEN'),
     dataset: process.env.AXIOM_DATASET?.trim() || 'rl-jewels-events',

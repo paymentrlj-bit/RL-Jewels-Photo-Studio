@@ -134,9 +134,24 @@ export const api = {
   getPrompt: () => request<{ prompt: string; isCustom: boolean; updatedAt: string | null; updatedBy: string | null }>('/admin/prompt'),
   savePrompt: (prompt: string) => post<{ prompt: string; isCustom: boolean }>('/admin/prompt', { prompt }),
   resetPrompt: () => post<{ prompt: string; isCustom: boolean }>('/admin/prompt', { reset: true }),
+  similarCheck: (imageBase64: string) => post<{ matches: SimilarMatch[] }>('/similar/check', { imageBase64 }),
+  similarTo: (id: string) => request<{ basis: 'studio' | 'original'; matches: SimilarMatch[] }>(`/products/${id}/similar`),
+  duplicates: () => request<{ pairs: { score: number; tier: 'same' | 'similar'; a: SimilarMatch; b: SimilarMatch }[] }>('/admin/duplicates'),
   metaFeed: () => request<MetaFeedStatus>('/admin/meta-feed'),
   analytics: (days = 30) => request<AnalyticsSummary>(`/admin/analytics/summary?days=${days}`),
 };
+
+export interface SimilarMatch {
+  productId: string;
+  score: number;
+  tier: 'same' | 'similar';
+  name: string;
+  cpc: string;
+  itemType: string;
+  status: string;
+  originalPhotoId: string | null;
+  processedPhotoId: string | null;
+}
 
 export interface MetaFeedStatus {
   enabled: boolean;

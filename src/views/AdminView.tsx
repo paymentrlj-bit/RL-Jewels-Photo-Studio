@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Users, Wand2, BarChart3, AlertTriangle, Check, UserPlus, RotateCcw, KeyRound } from 'lucide-react';
 import { api, ApiError, type AnalyticsSummary, type MetaFeedStatus } from '../api';
+import { SimilarList } from '../components/SimilarList';
 import type { SessionUser } from '../types';
 import { AUDIT_CHECK_LABELS } from '../types';
 
@@ -42,11 +43,13 @@ export const AdminView: React.FC = () => {
 const InsightsPanel: React.FC = () => {
   const [data, setData] = useState<AnalyticsSummary | null>(null);
   const [feed, setFeed] = useState<MetaFeedStatus | null>(null);
+  const [dupes, setDupes] = useState<Awaited<ReturnType<typeof api.duplicates>>['pairs'] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     api.analytics(30).then(setData).catch((err) => setError(err.message));
     api.metaFeed().then(setFeed).catch(() => setFeed(null));
+    api.duplicates().then((r) => setDupes(r.pairs)).catch(() => setDupes(null));
   }, []);
 
   if (error) return <ErrorBox message={error} />;
@@ -139,6 +142,24 @@ const InsightsPanel: React.FC = () => {
               {!feed.hasPublicBaseUrl && <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">PUBLIC_BASE_URL is not set, so photo links use this page&apos;s address. Set it to the public address of the studio.</p>}
               {!feed.hasLinkBase && <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">CATALOG_LINK_BASE is not set, so the feed&apos;s product link column is empty. Meta requires a link to the product on the store&apos;s website for Instagram/Facebook shops.</p>}
             </>
+          )}
+        </section>
+      )}
+
+      {dupes && (
+        <section className="rounded-2xl border border-stone-200 bg-white p-5">
+          <h3 className="font-semibold text-stone-900">Possible duplicates in the catalogue</h3>
+          <p className="mt-1 text-xs text-stone-500">Pieces whose studio photos look alike - the same design shot twice, or several lots of one design. Nothing is deleted automatically.</p>
+          {dupes.length === 0 ? (
+            <p className="mt-3 text-sm text-stone-500">None found.</p>
+          ) : (
+            <ul className="mt-3 space-y-3">
+              {dupes.map((p) => (
+                <li key={`${p.a.productId}-${p.b.productId}`}>
+                  <SimilarList matches={[{ ...p.a, score: p.score, tier: p.tier }, { ...p.b, score: p.score, tier: p.tier }]} />
+                </li>
+              ))}
+            </ul>
           )}
         </section>
       )}
