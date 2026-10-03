@@ -10,6 +10,7 @@
 import type { GoogleGenAI } from '@google/genai';
 import { MODEL_AUDIT_STRONG, type TokenUsage } from './client';
 import { callJson } from './inventory';
+import { cleanTags } from '../catalog/tags';
 import { FAMILY_LABEL, PRODUCT_FAMILIES, familyFor, type ProductFamily } from '../catalog/taxonomy';
 
 export interface PieceIdentity {
@@ -19,6 +20,8 @@ export interface PieceIdentity {
   /** Separate physical pieces in the photo: a pair of earrings is 2, a necklace set may be 3. */
   pieceCount: number | null;
   hasBlackBeads: boolean;
+  /** Short design tags the AI saw ("patti", "meena"), learned into the category's tag list on approval. */
+  tags: string[];
   confidence: 'high' | 'medium' | 'low';
 }
 
@@ -36,6 +39,7 @@ export function parseIdentity(raw: unknown): PieceIdentity | null {
     description: String(o.description ?? '').slice(0, 300),
     pieceCount: count,
     hasBlackBeads: o.hasBlackBeads === true,
+    tags: cleanTags(o.tags),
     confidence,
   };
 }
@@ -61,9 +65,10 @@ Pick the family:
 A long strand of beads and flat gold pieces hanging in a long loop is a neckpiece or mangalsutra, never earrings, however it is laid out on the counter.
 
 Respond ONLY as JSON:
-{"family": "earring|neckpiece|mangalsutra|ring|wrist|nose|other", "description": string, "pieceCount": number, "hasBlackBeads": boolean, "confidence": "high|medium|low"}
+{"family": "earring|neckpiece|mangalsutra|ring|wrist|nose|other", "description": string, "pieceCount": number, "hasBlackBeads": boolean, "tags": string[], "confidence": "high|medium|low"}
 - description: one short line naming what it is and its main parts.
 - pieceCount: how many separate physical pieces are in the photo (a pair of earrings is 2; one necklace is 1).
+- tags: up to 6 short design tags (1-3 words, lowercase) for features actually visible, in the trade's own words, e.g. "patti", "black beads", "meena", "pearl drops", "flat links", "peacock". Only what you can see.
 - confidence: "low" if the photo is too unclear, cropped or ambiguous to be sure of the family.`;
   const parts: object[] = [
     { inlineData: { mimeType, data: imageBase64 } },

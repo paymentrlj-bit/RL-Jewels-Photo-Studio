@@ -22,7 +22,7 @@ function makeProduct(overrides: Partial<Product> = {}): Product {
     imageAltText: '', urlSlug: '', itemType: 'Ring', purity: '22kt',
     gender: "women's", size: 'DEFAULT',
     grossWeightGrams: '5.000', otherWeightGrams: '0.000', netWeightGrams: '4.800',
-    status: 'approved', reviewNote: '', auditChecklist: null, auditReason: '', riskScore: null, riskTier: '', riskReasons: [],
+    status: 'approved', reviewNote: '', auditChecklist: null, auditReason: '', riskScore: null, riskTier: '', riskReasons: [], tags: [], aiTags: [], staffNote: '',
     modelUsed: '', attemptCount: 1, estimatedCostUsd: 0.05,
     createdBy: 'usr_1', createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z', approvedAt: null, exportedAt: null,

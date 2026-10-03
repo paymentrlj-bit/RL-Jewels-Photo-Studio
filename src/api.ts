@@ -104,6 +104,7 @@ export const api = {
 
   // --- catalog ---
   cpcLookup: (cpc: string) => request<CpcLookupResult>(`/cpc-lookup?cpc=${encodeURIComponent(cpc)}`),
+  designTags: (itemType: string) => request<{ tags: string[] }>(`/tags?itemType=${encodeURIComponent(itemType)}`),
   learnCpc: (body: Record<string, unknown>) => post<{ success: boolean }>('/cpc-lookup/learn', body),
   cpcStats: () => request<{ totalRows: number; totalProducts: number; learnedThisSession: number }>('/cpc-stats'),
 

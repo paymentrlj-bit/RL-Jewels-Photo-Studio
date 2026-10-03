@@ -20,6 +20,7 @@ import {
 import { buildAuditPrompt, buildCopyPrompt, type AuditContext, type CopyContext } from './prompts';
 import { buildAuditInventoryBlock, type DetailInventory, type ReferenceImage } from './inventory';
 import { describeItemType } from '../catalog/taxonomy';
+import { sanitizeCopy } from '../catalog/copyRules';
 import type { PieceIdentity } from './identity';
 import type { Exclusion } from '../imaging/faithful';
 
@@ -353,7 +354,9 @@ export async function generateCopy(
     const parsed = JSON.parse(response.text?.trim() || '{}') as Record<string, unknown>;
     if (!parsed.name || !parsed.description) return null;
 
-    return {
+    // The prompt asks for the owner's rules (no city, no weight in the name);
+    // this makes sure of them.
+    return sanitizeCopy({
       name: String(parsed.name),
       description: String(parsed.description),
       metaTitle: parsed.metaTitle ? String(parsed.metaTitle) : '',
@@ -361,7 +364,7 @@ export async function generateCopy(
       imageAltText: parsed.imageAltText ? String(parsed.imageAltText) : '',
       searchKeywords: parsed.searchKeywords ? String(parsed.searchKeywords) : '',
       urlSlug: parsed.urlSlug ? String(parsed.urlSlug) : '',
-    };
+    }, context.itemType);
   } finally {
     clearTimeout(timeout);
   }
@@ -380,6 +383,7 @@ export function buildContextBlock(input: {
   weight?: string;
   /** Parsed from the CPC size name ("28INCH"). */
   lengthInches?: number | null;
+  staffTags?: string;
 }): string {
   const item = describeItemType(input.itemType);
   return `
@@ -388,7 +392,7 @@ ADDITIONAL CONTEXT (FROM CATALOG FORM):
 - Item Category: ${item.line}
 ${item.notes ? `- About this category: ${item.notes}\n` : ''}- Purity: ${input.purity || '22kt'} Gold
 - Intended For: ${input.gender || "women's"}
-${input.lengthInches ? `- Length: about ${input.lengthInches} inches\n` : ''}${input.weight ? `- Weight: ${input.weight}g\n` : ''}These facts come from the store's form. Use them to understand WHAT the piece is and how substantial it is - a ${input.lengthInches ? `${input.lengthInches}-inch` : 'long'} piece weighing tens of grams is a long strand worn round the neck, never earrings; heavier means chunkier beads and thicker links. They are hints, not orders: the PHOTO is the final truth. If they disagree with what the photo plainly shows, follow the photo and reproduce exactly what it shows.`;
+${input.lengthInches ? `- Length: about ${input.lengthInches} inches\n` : ''}${input.weight ? `- Weight: ${input.weight}g\n` : ''}${input.staffTags ? `${input.staffTags.trimStart()}\n` : ''}These facts come from the store's form. Use them to understand WHAT the piece is and how substantial it is - a ${input.lengthInches ? `${input.lengthInches}-inch` : 'long'} piece weighing tens of grams is a long strand worn round the neck, never earrings; heavier means chunkier beads and thicker links. They are hints, not orders: the PHOTO is the final truth. If they disagree with what the photo plainly shows, follow the photo and reproduce exactly what it shows.`;
 }
 
 /** What the audit is told about the original, beyond the two images. */
@@ -397,6 +401,7 @@ export function buildAuditFactsBlock(input: {
   lengthInches?: number | null;
   weight?: string;
   identity?: PieceIdentity | null;
+  staffTags?: string;
 }): string {
   const lines: string[] = [];
   if (input.identity) {
@@ -404,6 +409,7 @@ export function buildAuditFactsBlock(input: {
   }
   if (input.lengthInches) lines.push(`Store form: about ${input.lengthInches} inches long.`);
   if (input.weight) lines.push(`Store form: ${input.weight} g.`);
+  if (input.staffTags) lines.push(input.staffTags.replace(/^\n- /, ''));
   return lines.length ? `Facts about the original:\n${lines.map((l) => `- ${l}`).join('\n')}\nThe photo is the final truth; these only help you recognise the product.` : '';
 }
 
