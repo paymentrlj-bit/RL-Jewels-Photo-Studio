@@ -512,31 +512,51 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
   // the AI's version failed on something a redraw keeps getting wrong, and
   // when staff ask for it directly. Returns false when the photo will not
   // separate cleanly, and the caller falls back to what it did before.
+  // The cut-out itself: outline the piece (cached by image, so usually free
+  // after the grounding stage), then cut it from the original's own pixels.
+  const makeCutOut = async () => {
+    // The outline is needed even when segmentation grounding is switched off
+    // for the enhance prompt.
+    let outline = segmentation;
+    if (!outline) {
+      const { result, cacheHit } = await cachedSegmentation(cleanBase64, () => segmentJewelry(ai, cleanBase64, mimeType, recordUsage('segment', MODEL_SEGMENT)));
+      if (!cacheHit) {
+        apiCallCount++;
+        estimatedCostUsd += COST_PER_CALL_USD[MODEL_SEGMENT] || 0;
+      }
+      outline = result;
+    }
+    if (!outline) throw new FaithfulUnavailableError('no_outline', 'The piece could not be outlined in the photo.');
+    const cutOut = await buildFaithfulImage({
+      image: originalBuffer,
+      polygon: outline.polygon,
+      box: outline.boxTwoD,
+      exclusions: outline.exclusions,
+      aspectRatio,
+    });
+    return { cutOut, exclusions: outline.exclusions?.length ?? 0 };
+  };
+
+  // Alongside an AI render that passed: the real photo cut out too, so the
+  // reviewer sees both and picks. Best effort - the render is already good
+  // enough to ship, so any failure here is only logged.
+  const attachCutOut = async () => {
+    const startedAt = Date.now();
+    try {
+      const { cutOut, exclusions } = await makeCutOut();
+      saveImage({ productId: product.id, kind: 'cutout', data: cutOut.buffer.toString('base64'), mimeType: cutOut.mimeType, source: 'faithful' });
+      logEvent('pipeline.cutout_attached', { requestId, productId: product.id, latencyMs: Date.now() - startedAt, coverage: cutOut.coverage, exclusions });
+    } catch (err) {
+      logEvent('pipeline.cutout_unavailable', { requestId, productId: product.id, code: err instanceof FaithfulUnavailableError ? err.code : 'error', errorMessage: debugDetail(err) });
+    }
+  };
+
   const tryFaithful = async (why: { reason: string; attemptCount: number; trigger: 'audit_failed' | 'staff_request' }): Promise<boolean> => {
     if (!config.faithfulMode && why.trigger !== 'staff_request') return false;
     const startedAt = Date.now();
     setJobStage(job.id, 'cutting_out');
     try {
-      // The outline is needed even when segmentation grounding is switched
-      // off for the enhance prompt. Cached by image, so usually free here.
-      let outline = segmentation;
-      if (!outline) {
-        const { result, cacheHit } = await cachedSegmentation(cleanBase64, () => segmentJewelry(ai, cleanBase64, mimeType, recordUsage('segment', MODEL_SEGMENT)));
-        if (!cacheHit) {
-          apiCallCount++;
-          estimatedCostUsd += COST_PER_CALL_USD[MODEL_SEGMENT] || 0;
-        }
-        outline = result;
-      }
-      if (!outline) throw new FaithfulUnavailableError('no_outline', 'The piece could not be outlined in the photo.');
-
-      const cutOut = await buildFaithfulImage({
-        image: originalBuffer,
-        polygon: outline.polygon,
-        box: outline.boxTwoD,
-        exclusions: outline.exclusions,
-        aspectRatio,
-      });
+      const { cutOut, exclusions } = await makeCutOut();
       const processedPhoto = saveImage({
         productId: product.id,
         kind: 'processed',
@@ -551,7 +571,7 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
         latencyMs: Date.now() - startedAt,
         coverage: cutOut.coverage,
         backgroundSpread: cutOut.backgroundSpread,
-        exclusions: outline.exclusions?.length ?? 0,
+        exclusions,
         itemType: product.itemType || null,
       });
       const reason = why.trigger === 'staff_request'
@@ -886,6 +906,7 @@ Correct this specific issue while still following every rule above.`;
   });
 
   clearBlockingIssue();
+  await attachCutOut();
   finish('awaiting_review', { reason: audit.reason, checklist: audit.checklist, modelUsed, attemptCount });
   setProductStatus(product.id, 'awaiting_review');
   completeJob(job.id, 'succeeded', {

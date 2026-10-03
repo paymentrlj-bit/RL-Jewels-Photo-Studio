@@ -16,7 +16,8 @@ import {
   countAdmins,
 } from '../auth/users';
 import { getEnhancePromptState, setEnhancePrompt, resetEnhancePrompt } from '../settings';
-import { countProductsByStatus } from '../db/products';
+import { countProductsByStatus, listOutcomeRows } from '../db/products';
+import { summariseOutcomes } from '../catalog/outcomes';
 import { queueDepth } from '../queue/jobs';
 import { storageStats } from '../storage/images';
 import { getCpcMasterStats } from '../integrations/cpcMaster';
@@ -259,6 +260,8 @@ adminRouter.get('/analytics/summary', async (req, res) => {
       failuresByCheck: checkFailures,
       note: 'The most frequently failing check is the best target for improvement. Exposure and focus failures usually mean a lighting or camera fix; design and colour failures usually mean a prompt fix.',
     },
+
+    outcomes: summariseOutcomes(listOutcomeRows(sinceIso)),
 
     stageLatency: Object.fromEntries(
       Object.entries(stages).map(([stage, s]) => [

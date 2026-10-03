@@ -120,6 +120,48 @@ const InsightsPanel: React.FC = () => {
       </section>
 
       <section className="rounded-2xl border border-stone-200 bg-white p-5">
+        <h3 className="font-semibold text-stone-900">Approval rate by category</h3>
+        <p className="mt-1 text-xs text-stone-500">
+          Approved vs sent back for reshoot, last {data.windowDays} days. Weakest categories first - those are the ones to fix or shoot differently. Pieces still waiting are not counted.
+        </p>
+        {data.outcomes.byCategory.length === 0 ? (
+          <p className="mt-4 text-sm text-stone-500">Nothing shot in this period yet.</p>
+        ) : (
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full min-w-[420px] text-sm">
+              <thead>
+                <tr className="border-b border-stone-200 text-left text-xs uppercase tracking-wide text-stone-500">
+                  <th className="pb-2">Category</th><th className="pb-2">Shot</th><th className="pb-2">Approved</th>
+                  <th className="pb-2">Reshoot</th><th className="pb-2">Approval</th><th className="pb-2">Avg risk</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.outcomes.byCategory.map((g) => (
+                  <tr key={g.label} className="border-b border-stone-100">
+                    <td className="py-2 font-medium text-stone-800">{g.label}</td>
+                    <td className="py-2">{g.total}</td>
+                    <td className="py-2">{g.approved}</td>
+                    <td className="py-2">{g.reshoot}</td>
+                    <td className={`py-2 font-medium ${g.approvalRate !== null && g.approvalRate < 60 ? 'text-red-700' : 'text-stone-800'}`}>
+                      {g.approvalRate === null ? '—' : `${g.approvalRate}%`}
+                    </td>
+                    <td className="py-2 text-stone-500">{g.avgRisk ?? '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {data.outcomes.byRiskTier.length > 0 && (
+          <p className="mt-3 text-xs text-stone-500">
+            By risk score:{' '}
+            {data.outcomes.byRiskTier.map((g) => `${g.label} ${g.approvalRate === null ? '—' : `${g.approvalRate}%`} approved (${g.total})`).join(' · ')}.
+            If high-risk pieces are not approved less often, the score needs retuning.
+          </p>
+        )}
+      </section>
+
+      <section className="rounded-2xl border border-stone-200 bg-white p-5">
         <h3 className="mb-3 font-semibold text-stone-900">Per-stage performance</h3>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[480px] text-sm">

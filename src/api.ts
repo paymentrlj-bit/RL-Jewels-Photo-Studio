@@ -93,6 +93,7 @@ export const api = {
     post<{ product: Product }>(`/products/${id}/requeue`, options),
   fix: (id: string, body: { issues: string[]; note?: string }) =>
     post<{ product: Product; jobId: string }>(`/products/${id}/fix`, body),
+  useCutout: (id: string) => post<{ product: Product }>(`/products/${id}/use-cutout`, {}),
   addAngle: (id: string, imageBase64: string) =>
     post<{ product: Product; photoId: string; jobId: string }>(`/products/${id}/angle`, { imageBase64 }),
 
@@ -135,6 +136,15 @@ export const api = {
   analytics: (days = 30) => request<AnalyticsSummary>(`/admin/analytics/summary?days=${days}`),
 };
 
+export interface OutcomeGroup {
+  label: string;
+  total: number;
+  approved: number;
+  reshoot: number;
+  approvalRate: number | null;
+  avgRisk: number | null;
+}
+
 export interface AnalyticsSummary {
   windowDays: number;
   throughput: {
@@ -157,6 +167,10 @@ export interface AnalyticsSummary {
     note: string;
   };
   qualityChecks: { verdictsAnalyzed: number; failuresByCheck: Record<string, number>; note: string };
+  outcomes: {
+    byCategory: OutcomeGroup[];
+    byRiskTier: OutcomeGroup[];
+  };
   stageLatency: Record<string, { calls: number; failures: number; timeouts: number; avgLatencyMs: number }>;
   system: {
     productCounts: Record<string, number>;

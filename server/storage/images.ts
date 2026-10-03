@@ -17,7 +17,9 @@ import { getDb, newId, nowIso } from '../db';
 // 'angle' is an extra photo of the same piece from another viewpoint, added
 // when part of it was hidden in the original. It never replaces the original -
 // it is fed to the models alongside it.
-export type PhotoKind = 'original' | 'processed' | 'angle';
+// 'cutout' is the real photo cut out onto white, stored next to an AI render
+// that passed so the reviewer can compare the two and choose.
+export type PhotoKind = 'original' | 'processed' | 'angle' | 'cutout';
 // 'faithful' marks a processed photo cut out of the original's own pixels
 // (imaging/faithful.ts) rather than generated.
 export type PhotoSource = 'upload' | 'phone_camera' | 'dslr' | 'sample' | 'faithful';
