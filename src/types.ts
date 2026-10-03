@@ -52,6 +52,9 @@ export interface Product {
   reviewNote: string;
   auditChecklist: Record<string, boolean> | null;
   auditReason: string;
+  riskScore: number | null;
+  riskTier: '' | 'low' | 'medium' | 'high';
+  riskReasons: string[];
   modelUsed: string;
   attemptCount: number;
   estimatedCostUsd: number;
@@ -143,6 +146,8 @@ export const AUDIT_CHECK_LABELS: Record<string, string> = {
   chainPatternMatches: 'Chain and strand pattern unchanged',
   engravingPreserved: 'Engraving and motifs unchanged',
   naturalDropPhysics: 'Hangs naturally, like the original',
+  sameProductFamily: 'Same kind of product as the original',
+  pieceCountMatches: 'Same number of pieces, same pendant',
 };
 
 // The same checks, worded as what's WRONG rather than what a pass looks
@@ -162,6 +167,8 @@ export const AUDIT_CHECK_FAILURE_LABELS: Record<string, string> = {
   chainPatternMatches: "Chain or strand pattern doesn't match the original",
   engravingPreserved: "Engraving or motifs don't match the original",
   naturalDropPhysics: "Doesn't hang the way the original does",
+  sameProductFamily: 'Turned into a different kind of product',
+  pieceCountMatches: 'Number of pieces or the pendant changed',
 };
 
 export const STATUS_LABELS: Record<ProductStatus, string> = {

@@ -198,6 +198,18 @@ const MIGRATIONS: Migration[] = [
          AND COALESCE(CAST(NULLIF(TRIM(other_weight_grams), '') AS REAL), 0) <= CAST(TRIM(gross_weight_grams) AS REAL);
     `,
   },
+  {
+    version: 3,
+    name: 'fidelity risk score on every product',
+    up: `
+      -- How risky the AI render of each piece looked (see catalog/risk.ts).
+      -- Recorded for every product so approved and rejected pieces can be
+      -- compared against it later.
+      ALTER TABLE products ADD COLUMN risk_score   INTEGER;
+      ALTER TABLE products ADD COLUMN risk_tier    TEXT NOT NULL DEFAULT '';
+      ALTER TABLE products ADD COLUMN risk_reasons TEXT NOT NULL DEFAULT '[]';
+    `,
+  },
 ];
 
 export function runMigrations(db: BetterSqlite3.Database): void {

@@ -19,6 +19,7 @@ import {
 import { buildAuditPrompt, buildCopyPrompt, type AuditContext, type CopyContext } from './prompts';
 import { buildAuditInventoryBlock, type DetailInventory, type ReferenceImage } from './inventory';
 import { describeItemType } from '../catalog/taxonomy';
+import type { PieceIdentity } from './identity';
 import type { Exclusion } from '../imaging/faithful';
 
 export interface EnhanceResult {
@@ -92,6 +93,10 @@ export const UNFIXABLE_BY_ESCALATION = [
   'notCropped',
   'clearlyIdentifiableCategory',
   'naturalDropPhysics',
+  // Added with the identity check: a product that became a different product
+  // is the worst failure there is, and no stronger redraw undoes it.
+  'sameProductFamily',
+  'pieceCountMatches',
   // The four design-fidelity fields. Fabrication is not a capability problem.
   'stoneCountMatches',
   'beadDetailPreserved',
@@ -372,6 +377,8 @@ export function buildContextBlock(input: {
   purity?: string;
   gender?: string;
   weight?: string;
+  /** Parsed from the CPC size name ("28INCH"). */
+  lengthInches?: number | null;
 }): string {
   const item = describeItemType(input.itemType);
   return `
@@ -380,7 +387,23 @@ ADDITIONAL CONTEXT (FROM CATALOG FORM):
 - Item Category: ${item.line}
 ${item.notes ? `- About this category: ${item.notes}\n` : ''}- Purity: ${input.purity || '22kt'} Gold
 - Intended For: ${input.gender || "women's"}
-${input.weight ? `- Weight: ${input.weight}g` : ''}`;
+${input.lengthInches ? `- Length: about ${input.lengthInches} inches\n` : ''}${input.weight ? `- Weight: ${input.weight}g\n` : ''}These facts come from the store's form. Use them to understand WHAT the piece is and how substantial it is - a ${input.lengthInches ? `${input.lengthInches}-inch` : 'long'} piece weighing tens of grams is a long strand worn round the neck, never earrings; heavier means chunkier beads and thicker links. They are hints, not orders: the PHOTO is the final truth. If they disagree with what the photo plainly shows, follow the photo and reproduce exactly what it shows.`;
+}
+
+/** What the audit is told about the original, beyond the two images. */
+export function buildAuditFactsBlock(input: {
+  itemType?: string;
+  lengthInches?: number | null;
+  weight?: string;
+  identity?: PieceIdentity | null;
+}): string {
+  const lines: string[] = [];
+  if (input.identity) {
+    lines.push(`An independent look at IMAGE 1 identified it as: ${input.identity.description || input.identity.family} (family: ${input.identity.family}, ${input.identity.pieceCount ?? 'unknown number of'} piece(s)${input.identity.hasBlackBeads ? ', has black beads' : ''}).`);
+  }
+  if (input.lengthInches) lines.push(`Store form: about ${input.lengthInches} inches long.`);
+  if (input.weight) lines.push(`Store form: ${input.weight} g.`);
+  return lines.length ? `Facts about the original:\n${lines.map((l) => `- ${l}`).join('\n')}\nThe photo is the final truth; these only help you recognise the product.` : '';
 }
 
 export function buildSegmentationBlock(segmentation: SegmentationResult): string {

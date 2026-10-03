@@ -94,6 +94,8 @@ OUTPUT: use the composition and aspect ratio given in the OUTPUT FRAMING block b
 export interface AuditContext {
   itemType: string;
   purity: string;
+  /** Length / weight / what an independent look says the original is. See buildAuditFactsBlock. */
+  facts?: string;
 }
 
 // groundingBlock is the verified detail inventory (see ai/inventory.ts), when
@@ -105,8 +107,11 @@ export function buildAuditPrompt(context: AuditContext, groundingBlock = ''): st
 IMAGE 1 is the original counter photo. IMAGE 2 is the AI-enhanced result that is about to be published.
 Item: ${context.purity} gold ${item.line}.${item.notes ? `\nAbout this category: ${item.notes}` : ''}
 
+${context.facts ?? ''}
 Compare IMAGE 2 against IMAGE 1 and grade it.
 A different camera angle or pose in image 2 is fine and expected - judge the physical design of the piece, never the viewpoint.
+Flexible strands - bead strings, chains, hanging drops - are often laid on the counter curled, bunched, twisted, folded or slanted. IMAGE 2 is ALLOWED to show them in the natural way they hang or lie when worn (straight down, evenly spread, not crossing) - that is a correction, not a fault, provided every bead, piece and drop is still there, in the same order, count and colour. Fail only if the DESIGN changed (parts added, dropped, reordered or recoloured), or if IMAGE 1 clearly shows an intentional crossed, slanted or looped design and IMAGE 2 straightened it away.
+Matching pairs - the two stones at the ends of a haar, a left and right earring, two vati - are almost always identical in colour and cut. Fail if IMAGE 2 shows a pair in different colours or cuts unless IMAGE 1 clearly shows them different.
 
 Before you decide any of the pass/fail fields below, you must first COUNT. Do not skip straight to a judgment call - a wrong count silently eyeballed as "close enough" is the most common way a bad photo has shipped in the past. Fill in "originalCounts" and "enhancedCounts" first, using the same categories for both so they can be directly compared: number of stones and their positions, number of beads/balls/tassels/granulation points in any dangling or clustered group, number of chain/mesh strands, and every distinct engraving/motif present - and for each, its shape and colour/material. Only after writing both of those out should you fill in the boolean checks - each one should follow directly from comparing the two counts you just wrote, not from a separate fresh impression of the image.${groundingBlock}
 
@@ -126,6 +131,8 @@ Respond ONLY as JSON matching this schema:
   "chainPatternMatches": boolean, // CRITICAL: does the chain/strand count in enhancedCounts EXACTLY match originalCounts, with the same link style, shape and profile, consistent spacing, the same clasp, and the same length relative to the pendant or motif it carries? Fail if strands were merged or split, the link style changed (e.g. flat hand-made links became a ball or rope chain), or a chain was visibly lengthened or shortened. Automatically true if the piece has no chain or strand element at all.
   "engravingPreserved": boolean, // CRITICAL: does every engraving, motif, pattern, enamel (meena) colour and surface texture in originalCounts still appear, unaltered and unsimplified, in enhancedCounts - including open-work staying open and solid carved areas staying solid - and is there NOTHING in enhancedCounts that is absent from originalCounts? Fail in either direction: removing real detail and inventing new detail are both failures. Ignore hallmark stamps (e.g. 916) completely - one being present, missing or changed is never a failure.
   "naturalDropPhysics": boolean, // If this piece has hanging chains, mesh, tassels, or ball/bead drops (e.g. jhumka, chandbali, bali, layered haars, charm bracelets): do they fall in smooth, symmetric, gravity-consistent curves - NOT tangled, kinked, flattened, pinched, or bent at an implausible angle? Does the drop count in enhancedCounts match originalCounts exactly, and is each drop the same length relative to the piece it hangs from? If the two earrings/sides of a pair are both visible, are their drops symmetric to each other? If the item has no hanging/repeated drop elements at all, this is automatically true.
+  "sameProductFamily": boolean, // CRITICAL: is IMAGE 2 the same KIND of product as IMAGE 1? A mangalsutra/pote must still be a mangalsutra with its black beads, a long chain or haar must not turn into earrings, a pendant must not become a ring. Fail on any change of product type, however good the picture looks.
+  "pieceCountMatches": boolean, // CRITICAL: are there the same number of separate pieces in IMAGE 2 as in IMAGE 1 (one necklace stays one, a pair of earrings stays a pair, a pendant on a chain is not split or duplicated), and is any main pendant or centrepiece the same design, size relative to the piece, and position? Fail if a pendant was redesigned, resized dramatically or swapped.
   "overallPass": boolean,       // true only if ALL of the above are true
   "reason": string              // if overallPass is false, a short, specific, staff-facing reason naming which check failed and why, citing the actual counts (e.g. "Bead count changed: original had 7 beads along the base, enhanced has 5."). If overallPass is true, a short confirmation.
 }`;
@@ -178,6 +185,19 @@ Respond ONLY as JSON: {"name": string, "description": string, "metaTitle": strin
 // should be able to break by editing prose. Forcing an elongated piece into a
 // square is named in the spec as a real shipped bug.
 // ---------------------------------------------------------------------------
+
+// Appended to the enhance prompt (not folded into the admin-editable master
+// prompt, which lives in the settings table). It relaxes the "do not rearrange"
+// rule for exactly one thing - how flexible strands lie - and nothing about the
+// design itself.
+export function buildNaturalArrangementBlock(): string {
+  return `
+
+NATURAL ARRANGEMENT (an exception to "do not rearrange", for placement only):
+Flexible parts - bead strings, chains, hanging drops, fringes - are often laid on the counter curled, bunched, twisted, folded, slanted or crossed. Show them as they hang or lie when the piece is worn: strands straight and smooth, drops hanging straight down and evenly spaced, nothing crossed or tangled - UNLESS the original clearly shows that crossing, slant or loop as part of the design, in which case keep it.
+This changes only HOW the parts lie. Every bead, piece, stone and drop must still be there, in the same order, count, size and colour. If you cannot straighten a part without inventing or losing detail, leave it as photographed.
+Matching pairs - the two end stones of a haar, both earrings, both vati - are almost always the same colour and cut: render a pair identically unless the original clearly shows them different.`;
+}
 
 export function buildOutputFramingBlock(aspectRatio: '1:1' | '3:4', itemType: string): string {
   if (aspectRatio === '3:4') {

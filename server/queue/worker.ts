@@ -32,6 +32,7 @@ import {
   segmentJewelry,
   generateCopy,
   buildContextBlock,
+  buildAuditFactsBlock,
   buildSegmentationBlock,
   classifyAuditFailure,
   type EnhanceResult,
@@ -39,7 +40,8 @@ import {
   type AuditCheck,
   type SegmentationResult,
 } from '../ai/operations';
-import { buildOutputFramingBlock } from '../ai/prompts';
+import { buildOutputFramingBlock, buildNaturalArrangementBlock } from '../ai/prompts';
+import { identifyPiece, compareIdentity, type PieceIdentity, type IdentityVerdict } from '../ai/identity';
 import {
   analyzeDetail,
   cropDetailRegions,
@@ -51,7 +53,8 @@ import {
   type DetailInventory,
   type ReferenceImage,
 } from '../ai/inventory';
-import { aspectRatioFor, describeItemType } from '../catalog/taxonomy';
+import { aspectRatioFor, describeItemType, parseLengthInches } from '../catalog/taxonomy';
+import { computeRisk } from '../catalog/risk';
 import { buildFixBlock, AUDIT_CHECK_TO_FIX, isFixCode } from '../catalog/fixes';
 import { designMemoryFor, buildDesignMemoryBlock, recordFixRequest } from '../db/fixRequests';
 import { buildFaithfulImage, FaithfulUnavailableError } from '../imaging/faithful';
@@ -73,6 +76,7 @@ import {
   getProduct,
   setProductStatus,
   recordAuditResult,
+  recordRisk,
   applyGeneratedCopy,
 } from '../db/products';
 import { getLatestPhoto, listPhotos, saveImage, readImageBase64, readImageBuffer, imageExists } from '../storage/images';
@@ -206,6 +210,12 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
   // without the detail inventory can be compared directly in Axiom.
   let detailInventoryUsed = false;
   let referenceImageCount = 0;
+  // Feed the per-product risk score written by finish() below.
+  let identityVerdict: IdentityVerdict = { status: 'unchecked', message: '' };
+  let identity: PieceIdentity | null = null;
+  let lowConfidenceElements = 0;
+  let escalatedFlag = false;
+  const failedChecksSeen = new Set<string>();
 
   const originalBuffer = readImageBuffer(originalPhoto);
   const cleanBase64 = originalBuffer.toString('base64');
@@ -291,6 +301,24 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
       renderMode?: 'ai' | 'faithful';
     }
   ) => {
+    // Scored for every outcome, so approved and rejected pieces can be compared
+    // against it later (catalog/risk.ts).
+    const renderMode = detail.renderMode ?? (status === 'awaiting_review' ? 'ai' : undefined);
+    const risk = computeRisk({
+      itemType: product.itemType,
+      size: product.size,
+      weight: product.netWeightGrams || product.grossWeightGrams,
+      inventoryRan: config.detailInventory ? detailInventoryUsed : undefined,
+      lowConfidenceElements,
+      identity: identityVerdict.status,
+      attempts: detail.attemptCount,
+      escalated: escalatedFlag,
+      renderMode,
+      failedChecks: [...failedChecksSeen],
+      hadAngles: angles.length > 0,
+    });
+    if (status !== 'failed') recordRisk(product.id, risk);
+
     logEvent('pipeline.completed', {
       requestId,
       jobId: job.id,
@@ -313,6 +341,11 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
       renderMode: detail.renderMode ?? (status === 'awaiting_review' ? 'ai' : null),
       designMemoryLessons: memoryLessonCount,
       fixRequested: fixCodes.length > 0 || Boolean(fixNote),
+      riskScore: risk.score,
+      riskTier: risk.tier,
+      riskReasons: risk.reasons.join('; '),
+      identityStatus: identityVerdict.status,
+      identityFamily: identity?.family ?? null,
     });
 
     recordAuditResult(product.id, {
@@ -326,18 +359,20 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
 
   const ai = getGeminiClient();
   const promptTemplate = getEnhancePrompt();
-  const contextBlock = buildContextBlock({
+  const lengthInches = parseLengthInches(product.size);
+  let contextBlock = buildContextBlock({
     itemType: product.itemType,
     purity: product.purity,
     gender: product.gender,
     weight: product.netWeightGrams || product.grossWeightGrams,
+    lengthInches,
   });
 
   // Branched by category. An elongated piece forced into a square is either
   // cropped or shrunk to a thread in a white field - see taxonomy.ts.
   const aspectRatio = aspectRatioFor(product.itemType);
   const framingBlock = buildOutputFramingBlock(aspectRatio, product.itemType);
-  const auditContext = {
+  const auditContext: { itemType: string; purity: string; facts?: string } = {
     itemType: product.itemType || 'jewellery',
     purity: product.purity || '22kt',
   };
@@ -416,6 +451,57 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
         errorMessage: debugDetail(err),
       });
       return null;
+    }
+  };
+
+  // One independent look at what the original photo actually is, by the strong
+  // model. Fails open like the other grounding stages: with no answer the
+  // pipeline behaves as it did before this check existed.
+  const runIdentity = async (): Promise<PieceIdentity | null> => {
+    const startedAt = Date.now();
+    try {
+      const found = await withTransientRetry(
+        () => identifyPiece(ai, cleanBase64, mimeType, angles, { itemLine: item.line, sizeInches: lengthInches }, recordUsage('identity', MODEL_AUDIT_STRONG)),
+        2,
+        deadline,
+        recordAttempt('identity', MODEL_AUDIT_STRONG)
+      );
+      logEvent('pipeline.identity', {
+        requestId,
+        productId: product.id,
+        found: Boolean(found),
+        family: found?.family ?? null,
+        confidence: found?.confidence ?? null,
+        pieceCount: found?.pieceCount ?? null,
+        hasBlackBeads: found?.hasBlackBeads ?? null,
+        description: found?.description ?? null,
+        latencyMs: Date.now() - startedAt,
+        itemType: product.itemType || null,
+      });
+      return found;
+    } catch (err) {
+      logEvent('pipeline.identity', { requestId, productId: product.id, found: false, latencyMs: Date.now() - startedAt, errorMessage: debugDetail(err) });
+      return null;
+    }
+  };
+
+  // The audit's grader. The strong model by default - the light one shared the
+  // enhance model's blind spots and let a mangalsutra pass as earrings - with
+  // the light one as a fallback if the strong one has been withdrawn.
+  const runAudit = async (stage: string, imageBase64: string, imageMime: string): Promise<AuditResult> => {
+    const attemptWith = (model: string) =>
+      withTransientRetry(
+        () => auditOutput(ai, cleanBase64, mimeType, imageBase64, imageMime, auditContext, model, auditGrounding, recordUsage(stage, model)),
+        3,
+        deadline,
+        recordAttempt(stage, model)
+      );
+    try {
+      return await attemptWith(MODEL_AUDIT_STRONG);
+    } catch (err) {
+      if (!isModelNotFoundError(err)) throw err;
+      logEvent('pipeline.audit_model_missing', { requestId, model: MODEL_AUDIT_STRONG, errorMessage: debugDetail(err) });
+      return attemptWith(MODEL_AUDIT);
     }
   };
 
@@ -516,11 +602,43 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
   }
 
   setJobStage(job.id, config.detailInventory ? 'inspecting' : 'segmenting');
-  const [segmentationFound, detail] = await Promise.all([runSegmentation(), runInventory()]);
+  const [segmentationFound, detail, identityFound] = await Promise.all([runSegmentation(), runInventory(), runIdentity()]);
   segmentation = segmentationFound;
   const segmentationBlock = segmentation ? buildSegmentationBlock(segmentation) : '';
 
   detailInventoryUsed = Boolean(detail);
+  identity = identityFound;
+  identityVerdict = compareIdentity(product.itemType, identity);
+  if (identityVerdict.status === 'mismatch' && identity) {
+    // Staff chose to process anyway: the form's category is probably wrong, so
+    // the photo's own identification outranks it.
+    contextBlock += `\nThe photo itself looks like: ${identity.description || identity.family}. That outranks the category above - render what the photo shows.`;
+  }
+  auditContext.facts = buildAuditFactsBlock({
+    itemType: product.itemType,
+    lengthInches,
+    weight: product.netWeightGrams || product.grossWeightGrams,
+    identity,
+  });
+
+  // The form and the photo disagree (a mangalsutra typed as earrings), or the
+  // AI cannot tell what the piece is: ask for another photo before anything
+  // is drawn. Staff can still choose "Process anyway", and then the photo wins
+  // over the form (see the facts block).
+  if (config.angleRequests && (identityVerdict.status === 'mismatch' || identityVerdict.status === 'unsure') && angles.length === 0 && job.payload.skipAngleRequest !== true) {
+    logEvent('pipeline.identity_mismatch', {
+      requestId,
+      productId: product.id,
+      status: identityVerdict.status,
+      itemType: product.itemType || null,
+      photoFamily: identity?.family ?? null,
+      photoDescription: identity?.description ?? null,
+    });
+    finish('needs_angle', { reason: identityVerdict.message, attemptCount: 0 });
+    setProductStatus(product.id, 'needs_angle');
+    completeJob(job.id, 'needs_reshoot', { reason: 'needs_angle' });
+    return;
+  }
 
   // Part of the piece hidden, and nobody has added another angle yet: stop
   // here and ask for one. This is the cheapest point to do it - before the
@@ -528,6 +646,7 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
   // the counter. Staff can always choose "Process anyway", which requeues with
   // skipAngleRequest set.
   const hidden = detail ? hiddenElements(detail.inventory) : [];
+  lowConfidenceElements = hidden.length;
   if (config.angleRequests && hidden.length > 0 && angles.length === 0 && job.payload.skipAngleRequest !== true) {
     const reason = buildAngleRequestReason(hidden);
     logEvent('pipeline.angle_requested', {
@@ -568,8 +687,10 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
   // is the final thing the model reads.
   const fixBlock = buildFixBlock(fixCodes, fixNote);
 
+  const naturalBlock = buildNaturalArrangementBlock();
+
   const buildEnhancePrompt = (refs: ReferenceImage[]) =>
-    promptTemplate + contextBlock + segmentationBlock + inventoryBlock + memoryBlock + buildReferenceImagesBlock(refs) + framingBlock + fixBlock;
+    promptTemplate + contextBlock + segmentationBlock + inventoryBlock + memoryBlock + buildReferenceImagesBlock(refs) + framingBlock + naturalBlock + fixBlock;
 
   const runEnhance = (model: string, stage: string, prompt: string, refs: ReferenceImage[]) =>
     withTransientRetry(
@@ -635,12 +756,7 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
   }
 
   setJobStage(job.id, 'auditing');
-  let audit = await withTransientRetry(
-    () => auditOutput(ai, cleanBase64, mimeType, enhanced!.imageBase64, enhanced!.mimeType, auditContext, MODEL_AUDIT, auditGrounding, recordUsage('audit', MODEL_AUDIT)),
-    3,
-    deadline,
-    recordAttempt('audit', MODEL_AUDIT)
-  );
+  let audit = await runAudit('audit', enhanced.imageBase64, enhanced.mimeType);
   let modelUsed = MODEL_ENHANCE_DEFAULT;
   let attemptCount = 1;
 
@@ -667,6 +783,7 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
   //
   // So: classify first, and only spend on the failures a stronger pass can
   // actually fix.
+  for (const [check, ok] of Object.entries(audit.checklist)) if (!ok) failedChecksSeen.add(check);
   if (!audit.overallPass) {
     // Fed to design memory: a fidelity check the audit failed is a mistake
     // the next piece of this style should be warned about.
@@ -696,6 +813,7 @@ IMPORTANT: A previous attempt at this edit failed quality review for this specif
 "${audit.reason}"
 Correct this specific issue while still following every rule above.`;
 
+    escalatedFlag = true;
     logEvent('pipeline.escalated', {
       requestId,
       reason: audit.reason,
@@ -713,12 +831,7 @@ Correct this specific issue while still following every rule above.`;
         setJobStage(job.id, 'auditing');
         // Stronger grader for the re-audit: this is the last gate before a
         // photo ships, and both passes have already been paid for.
-        const retryAudit = await withTransientRetry(
-          () => auditOutput(ai, cleanBase64, mimeType, retryEnhanced.imageBase64, retryEnhanced.mimeType, auditContext, MODEL_AUDIT_STRONG, auditGrounding, recordUsage('audit-strong', MODEL_AUDIT_STRONG)),
-          3,
-          deadline,
-          recordAttempt('audit-strong', MODEL_AUDIT_STRONG)
-        );
+        const retryAudit = await runAudit('audit-strong', retryEnhanced.imageBase64, retryEnhanced.mimeType);
         logEvent('pipeline.audit_verdict', {
           requestId,
           attempt: 2,
@@ -730,6 +843,7 @@ Correct this specific issue while still following every rule above.`;
           verdictDisagreed: retryAudit.verdictDisagreed,
         });
 
+        for (const [check, ok] of Object.entries(retryAudit.checklist)) if (!ok) failedChecksSeen.add(check);
         if (retryAudit.overallPass) {
           enhanced = retryEnhanced;
           audit = retryAudit;

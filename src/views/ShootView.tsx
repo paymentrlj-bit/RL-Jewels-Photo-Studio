@@ -28,6 +28,7 @@ import { downscaleImage, analyzeImageQuality, checkFlashFired, type PreflightIss
 import { logClientEvent } from '../utils/analytics';
 import { computeNetWeight } from '../../server/catalog/weights';
 import { isElongated } from '../../server/catalog/taxonomy';
+import { checkWeight } from '../../server/catalog/plausibility';
 
 // getUserMedia - the in-app live camera and the barcode scanner - is blocked
 // by browsers outside a secure context. On the shop LAN that means plain
@@ -241,6 +242,11 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, n
   // somewhere else in the system, so a new capture here would just be a
   // second, parallel entry for the same physical piece.
   const activeDuplicate = lookup?.activeDuplicate ?? null;
+  // Warn-only: a slipped decimal is the commonest counter typo.
+  const weightWarning = useMemo(
+    () => (netWeight.ok && netWeight.net ? checkWeight(form.itemType, netWeight.net) : null),
+    [form.itemType, netWeight]
+  );
   const canSubmit = Boolean(photo && form.itemType.trim() && netWeight.ok && !activeDuplicate && !isSubmitting && !isChecking && !needsAcknowledgement);
 
   const handleSubmit = useCallback(async () => {
@@ -595,6 +601,9 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, n
               </output>
             </div>
           </div>
+          {weightWarning && weightWarning.message && (
+            <p role="status" className="rounded-lg bg-amber-50 p-2 text-xs text-amber-900">{weightWarning.message}</p>
+          )}
           {netWeight.ok ? (
             <p className="text-xs text-stone-500">Net is worked out for you: Gross − Other.</p>
           ) : (
