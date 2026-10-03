@@ -59,6 +59,8 @@ export interface Product {
   tags: string[];
   aiTags: string[];
   staffNote: string;
+  /** Selling price in rupees (digits only), or '' when not set. */
+  priceInr: string;
   modelUsed: string;
   attemptCount: number;
   estimatedCostUsd: number;
@@ -98,6 +100,7 @@ interface ProductRow {
   tags: string;
   ai_tags: string;
   staff_note: string;
+  price_inr: string;
   model_used: string;
   attempt_count: number;
   estimated_cost_usd: number;
@@ -155,6 +158,7 @@ function toProduct(row: ProductRow): Product {
     tags: parseStringArray(row.tags),
     aiTags: parseStringArray(row.ai_tags),
     staffNote: row.staff_note,
+    priceInr: row.price_inr,
     modelUsed: row.model_used,
     attemptCount: row.attempt_count,
     estimatedCostUsd: row.estimated_cost_usd,
@@ -188,6 +192,7 @@ const EDITABLE_COLUMNS: Record<string, string> = {
   otherWeightGrams: 'other_weight_grams',
   netWeightGrams: 'net_weight_grams',
   reviewNote: 'review_note',
+  priceInr: 'price_inr',
   batchId: 'batch_id',
 };
 
@@ -224,6 +229,7 @@ export function createProduct(input: { createdBy: string; batchId?: string | nul
     tags: JSON.stringify(input.tags ?? []),
     ai_tags: '[]',
     staff_note: input.staffNote ?? '',
+    price_inr: '',
     model_used: '',
     attempt_count: 0,
     estimated_cost_usd: 0,

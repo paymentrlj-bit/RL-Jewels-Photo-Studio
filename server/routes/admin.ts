@@ -18,6 +18,8 @@ import {
 import { getEnhancePromptState, setEnhancePrompt, resetEnhancePrompt } from '../settings';
 import { countProductsByStatus, listOutcomeRows } from '../db/products';
 import { summariseOutcomes } from '../catalog/outcomes';
+import { buildMetaFeed } from '../sharing/metaFeed';
+import { baseUrlFor, collectFeedProducts } from './publicFeed';
 import { queueDepth } from '../queue/jobs';
 import { storageStats } from '../storage/images';
 import { getCpcMasterStats } from '../integrations/cpcMaster';
@@ -284,6 +286,21 @@ adminRouter.get('/analytics/summary', async (req, res) => {
       axiomMirror: isAxiomConfigured(),
       eventSource: 'local database (durable)',
     },
+  });
+});
+
+// Where the Meta catalogue feed stands: on or off, its address, and how many
+// approved products are complete enough to be in it.
+adminRouter.get('/meta-feed', (req, res) => {
+  const base = baseUrlFor(req);
+  const { included, skipped } = buildMetaFeed(collectFeedProducts(), base);
+  res.json({
+    enabled: Boolean(config.metaFeedKey),
+    url: config.metaFeedKey ? `${base}/feeds/meta-catalog.csv?key=${encodeURIComponent(config.metaFeedKey)}` : null,
+    included,
+    skipped,
+    hasLinkBase: Boolean(config.catalogLinkBase),
+    hasPublicBaseUrl: Boolean(config.publicBaseUrl),
   });
 });
 

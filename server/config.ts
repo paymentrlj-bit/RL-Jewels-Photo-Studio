@@ -96,6 +96,15 @@ export const config = {
     rootFolderId: optional('GOOGLE_DRIVE_ROOT_FOLDER_ID'),
   },
 
+  // Sharing and the Meta (Facebook / Instagram / WhatsApp) catalogue feed.
+  // PUBLIC_BASE_URL is the address the internet reaches this app at, used to
+  // build the photo links Meta fetches. META_FEED_KEY is the secret in the feed
+  // URL; unset = the feed is switched off. CATALOG_LINK_BASE is where a product
+  // page lives on the store's website (the feed's required `link` column).
+  publicBaseUrl: (process.env.PUBLIC_BASE_URL?.trim() || '').replace(/\/+$/, ''),
+  metaFeedKey: process.env.META_FEED_KEY?.trim() || '',
+  catalogLinkBase: (process.env.CATALOG_LINK_BASE?.trim() || '').replace(/\/+$/, ''),
+
   axiom: {
     token: optional('AXIOM_TOKEN'),
     dataset: process.env.AXIOM_DATASET?.trim() || 'rl-jewels-events',

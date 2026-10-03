@@ -231,6 +231,16 @@ const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    version: 5,
+    name: 'selling price per product, for sharing and the catalogue feed',
+    up: `
+      -- Rupees, digits only. Typed by staff when sharing; the Meta catalogue
+      -- feed lists only products that have one, so a wrong price can never be
+      -- published by guesswork.
+      ALTER TABLE products ADD COLUMN price_inr TEXT NOT NULL DEFAULT '';
+    `,
+  },
 ];
 
 export function runMigrations(db: BetterSqlite3.Database): void {
