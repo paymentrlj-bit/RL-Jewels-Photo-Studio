@@ -8,7 +8,7 @@
 // disagrees with the form, the audit is told what the original really is, and
 // the risk score notes a piece the model was unsure about.
 import type { GoogleGenAI } from '@google/genai';
-import { MODEL_AUDIT_STRONG, type TokenUsage } from './client';
+import { modelForRole, type TokenUsage } from './client';
 import { callJson } from './inventory';
 import { cleanTags } from '../catalog/tags';
 import { FAMILY_LABEL, PRODUCT_FAMILIES, familyFor, setPieces, type ProductFamily } from '../catalog/taxonomy';
@@ -75,7 +75,7 @@ Respond ONLY as JSON:
     ...extra.map((a) => ({ inlineData: { mimeType: a.mimeType, data: a.base64 } })),
     { text: prompt },
   ];
-  return parseIdentity(await callJson(ai, MODEL_AUDIT_STRONG, parts, IDENTITY_TIMEOUT_MS, onUsage));
+  return parseIdentity(await callJson(ai, modelForRole('flexible'), parts, IDENTITY_TIMEOUT_MS, onUsage));
 }
 
 export interface IdentityVerdict {

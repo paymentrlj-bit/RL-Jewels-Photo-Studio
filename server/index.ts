@@ -19,6 +19,7 @@ import { initDatabase, getDb, closeDatabase } from './db';
 import { ensureBootstrapAdmin } from './auth/users';
 import { initCpcMaster } from './integrations/cpcMaster';
 import { startWorkers, stopWorkers } from './queue/worker';
+import { proCallsToday } from './ai/client';
 import { startDailySummarySender } from './integrations/telegram';
 import { rehomeProductsByShootDate } from './db/products';
 import { startModelHealthChecks } from './ai/modelHealth';
@@ -178,6 +179,7 @@ async function main(): Promise<void> {
       uptimeSec: Math.round(process.uptime()),
       memoryRssMb: Math.round(mem.rss / (1024 * 1024)),
       memoryHeapUsedMb: Math.round(mem.heapUsed / (1024 * 1024)),
+      proCallsToday: proCallsToday(),
       queueDepth: queueDepth(),
     });
   }, 5 * 60 * 1000);

@@ -12,6 +12,9 @@ import {
   MODEL_COPY,
   ENHANCE_TIMEOUT_MS,
   ENHANCE_IMAGE_SIZE,
+  MODEL_AUDIT_STRONG,
+  countModelCall,
+  modelForRole,
   AUDIT_TIMEOUT_MS,
   SEGMENT_TIMEOUT_MS,
   extractUsage,
@@ -192,6 +195,7 @@ export async function auditOutput(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), AUDIT_TIMEOUT_MS);
   try {
+    countModelCall(model);
     const response = await ai.models.generateContent({
       model,
       contents: {
@@ -373,8 +377,10 @@ export async function generateCopy(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), AUDIT_TIMEOUT_MS);
   try {
+    const copyModel = modelForRole('flexible') === MODEL_AUDIT_STRONG ? MODEL_COPY : MODEL_AUDIT;
+    countModelCall(copyModel);
     const response = await ai.models.generateContent({
-      model: MODEL_COPY,
+      model: copyModel,
       contents: {
         parts: [{ inlineData: { mimeType, data: imageBase64 } }, { text: prompt }],
       },

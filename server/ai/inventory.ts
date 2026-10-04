@@ -37,6 +37,10 @@ import {
   INVENTORY_TIMEOUT_MS,
   withTransientRetry,
   extractUsage,
+  countModelCall,
+  isDailyQuotaError,
+  isRateLimitError,
+  MODEL_AUDIT,
   type RetryAttemptInfo,
   type TokenUsage,
 } from './client';
@@ -247,6 +251,7 @@ export async function callJson(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
+    countModelCall(model);
     const response = await ai.models.generateContent({
       model,
       contents: { parts } as never,
@@ -331,7 +336,15 @@ Field guide:
     { text: prompt },
   ];
 
-  const inventory = parseInventory(await callJson(ai, MODEL_INVENTORY, parts, INVENTORY_TIMEOUT_MS, onUsage));
+  let raw: unknown;
+  try {
+    raw = await callJson(ai, MODEL_INVENTORY, parts, INVENTORY_TIMEOUT_MS, onUsage);
+  } catch (err) {
+    // Pro's allowance is gone for now: a count from the lighter model beats no count.
+    if (!isDailyQuotaError(err) && !isRateLimitError(err)) throw err;
+    raw = await callJson(ai, MODEL_AUDIT, parts, INVENTORY_TIMEOUT_MS, onUsage);
+  }
+  const inventory = parseInventory(raw);
   if (!inventory) throw new Error('The inventory model returned no usable inventory.');
   return inventory;
 }

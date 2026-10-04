@@ -13,6 +13,7 @@ import {
   isTransientError,
   isBillingError,
   isDailyQuotaError,
+  isRateLimitError,
   isModelNotFoundError,
   debugDetail,
   COST_PER_CALL_USD,
@@ -513,7 +514,9 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
     try {
       return await attemptWith(MODEL_AUDIT_STRONG);
     } catch (err) {
-      if (!isModelNotFoundError(err)) throw err;
+      // The model is gone, or Pro's allowance is used up: grade with the lighter
+      // model rather than failing the photo.
+      if (!isModelNotFoundError(err) && !isDailyQuotaError(err) && !isRateLimitError(err)) throw err;
       logEvent('pipeline.audit_model_missing', { requestId, model: MODEL_AUDIT_STRONG, errorMessage: debugDetail(err) });
       return attemptWith(MODEL_AUDIT);
     }
