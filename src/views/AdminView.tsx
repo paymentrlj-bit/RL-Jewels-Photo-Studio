@@ -55,11 +55,14 @@ export const AdminView: React.FC = () => {
 const InsightsPanel: React.FC = () => {
   const [data, setData] = useState<AnalyticsSummary | null>(null);
   const [feed, setFeed] = useState<MetaFeedStatus | null>(null);
+  const [daily, setDaily] = useState<{ text: string } | null>(null);
+  const [copied, setCopied] = useState(false);
   const [dupes, setDupes] = useState<Awaited<ReturnType<typeof api.duplicates>>['pairs'] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     api.analytics(30).then(setData).catch((err) => setError(err.message));
+    api.dailySummary().then(setDaily).catch(() => setDaily(null));
     api.metaFeed().then(setFeed).catch(() => setFeed(null));
     api.duplicates().then((r) => setDupes(r.pairs)).catch(() => setDupes(null));
   }, []);
@@ -155,6 +158,39 @@ const InsightsPanel: React.FC = () => {
               {!feed.hasLinkBase && <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">CATALOG_LINK_BASE is not set, so the feed&apos;s product link column is empty. Meta requires a link to the product on the store&apos;s website for Instagram/Facebook shops.</p>}
             </>
           )}
+        </section>
+      )}
+
+      {daily && (
+        <section className="rounded-2xl border border-stone-200 bg-white p-5">
+          <h3 className="font-semibold text-stone-900">Today&apos;s summary</h3>
+          <p className="mt-1 text-xs text-stone-500">The day so far, ready to send. Copy it, or open it straight into WhatsApp.</p>
+          <pre className="mt-3 whitespace-pre-wrap rounded-lg bg-stone-50 p-3 font-sans text-sm text-stone-800">{daily.text}</pre>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(daily.text);
+                  setCopied(true);
+                  window.setTimeout(() => setCopied(false), 3000);
+                } catch {
+                  setCopied(false);
+                }
+              }}
+              className="min-h-[44px] rounded-lg border border-stone-300 px-4 py-2 text-sm text-stone-700 hover:bg-stone-50"
+            >
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+            <a
+              href={`https://wa.me/?text=${encodeURIComponent(daily.text)}`}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex min-h-[44px] items-center rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
+            >
+              Send on WhatsApp
+            </a>
+          </div>
         </section>
       )}
 

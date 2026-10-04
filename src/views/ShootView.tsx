@@ -26,6 +26,8 @@ import { AngleCaptureButton } from '../components/AngleCaptureButton';
 import { ScannerModal } from '../components/ScannerModal';
 import { PhotoEditor } from '../components/PhotoEditor';
 import { SimilarList } from '../components/SimilarList';
+import { RetakeButton } from '../components/RetakeButton';
+import { retakeReason } from '../utils/reasons';
 import { downscaleImage, analyzeImageQuality, checkFlashFired, type PreflightIssue } from '../utils/imagePreflight';
 import { logClientEvent } from '../utils/analytics';
 import { computeNetWeight } from '../../server/catalog/weights';
@@ -79,9 +81,11 @@ interface ShootViewProps {
   recent: Product[];
   /** Pieces the pipeline paused on because part of them was hidden. */
   needsAngle: Product[];
+  /** Pieces sent back for a new photo that this person should reshoot. */
+  toRetake: Product[];
 }
 
-export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, needsAngle }) => {
+export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, needsAngle, toRetake }) => {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [photo, setPhoto] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
@@ -360,6 +364,27 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, n
 
         {/* Shown here rather than only on Review: the point is to catch staff
             while the piece is still on the counter, not an hour later. */}
+        {/* The photographer's to-do list: everything sent back, with what to fix. */}
+        {toRetake.length > 0 && (
+          <section className="rounded-2xl border-2 border-red-300 bg-red-50 p-4 space-y-3">
+            <h2 className="flex items-center gap-2 font-semibold text-red-900">
+              <RotateCcw className="w-4 h-4" /> To retake ({toRetake.length})
+            </h2>
+            {toRetake.map((product) => (
+              <div key={product.id} className="flex flex-wrap items-center gap-3 rounded-xl bg-white p-3">
+                {product.originalPhotoId && (
+                  <img src={api.photoUrl(product.originalPhotoId)} alt="" className="h-14 w-14 rounded-lg object-cover bg-stone-100" />
+                )}
+                <div className="min-w-0 flex-1 basis-48">
+                  <p className="text-sm font-medium text-stone-900">{product.cpc || product.itemType}</p>
+                  <p className="text-sm leading-snug text-stone-700">{retakeReason(product)}</p>
+                </div>
+                <RetakeButton productId={product.id} onDone={onQueued} onError={setError} />
+              </div>
+            ))}
+          </section>
+        )}
+
         {needsAngle.length > 0 && (
           <section className="rounded-2xl border-2 border-amber-300 bg-amber-50 p-4 space-y-3">
             <h2 className="flex items-center gap-2 font-semibold text-amber-900">

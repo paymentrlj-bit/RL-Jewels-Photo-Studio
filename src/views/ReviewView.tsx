@@ -15,25 +15,13 @@ import { FixPanel } from '../components/FixPanel';
 import { PhotoViewer, type ViewerPhoto } from '../components/PhotoViewer';
 import { SimilarPieces } from '../components/SimilarList';
 import type { Product, Role } from '../types';
-import { AUDIT_CHECK_LABELS, AUDIT_CHECK_FAILURE_LABELS, STATUS_LABELS } from '../types';
+import { AUDIT_CHECK_LABELS, STATUS_LABELS } from '../types';
+import { plainSummary } from '../utils/reasons';
 
 interface ReviewViewProps {
   products: Product[];
   onChanged: () => void;
   role: Role;
-}
-
-// What staff actually need to know is "what's wrong", in their own words -
-// not the AI's paragraph of reasoning ("Bead count mismatch: original had
-// 14 gold balls (7 per side), enhanced image has 16 gold balls (8 per
-// side)."). Where a checklist exists, this turns the failed checks into the
-// same short phrases used everywhere else in the app (AUDIT_CHECK_LABELS),
-// and keeps the AI's full sentence as an optional "Details" underneath
-// rather than the headline.
-function plainSummary(product: Product): string | null {
-  const failed = Object.entries(product.auditChecklist || {}).filter(([, passed]) => !passed);
-  if (failed.length === 0) return null;
-  return failed.map(([key]) => AUDIT_CHECK_FAILURE_LABELS[key] || AUDIT_CHECK_LABELS[key] || key).join(', ');
 }
 
 export const ReviewView: React.FC<ReviewViewProps> = ({ products, onChanged, role }) => {

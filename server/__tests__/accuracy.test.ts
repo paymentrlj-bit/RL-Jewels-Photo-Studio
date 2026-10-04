@@ -317,3 +317,29 @@ describe('staff scorecard', () => {
     expect(out[0]).toMatchObject({ userId: 'busy', fewShots: false });
   });
 });
+
+import { istDayRange, renderSummaryText, type DailySummary } from '../reports/dailySummary';
+
+describe('daily summary', () => {
+  it('bounds an India-time day in UTC', () => {
+    const r = istDayRange('4/10/2026');
+    expect(r.startIso).toBe('2026-10-03T18:30:00.000Z');
+    expect(r.endIso).toBe('2026-10-04T18:30:00.000Z');
+  });
+
+  it('reads as a short message', () => {
+    const s: DailySummary = {
+      date: '4/10/2026', shot: 12, approvedToday: 7, sentBackToday: 2, waitingForApproval: 3, oldestWaitingHours: 5,
+      toRetake: 2, needAngle: 1, failed: 0, estCostUsd: 1.234,
+      byPhotographer: [{ userId: 'a', name: 'Asha', shot: 12, approved: 7, reshoot: 2, needAngle: 1, approvalRate: 77.8, avgRisk: 20, topIssue: null, fewShots: false }],
+      topProblem: { check: 'sharpFocus', count: 3 },
+    };
+    const text = renderSummaryText(s, { sharpFocus: 'photo is blurry' });
+    expect(text).toMatch(/Shot today: 12/);
+    expect(text).toMatch(/Waiting for approval: 3 \(oldest 5h\)/);
+    expect(text).toMatch(/Asha: 12 shot, 7 approved, 2 sent back, 1 need another photo/);
+    expect(text).toMatch(/photo is blurry \(3\)/);
+    expect(text).toMatch(/\$1\.23/);
+    expect(text).not.toMatch(/Processing errors/);
+  });
+});

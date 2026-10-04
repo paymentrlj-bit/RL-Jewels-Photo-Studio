@@ -65,6 +65,8 @@ export interface Product {
   createdAt: string;
   approvedAt: string | null;
   staffName: string;
+  /** User id of the person who shot it. */
+  createdBy: string;
   originalPhotoId: string | null;
   processedPhotoId: string | null;
   /** The real photo cut out onto white, kept beside an AI render that passed. */
