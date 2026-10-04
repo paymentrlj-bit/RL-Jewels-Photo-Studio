@@ -537,7 +537,7 @@ function toBatch(row: BatchRow): Batch {
 export function createBatch(name: string, createdBy: string): Batch {
   const row: BatchRow = {
     id: newId('bch'),
-    name: name.trim() || `Shoot ${new Date().toLocaleDateString('en-IN')}`,
+    name: name.trim() || batchNameFor(),
     created_by: createdBy,
     created_at: nowIso(),
     closed_at: null,
@@ -567,11 +567,65 @@ export function closeBatch(id: string): void {
   getDb().prepare('UPDATE batches SET closed_at = ? WHERE id = ?').run(nowIso(), id);
 }
 
-// The batch a staff member is actively shooting into: their most recent open
-// one. Saves making them pick a batch on every single capture.
-export function findOpenBatchFor(userId: string): Batch | null {
-  const row = getDb()
-    .prepare('SELECT * FROM batches WHERE created_by = ? AND closed_at IS NULL ORDER BY created_at DESC LIMIT 1')
-    .get(userId) as BatchRow | undefined;
-  return row ? toBatch(row) : null;
+/** A date as the store reads it - d/m/yyyy in India time, whatever timezone the server runs in. */
+export function istDate(at: Date | string = new Date()): string {
+  const parts = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'numeric', year: 'numeric' }).formatToParts(new Date(at));
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
+  return `${get('day')}/${get('month')}/${get('year')}`;
+}
+
+export const batchNameFor = (at: Date | string = new Date()) => `Shoot ${istDate(at)}`;
+
+/**
+ * The batch everyone shoots into today: one shared "Shoot d/m/yyyy" per day,
+ * opened by whoever shoots first. (It used to be one per person that stayed
+ * open for ever, so a photo taken today could land in a batch named for a week
+ * ago and never show up under today's date in Export.)
+ */
+export function getOrCreateTodaysBatch(userId: string): Batch {
+  const today = istDate();
+  const open = getDb()
+    .prepare('SELECT * FROM batches WHERE closed_at IS NULL ORDER BY created_at DESC LIMIT 20')
+    .all() as BatchRow[];
+  const found = open.find((b) => istDate(b.created_at) === today);
+  if (found) return toBatch(found);
+  return createBatch(batchNameFor(), userId);
+}
+
+/**
+ * One-time tidy of history: each product belongs in the batch for the day it
+ * was shot. Moves any product whose batch is from a different day, then drops
+ * batches left empty. Guarded by a settings flag so it runs once.
+ */
+export function rehomeProductsByShootDate(): { moved: number } {
+  const db = getDb();
+  const flag = db.prepare("SELECT value FROM settings WHERE key = 'batches_rehomed_v1'").get();
+  if (flag) return { moved: 0 };
+  const rows = db
+    .prepare('SELECT p.id, p.created_at AS p_at, p.created_by, b.created_at AS b_at FROM products p JOIN batches b ON b.id = p.batch_id')
+    .all() as { id: string; p_at: string; created_by: string; b_at: string }[];
+  let moved = 0;
+  db.transaction(() => {
+    const byDay = new Map<string, string>();
+    for (const r of rows) {
+      const day = istDate(r.p_at);
+      if (istDate(r.b_at) === day) continue;
+      let batchId = byDay.get(day);
+      if (!batchId) {
+        const existing = db.prepare('SELECT id FROM batches WHERE name = ? ORDER BY created_at LIMIT 1').get(batchNameFor(r.p_at)) as { id: string } | undefined;
+        if (existing && istDate((db.prepare('SELECT created_at FROM batches WHERE id = ?').get(existing.id) as { created_at: string }).created_at) === day) {
+          batchId = existing.id;
+        } else {
+          batchId = newId('bch');
+          db.prepare('INSERT INTO batches (id, name, created_by, created_at, closed_at) VALUES (?, ?, ?, ?, NULL)').run(batchId, batchNameFor(r.p_at), r.created_by, r.p_at);
+        }
+        byDay.set(day, batchId);
+      }
+      db.prepare('UPDATE products SET batch_id = ? WHERE id = ?').run(batchId, r.id);
+      moved++;
+    }
+    db.prepare('DELETE FROM batches WHERE id NOT IN (SELECT DISTINCT batch_id FROM products WHERE batch_id IS NOT NULL) AND created_at < ?').run(new Date(Date.now() - 24 * 3600 * 1000).toISOString());
+    db.prepare("INSERT INTO settings (key, value, updated_at, updated_by) VALUES ('batches_rehomed_v1', ?, ?, NULL)").run(String(moved), nowIso());
+  })();
+  return { moved };
 }

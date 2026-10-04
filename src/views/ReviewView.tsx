@@ -14,12 +14,13 @@ import { AngleCaptureButton } from '../components/AngleCaptureButton';
 import { FixPanel } from '../components/FixPanel';
 import { PhotoViewer, type ViewerPhoto } from '../components/PhotoViewer';
 import { SimilarPieces } from '../components/SimilarList';
-import type { Product } from '../types';
+import type { Product, Role } from '../types';
 import { AUDIT_CHECK_LABELS, AUDIT_CHECK_FAILURE_LABELS, STATUS_LABELS } from '../types';
 
 interface ReviewViewProps {
   products: Product[];
   onChanged: () => void;
+  role: Role;
 }
 
 // What staff actually need to know is "what's wrong", in their own words -
@@ -35,7 +36,9 @@ function plainSummary(product: Product): string | null {
   return failed.map(([key]) => AUDIT_CHECK_FAILURE_LABELS[key] || AUDIT_CHECK_LABELS[key] || key).join(', ');
 }
 
-export const ReviewView: React.FC<ReviewViewProps> = ({ products, onChanged }) => {
+export const ReviewView: React.FC<ReviewViewProps> = ({ products, onChanged, role }) => {
+  const canManage = role !== 'photographer';
+  const isAdmin = role === 'admin';
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [clearingAll, setClearingAll] = useState(false);
@@ -58,6 +61,7 @@ export const ReviewView: React.FC<ReviewViewProps> = ({ products, onChanged }) =
   // Everything on this screen that is not a finished catalogue entry -
   // "pending" in the plainest sense. Approved and exported items are never
   // part of this list, so "Clear all" can never touch finished work.
+  const approved = products.filter((p) => p.status === 'approved' || p.status === 'exported');
   const pendingIds = useMemo(() => [...awaiting, ...problems].map((p) => p.id), [awaiting, problems]);
 
   const deleteOne = useCallback(async (id: string) => {
@@ -90,7 +94,7 @@ export const ReviewView: React.FC<ReviewViewProps> = ({ products, onChanged }) =
         </div>
       )}
 
-      {pendingIds.length > 0 && (
+      {canManage && pendingIds.length > 0 && (
         // A hard reset for a whole batch gone wrong - a bad lighting setup,
         // a wrong CPC used all morning - without deleting each item by hand.
         <div className="flex justify-end">
@@ -120,6 +124,7 @@ export const ReviewView: React.FC<ReviewViewProps> = ({ products, onChanged }) =
                 key={product.id}
                 product={product}
                 busy={busyId === product.id}
+                canManage={canManage}
                 onApprove={() => act(product.id, () => api.approve(product.id))}
                 onReject={(note) => act(product.id, () => api.reject(product.id, note))}
                 onDelete={() => void deleteOne(product.id)}
@@ -142,6 +147,7 @@ export const ReviewView: React.FC<ReviewViewProps> = ({ products, onChanged }) =
                 key={product.id}
                 product={product}
                 busy={busyId === product.id}
+                canManage={canManage}
                 onRequeue={() => act(product.id, () => api.requeue(product.id))}
                 onProceed={() => act(product.id, () => api.requeue(product.id, { proceedWithoutAngle: true }))}
                 onDelete={() => void deleteOne(product.id)}
@@ -152,6 +158,67 @@ export const ReviewView: React.FC<ReviewViewProps> = ({ products, onChanged }) =
           </div>
         </section>
       )}
+      {isAdmin && approved.length > 0 && (
+        <section>
+          <h2 className="mb-1 font-semibold text-stone-900">
+            Approved <span className="text-stone-500 font-normal">({approved.length})</span>
+          </h2>
+          <p className="mb-3 text-xs text-stone-500">Admins can pull a piece back after approving it - it goes to "Needs attention" to be reshot. Pieces already uploaded to Drive stay there until deleted by hand.</p>
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {approved.map((product) => (
+              <ApprovedRow
+                key={product.id}
+                product={product}
+                busy={busyId === product.id}
+                onSendBack={(note) => act(product.id, () => api.reject(product.id, note))}
+                onWhiten={() => act(product.id, () => api.whitenBackground(product.id))}
+              />
+            ))}
+          </div>
+        </section>
+      )}
+    </div>
+  );
+};
+
+const ApprovedRow: React.FC<{
+  product: Product;
+  busy: boolean;
+  onSendBack: (note: string) => void;
+  onWhiten: () => void;
+}> = ({ product, busy, onSendBack, onWhiten }) => {
+  const [open, setOpen] = useState(false);
+  const [note, setNote] = useState('');
+  const photoId = product.processedPhotoId || product.originalPhotoId;
+  return (
+    <div className="rounded-xl border border-stone-200 bg-white p-3">
+      <div className="flex items-center gap-3">
+        {photoId && <img src={api.photoUrl(photoId)} alt="" className="h-16 w-16 shrink-0 rounded-lg bg-stone-100 object-contain" />}
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium text-stone-900">{product.name || product.itemType || 'Untitled'}</p>
+          <p className="truncate text-xs text-stone-500">{product.cpc || 'No CPC'} · {STATUS_LABELS[product.status]}</p>
+        </div>
+      </div>
+      {open ? (
+        <div className="mt-2 space-y-2">
+          <input
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="What is wrong? (optional)"
+            aria-label="Why this approved piece is being sent back"
+            className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm"
+          />
+          <div className="flex gap-2">
+            <button type="button" disabled={busy} onClick={() => onSendBack(note)} className="min-h-[44px] flex-1 rounded-lg bg-red-600 px-3 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-60">Send back for reshoot</button>
+            <button type="button" onClick={() => setOpen(false)} className="min-h-[44px] rounded-lg px-3 text-sm text-stone-600 hover:bg-stone-100">Cancel</button>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-2 flex flex-wrap gap-2">
+          <button type="button" disabled={busy} onClick={() => setOpen(true)} className="min-h-[44px] rounded-lg border border-red-200 px-3 py-2 text-sm text-red-700 hover:bg-red-50 disabled:opacity-60">Send back</button>
+          <button type="button" disabled={busy} onClick={onWhiten} className="min-h-[44px] rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-700 hover:bg-stone-50 disabled:opacity-60">Make background white</button>
+        </div>
+      )}
     </div>
   );
 };
@@ -159,12 +226,13 @@ export const ReviewView: React.FC<ReviewViewProps> = ({ products, onChanged }) =
 const ReviewCard: React.FC<{
   product: Product;
   busy: boolean;
+  canManage: boolean;
   onApprove: () => void;
   onReject: (note: string) => void;
   onDelete: () => void;
   onChanged: () => void;
   onError: (message: string) => void;
-}> = ({ product, busy, onApprove, onReject, onDelete, onChanged, onError }) => {
+}> = ({ product, busy, canManage, onApprove, onReject, onDelete, onChanged, onError }) => {
   const [showChecks, setShowChecks] = useState(false);
   const [mode, setMode] = useState<'idle' | 'rejecting' | 'fixing'>('idle');
   const [note, setNote] = useState('');
@@ -268,6 +336,24 @@ const ReviewCard: React.FC<{
 
         <SimilarPieces productId={product.id} />
 
+        {canManage && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={async () => {
+              try {
+                await api.whitenBackground(product.id);
+                onChanged();
+              } catch (err) {
+                onError(err instanceof ApiError ? err.message : 'Could not clean up the background.');
+              }
+            }}
+            className="min-h-[44px] text-xs font-medium text-stone-600 underline hover:text-stone-900 disabled:opacity-60"
+          >
+            Background not white? Make it white
+          </button>
+        )}
+
         {showChecks && product.auditChecklist && (
           <ul className="space-y-1 rounded-lg bg-stone-50 p-2">
             {Object.entries(product.auditChecklist).map(([key, passed]) => (
@@ -284,6 +370,7 @@ const ReviewCard: React.FC<{
         )}
       </div>
 
+      {canManage ? (
       <div className="border-t border-stone-200 p-3">
         {mode === 'fixing' ? (
           <FixPanel
@@ -370,6 +457,11 @@ const ReviewCard: React.FC<{
           </div>
         )}
       </div>
+      ) : (
+        <p className="border-t border-stone-200 p-3 text-center text-xs text-stone-500">
+          Waiting for a manager to approve.
+        </p>
+      )}
     </article>
   );
 };
@@ -377,12 +469,13 @@ const ReviewCard: React.FC<{
 const ProblemRow: React.FC<{
   product: Product;
   busy: boolean;
+  canManage: boolean;
   onRequeue: () => void;
   onProceed: () => void;
   onDelete: () => void;
   onChanged: () => void;
   onError: (message: string) => void;
-}> = ({ product, busy, onRequeue, onProceed, onDelete, onChanged, onError }) => {
+}> = ({ product, busy, canManage, onRequeue, onProceed, onDelete, onChanged, onError }) => {
   const [fixing, setFixing] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const rawReason = product.auditReason || product.reviewNote || product.job?.lastError || 'No reason recorded.';
@@ -435,7 +528,7 @@ const ProblemRow: React.FC<{
           )}
           {/* Before a full reshoot: say what went wrong and have it redone,
               or use the real photo cut out. */}
-          {product.status === 'needs_reshoot' && !fixing && (
+          {canManage && product.status === 'needs_reshoot' && !fixing && (
             <button
               type="button"
               onClick={() => setFixing(true)}
@@ -464,16 +557,18 @@ const ProblemRow: React.FC<{
               <RefreshCw className={`w-4 h-4 ${busy ? 'animate-spin' : ''}`} /> Retry
             </button>
           )}
-          <button
-            type="button"
-            onClick={onDelete}
-            disabled={busy}
-            aria-label="Delete for good"
-            title="Delete for good"
-            className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg border border-stone-300 px-3 py-2 text-stone-500 hover:bg-red-50 hover:text-red-700 disabled:opacity-60"
-          >
-            <Trash2 className="w-4 h-4" />
-          </button>
+          {canManage && (
+            <button
+              type="button"
+              onClick={onDelete}
+              disabled={busy}
+              aria-label="Delete for good"
+              title="Delete for good"
+              className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg border border-stone-300 px-3 py-2 text-stone-500 hover:bg-red-50 hover:text-red-700 disabled:opacity-60"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          )}
         </div>
       </div>
       {fixing && (

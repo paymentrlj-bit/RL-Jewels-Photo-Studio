@@ -381,6 +381,100 @@ describe('look-alike search', () => {
   });
 });
 
+describe('roles', () => {
+  const jpeg = 'data:image/jpeg;base64,' + Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString('base64');
+
+  async function as(role: 'photographer' | 'manager' | 'admin', name: string) {
+    await createUser({ username: name, password: 'a-real-password-1', isAdmin: role === 'admin', role: role === 'admin' ? undefined : role });
+    return (await loginAs(name, 'a-real-password-1')).cookie!;
+  }
+  async function pieceIn(cookie: string, status: string) {
+    const created = await request(app).post('/api/products').set('Cookie', cookie).send({ itemType: 'Ring' });
+    const id = created.body.product.id as string;
+    await request(app).post(`/api/products/${id}/photo`).set('Cookie', cookie).send({ imageBase64: jpeg });
+    getDb().prepare('UPDATE products SET status = ? WHERE id = ?').run(status, id);
+    return id;
+  }
+
+  it('lets a photographer shoot but not approve, send back, fix, delete or export', async () => {
+    const photog = await as('photographer', 'photog');
+    const id = await pieceIn(photog, 'awaiting_review');
+    for (const [method, url] of [
+      ['post', `/api/products/${id}/approve`], ['post', `/api/products/${id}/reject`], ['post', `/api/products/${id}/fix`],
+      ['delete', `/api/products/${id}`], ['post', '/api/products/bulk-delete'],
+    ] as const) {
+      const res = await request(app)[method](url).set('Cookie', photog).send({ ids: [id], issues: ['beads'] });
+      expect(res.status, `${method} ${url}`).toBe(403);
+    }
+    const batchId = (await request(app).get('/api/batches/current').set('Cookie', photog)).body.batch.id;
+    expect((await request(app).get(`/api/export/batch/${batchId}/csv`).set('Cookie', photog)).status).toBe(403);
+    expect(getProduct(id)!.status).toBe('awaiting_review');
+  });
+
+  it('lets a photographer correct what they typed, but not the price or copy', async () => {
+    const photog = await as('photographer', 'photog2');
+    const id = await pieceIn(photog, 'awaiting_review');
+    expect((await request(app).patch(`/api/products/${id}`).set('Cookie', photog).send({ itemType: 'Kada' })).status).toBe(200);
+    expect((await request(app).patch(`/api/products/${id}`).set('Cookie', photog).send({ priceInr: '5000' })).status).toBe(403);
+    expect((await request(app).patch(`/api/products/${id}`).set('Cookie', photog).send({ name: 'Mine' })).status).toBe(403);
+  });
+
+  it('lets a manager approve, and only an admin send back an approved piece', async () => {
+    const mgr = await as('manager', 'mgr');
+    const admin = await as('admin', 'boss');
+    const id = await pieceIn(mgr, 'awaiting_review');
+    expect((await request(app).post(`/api/products/${id}/approve`).set('Cookie', mgr)).status).toBe(200);
+    expect((await request(app).post(`/api/products/${id}/reject`).set('Cookie', mgr).send({ note: 'x' })).status).toBe(403);
+    const back = await request(app).post(`/api/products/${id}/reject`).set('Cookie', admin).send({ note: 'background is grey' });
+    expect(back.status).toBe(200);
+    expect(back.body.product.status).toBe('needs_reshoot');
+  });
+
+  it('gives new accounts the photographer role unless an admin says otherwise, and reports it at sign-in', async () => {
+    const admin = await as('admin', 'boss2');
+    const made = await request(app).post('/api/admin/users').set('Cookie', admin).send({ username: 'newbie', password: 'a-real-password-1' });
+    expect(made.body.user.role).toBe('photographer');
+    const session = await request(app).get('/api/session').set('Cookie', (await loginAs('newbie', 'a-real-password-1')).cookie!);
+    expect(session.body.role).toBe('photographer');
+    const promoted = await request(app).patch(`/api/admin/users/${made.body.user.id}`).set('Cookie', admin).send({ role: 'manager' });
+    expect(promoted.body.user.role).toBe('manager');
+  });
+});
+
+describe('daily shoot batches', () => {
+  it('puts everyone\'s shots from the same day in one batch named for that day', async () => {
+    await createUser({ username: 'a1', password: 'a-real-password-1', isAdmin: false });
+    await createUser({ username: 'b1', password: 'a-real-password-1', isAdmin: false });
+    const ca = (await loginAs('a1', 'a-real-password-1')).cookie!;
+    const cb = (await loginAs('b1', 'a-real-password-1')).cookie!;
+    const p1 = await request(app).post('/api/products').set('Cookie', ca).send({ itemType: 'Ring', batchId: 'stale-batch-id' });
+    const p2 = await request(app).post('/api/products').set('Cookie', cb).send({ itemType: 'Ring' });
+    expect(p1.body.product.batchId).toBe(p2.body.product.batchId);
+    const batch = (await request(app).get('/api/batches/current').set('Cookie', ca)).body.batch;
+    expect(batch.id).toBe(p1.body.product.batchId);
+    expect(batch.name).toMatch(/^Shoot \d{1,2}\/\d{1,2}\/\d{4}$/);
+  });
+});
+
+describe('re-homing old shoots by date', () => {
+  it('moves a product shot on a later day out of an old batch into a batch for its own day, once', async () => {
+    const user = await createUser({ username: 'rehome', password: 'a-real-password-1', isAdmin: false });
+    const db = getDb();
+    db.prepare("DELETE FROM settings WHERE key = 'batches_rehomed_v1'").run();
+    db.prepare("INSERT INTO batches (id, name, created_by, created_at) VALUES ('bch_old', 'Shoot 17/9/2026', ?, '2026-09-17T05:00:00.000Z')").run(user.id);
+    const mk = (id: string, at: string) => db.prepare("INSERT INTO products (id, batch_id, created_by, created_at, updated_at, status) VALUES (?, 'bch_old', ?, ?, ?, 'approved')").run(id, user.id, at, at);
+    mk('prd_same_day', '2026-09-17T06:00:00.000Z');
+    mk('prd_later', '2026-10-04T05:30:00.000Z');
+    const { rehomeProductsByShootDate } = await import('../db/products');
+    expect(rehomeProductsByShootDate().moved).toBe(1);
+    const later = db.prepare("SELECT b.name FROM products p JOIN batches b ON b.id = p.batch_id WHERE p.id = 'prd_later'").get() as { name: string };
+    expect(later.name).toBe('Shoot 4/10/2026');
+    const same = db.prepare("SELECT batch_id FROM products WHERE id = 'prd_same_day'").get() as { batch_id: string };
+    expect(same.batch_id).toBe('bch_old');
+    expect(rehomeProductsByShootDate().moved).toBe(0);
+  });
+});
+
 describe('one-tap fix', () => {
   const tinyJpeg = 'data:image/jpeg;base64,' + Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString('base64');
 

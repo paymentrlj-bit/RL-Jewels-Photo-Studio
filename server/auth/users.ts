@@ -9,8 +9,13 @@ import type BetterSqlite3 from 'better-sqlite3';
 import { getDb, newId, nowIso } from '../db';
 import { hashPassword, verifyPassword } from './passwords';
 
+/** admin: everything. manager: approves and exports. photographer: shoots only. */
+export type Role = 'admin' | 'manager' | 'photographer';
+export const ROLES: Role[] = ['admin', 'manager', 'photographer'];
+
 export interface User {
   id: string;
+  role: Role;
   username: string;
   displayName: string;
   isAdmin: boolean;
@@ -25,6 +30,7 @@ interface UserRow {
   display_name: string;
   password_hash: string;
   is_admin: number;
+  role: string;
   is_active: number;
   created_at: string;
   last_login_at: string | null;
@@ -36,6 +42,7 @@ function toUser(row: UserRow): User {
     username: row.username,
     displayName: row.display_name || row.username,
     isAdmin: row.is_admin === 1,
+    role: row.is_admin === 1 ? 'admin' : row.role === 'photographer' ? 'photographer' : 'manager',
     isActive: row.is_active === 1,
     createdAt: row.created_at,
     lastLoginAt: row.last_login_at,
@@ -66,6 +73,8 @@ export async function createUser(input: {
   password: string;
   displayName?: string;
   isAdmin?: boolean;
+  /** For non-admins. Defaults to manager so existing callers keep the ability to approve. */
+  role?: Role;
 }): Promise<User> {
   const username = input.username.trim();
   if (!username) throw new Error('Username is required.');
@@ -83,6 +92,7 @@ export async function createUser(input: {
     display_name: input.displayName?.trim() || username,
     password_hash: passwordHash,
     is_admin: input.isAdmin ? 1 : 0,
+    role: input.role === 'photographer' ? 'photographer' : 'manager',
     is_active: 1,
     created_at: nowIso(),
     last_login_at: null,
@@ -90,8 +100,8 @@ export async function createUser(input: {
 
   getDb()
     .prepare(
-      `INSERT INTO users (id, username, display_name, password_hash, is_admin, is_active, created_at, last_login_at)
-       VALUES (@id, @username, @display_name, @password_hash, @is_admin, @is_active, @created_at, @last_login_at)`
+      `INSERT INTO users (id, username, display_name, password_hash, is_admin, role, is_active, created_at, last_login_at)
+       VALUES (@id, @username, @display_name, @password_hash, @is_admin, @role, @is_active, @created_at, @last_login_at)`
     )
     .run(user);
 
@@ -109,6 +119,13 @@ export function setUserActive(userId: string, isActive: boolean): void {
 
 export function setUserAdmin(userId: string, isAdmin: boolean): void {
   getDb().prepare('UPDATE users SET is_admin = ? WHERE id = ?').run(isAdmin ? 1 : 0, userId);
+}
+
+/** Sets admin / manager / photographer in one go. */
+export function setUserRole(userId: string, role: Role): void {
+  getDb()
+    .prepare('UPDATE users SET is_admin = ?, role = ? WHERE id = ?')
+    .run(role === 'admin' ? 1 : 0, role === 'photographer' ? 'photographer' : 'manager', userId);
 }
 
 export function countAdmins(): number {

@@ -6,7 +6,7 @@
 // photograph the next piece immediately.
 
 import express from 'express';
-import { requireAuth, type AuthenticatedRequest } from '../auth/session';
+import { requireAuth, requireManager, type AuthenticatedRequest } from '../auth/session';
 import { logEvent, actorFrom } from '../logging';
 import {
   createProduct,
@@ -22,7 +22,7 @@ import {
   getBatch,
   listBatches,
   closeBatch,
-  findOpenBatchFor,
+  getOrCreateTodaysBatch,
   type ProductStatus,
   PRODUCT_STATUSES,
 } from '../db/products';
@@ -42,6 +42,7 @@ import { findUserById } from '../auth/users';
 import { deriveProductIdFromCpc } from '../integrations/cpcMaster';
 import { computeNetWeight } from '../catalog/weights';
 import { indexProduct } from '../similarity';
+import { whitenBackground } from '../imaging/background';
 import { cleanPrice } from '../sharing/caption';
 import { cleanTags, cleanStaffNote, recordTagsPicked, recordTagsApproved } from '../catalog/tags';
 import { isFixCode, cleanNote, USE_REAL_PHOTO } from '../catalog/fixes';
@@ -115,12 +116,7 @@ productsRouter.post('/batches', (req: AuthenticatedRequest, res) => {
 // have none. Saves making someone pick a batch before every single capture.
 productsRouter.get('/batches/current', (req: AuthenticatedRequest, res) => {
   const user = req.user!;
-  let batch = findOpenBatchFor(user.id);
-  if (!batch) {
-    batch = createBatch(`Shoot ${new Date().toLocaleDateString('en-IN')}`, user.id);
-    logEvent('batch.created', { batchId: batch.id, name: batch.name, auto: true }, actorFrom(user));
-  }
-  res.json({ batch });
+  res.json({ batch: getOrCreateTodaysBatch(user.id) });
 });
 
 productsRouter.post('/batches/:id/close', (req: AuthenticatedRequest, res) => {
@@ -187,7 +183,9 @@ productsRouter.post('/products', (req: AuthenticatedRequest, res) => {
   }
   const product = createProduct({
     createdBy: user.id,
-    batchId: body.batchId ? String(body.batchId) : findOpenBatchFor(user.id)?.id ?? null,
+    // Always today's shared batch: a tab left open overnight would otherwise
+    // keep filing new shots under yesterday's date.
+    batchId: getOrCreateTodaysBatch(user.id).id,
     cpc,
     catalogProductId: cpc ? deriveProductIdFromCpc(cpc) : null,
     itemType: String(body.itemType || ''),
@@ -239,6 +237,14 @@ productsRouter.patch('/products/:id', (req: AuthenticatedRequest, res) => {
     if (key in body) fields[key] = String(body[key] ?? '');
   }
 
+  // Photographers fix mistakes in what they entered (CPC, type, weights); the
+  // catalogue copy and price belong to managers.
+  const MANAGER_ONLY = ['name', 'description', 'seoMetaTitle', 'seoMetaDescription', 'seoKeywords', 'imageAltText', 'urlSlug', 'reviewNote', 'priceInr'];
+  if (req.user!.role === 'photographer' && MANAGER_ONLY.some((k) => k in body)) {
+    res.status(403).json({ error: 'Only a manager or admin can change the name, description or price.' });
+    return;
+  }
+
   if ('priceInr' in body) {
     const price = cleanPrice(body.priceInr);
     if (String(body.priceInr ?? '').trim() && !price) {
@@ -273,7 +279,7 @@ productsRouter.patch('/products/:id', (req: AuthenticatedRequest, res) => {
   res.json({ product: decorate(product!.id) });
 });
 
-productsRouter.delete('/products/:id', (req: AuthenticatedRequest, res) => {
+productsRouter.delete('/products/:id', requireManager, (req: AuthenticatedRequest, res) => {
   const product = getProduct(req.params.id);
   if (!product) {
     res.status(404).json({ error: 'Product not found.' });
@@ -292,7 +298,7 @@ productsRouter.delete('/products/:id', (req: AuthenticatedRequest, res) => {
 // Never touches an approved or exported product, even if its id is somehow
 // passed in: those are finished catalogue entries, not "pending" by any
 // definition, and this is a delete with no undo.
-productsRouter.post('/products/bulk-delete', (req: AuthenticatedRequest, res) => {
+productsRouter.post('/products/bulk-delete', requireManager, (req: AuthenticatedRequest, res) => {
   const rawIds: unknown[] = Array.isArray(req.body?.ids) ? req.body.ids : [];
   const ids: string[] = [...new Set(rawIds.map((v) => String(v)))].slice(0, 500);
   if (ids.length === 0) {
@@ -439,7 +445,7 @@ productsRouter.get('/photos/:photoId', (req, res) => {
 // Review actions
 // ---------------------------------------------------------------------------
 
-productsRouter.post('/products/:id/approve', (req: AuthenticatedRequest, res) => {
+productsRouter.post('/products/:id/approve', requireManager, (req: AuthenticatedRequest, res) => {
   const product = getProduct(req.params.id);
   if (!product) {
     res.status(404).json({ error: 'Product not found.' });
@@ -459,18 +465,26 @@ productsRouter.post('/products/:id/approve', (req: AuthenticatedRequest, res) =>
 
 // Sends an item back for reshoot. Distinct from the AI's own needs_reshoot
 // verdict: this is a human overruling a photo the AI passed.
-productsRouter.post('/products/:id/reject', (req: AuthenticatedRequest, res) => {
+productsRouter.post('/products/:id/reject', requireManager, (req: AuthenticatedRequest, res) => {
   const product = getProduct(req.params.id);
   if (!product) {
     res.status(404).json({ error: 'Product not found.' });
     return;
   }
 
+  // Pulling back something already approved (it may be in Drive or the Meta
+  // feed by now) is an admin decision; managers send back what is still in review.
+  if ((product.status === 'approved' || product.status === 'exported') && !req.user!.isAdmin) {
+    res.status(403).json({ error: 'Only an admin can send back a piece that has already been approved.' });
+    return;
+  }
+
   const note = String(req.body?.note || '').trim();
+  const wasApproved = product.status === 'approved' || product.status === 'exported';
   setProductStatus(product.id, 'needs_reshoot', { reviewNote: note });
   // The reason is design memory for the next piece of this style.
   recordFixRequest({ productId: product.id, itemType: product.itemType, issues: [], note, source: 'reject', createdBy: req.user?.id });
-  logEvent('product.rejected', { productId: product.id, cpc: product.cpc, note }, actorFrom(req.user));
+  logEvent('product.rejected', { productId: product.id, cpc: product.cpc, note, wasApproved, previousStatus: product.status }, actorFrom(req.user));
   res.json({ product: decorate(product.id) });
 });
 
@@ -479,7 +493,7 @@ productsRouter.post('/products/:id/reject', (req: AuthenticatedRequest, res) => 
 // photo", cut out of the original instead (faithful mode). Cheaper than a
 // reshoot, and it uses the eye of someone who knows the piece. Every fix is
 // also remembered against the style (design memory).
-productsRouter.post('/products/:id/fix', (req: AuthenticatedRequest, res) => {
+productsRouter.post('/products/:id/fix', requireManager, (req: AuthenticatedRequest, res) => {
   const product = getProduct(req.params.id);
   if (!product) {
     res.status(404).json({ error: 'Product not found.' });
@@ -526,7 +540,7 @@ productsRouter.post('/products/:id/fix', (req: AuthenticatedRequest, res) => {
 
 // "Use the real photo": makes the cut-out kept beside the AI render the
 // catalogue photo. No AI call - it is already made - so it is instant and free.
-productsRouter.post('/products/:id/use-cutout', (req: AuthenticatedRequest, res) => {
+productsRouter.post('/products/:id/use-cutout', requireManager, (req: AuthenticatedRequest, res) => {
   const product = getProduct(req.params.id);
   if (!product) {
     res.status(404).json({ error: 'Product not found.' });
@@ -546,6 +560,27 @@ productsRouter.post('/products/:id/use-cutout', (req: AuthenticatedRequest, res)
   });
   void indexProduct(product.id, 'studio');
   logEvent('product.cutout_chosen', { productId: product.id, cpc: product.cpc, photoId: photo.id, itemType: product.itemType || null }, actorFrom(req.user));
+  res.json({ product: decorate(product.id) });
+});
+
+// Free, instant clean-up of a studio photo whose background is not white: the
+// same step the pipeline now applies to every render, for photos made before it.
+productsRouter.post('/products/:id/whiten-background', requireManager, async (req: AuthenticatedRequest, res) => {
+  const product = getProduct(req.params.id);
+  const photo = product ? getLatestPhoto(product.id, 'processed') : null;
+  if (!product || !photo || !imageExists(photo)) {
+    res.status(404).json({ error: 'There is no studio photo to clean up for this piece.' });
+    return;
+  }
+  const out = await whitenBackground(readImageBuffer(photo), photo.mimeType);
+  if (!out.report.changed) {
+    const why = out.report.skipped === 'already_white' ? 'The background is already white.' : 'The background could not be separated from the piece safely - use Fix, or reshoot.';
+    res.status(409).json({ error: why });
+    return;
+  }
+  saveImage({ productId: product.id, kind: 'processed', data: out.buffer, mimeType: out.mimeType, source: photo.source });
+  void indexProduct(product.id, 'studio');
+  logEvent('product.background_whitened', { productId: product.id, cpc: product.cpc, borderBefore: out.report.borderBefore }, actorFrom(req.user));
   res.json({ product: decorate(product.id) });
 });
 

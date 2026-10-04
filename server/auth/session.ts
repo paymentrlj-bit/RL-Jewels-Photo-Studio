@@ -128,6 +128,25 @@ export function requireAuth(
   next();
 }
 
+/** Managers and admins: the people who approve, export and send things back. Photographers only shoot. */
+export function requireManager(
+  req: AuthenticatedRequest,
+  res: express.Response,
+  next: express.NextFunction
+): void {
+  const user = getSessionUser(req);
+  if (!user) {
+    res.status(401).json({ error: 'Not signed in.' });
+    return;
+  }
+  if (user.role === 'photographer') {
+    res.status(403).json({ error: 'Only a manager or admin can do this. Ask one to approve it.' });
+    return;
+  }
+  req.user = user;
+  next();
+}
+
 export function requireAdmin(
   req: AuthenticatedRequest,
   res: express.Response,

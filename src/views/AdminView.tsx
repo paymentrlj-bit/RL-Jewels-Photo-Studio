@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Users, Wand2, BarChart3, AlertTriangle, Check, UserPlus, RotateCcw, KeyRound } from 'lucide-react';
 import { api, ApiError, type AnalyticsSummary, type MetaFeedStatus } from '../api';
 import { SimilarList } from '../components/SimilarList';
-import { AUDIT_CHECK_FAILURE_LABELS } from '../types';
+import { AUDIT_CHECK_FAILURE_LABELS, ROLE_LABELS, type Role } from '../types';
 import type { SessionUser } from '../types';
 import { AUDIT_CHECK_LABELS } from '../types';
 
@@ -300,7 +300,7 @@ const StaffPanel: React.FC = () => {
   const [users, setUsers] = useState<(SessionUser & { isActive: boolean; lastLoginAt: string | null })[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [form, setForm] = useState({ username: '', password: '', displayName: '', isAdmin: false });
+  const [form, setForm] = useState<{ username: string; password: string; displayName: string; role: Role }>({ username: '', password: '', displayName: '', role: 'photographer' });
   const [resettingId, setResettingId] = useState<string | null>(null);
   const [resetPassword, setResetPassword] = useState('');
 
@@ -320,7 +320,7 @@ const StaffPanel: React.FC = () => {
     try {
       await api.createUser(form);
       setNotice(`Created ${form.username}.`);
-      setForm({ username: '', password: '', displayName: '', isAdmin: false });
+      setForm({ username: '', password: '', displayName: '', role: 'photographer' });
       await load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not create that account.');
@@ -387,14 +387,17 @@ const StaffPanel: React.FC = () => {
             aria-label="Password"
             className="rounded-lg border border-stone-300 px-3 py-2 text-sm"
           />
-          <label className="flex items-center gap-2 text-sm text-stone-700">
-            <input
-              type="checkbox"
-              checked={form.isAdmin}
-              onChange={(e) => setForm({ ...form, isAdmin: e.target.checked })}
-              className="rounded border-stone-300"
-            />
-            Admin (can manage staff, prompt and insights)
+          <label className="flex flex-col gap-1 text-sm text-stone-700">
+            <span>Role</span>
+            <select
+              value={form.role}
+              onChange={(e) => setForm({ ...form, role: e.target.value as Role })}
+              className="rounded-lg border border-stone-300 px-3 py-2 text-sm"
+            >
+              <option value="photographer">Photographer - shoots only, cannot approve</option>
+              <option value="manager">Manager - approves, exports, shares</option>
+              <option value="admin">Admin - everything, including staff and insights</option>
+            </select>
           </label>
         </div>
         <button
@@ -428,7 +431,23 @@ const StaffPanel: React.FC = () => {
                       <span className="ml-2 text-xs text-stone-500">{user.username}</span>
                       {!user.isActive && <span className="ml-2 rounded-full bg-stone-100 px-2 py-0.5 text-xs text-stone-600">disabled</span>}
                     </td>
-                    <td className="px-4 py-3 text-stone-600">{user.isAdmin ? 'Admin' : 'Staff'}</td>
+                    <td className="px-4 py-3 text-stone-600">
+                      <select
+                        value={user.role}
+                        aria-label={`Role for ${user.username}`}
+                        onChange={async (e) => {
+                          try {
+                            await api.updateUser(user.id, { role: e.target.value });
+                            await load();
+                          } catch (err) {
+                            setError(err instanceof ApiError ? err.message : 'Could not change that role.');
+                          }
+                        }}
+                        className="rounded-lg border border-stone-300 px-2 py-1 text-sm"
+                      >
+                        {(Object.keys(ROLE_LABELS) as Role[]).map((r) => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
+                      </select>
+                    </td>
                     <td className="px-4 py-3 text-stone-500">
                       {user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleString('en-IN') : 'Never'}
                     </td>

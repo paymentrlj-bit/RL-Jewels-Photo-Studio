@@ -160,11 +160,12 @@ export default function App() {
   const needsAngle = products.filter((p) => p.status === 'needs_angle');
   const recent = products.slice(0, 8);
 
-  const tabs: { key: Tab; label: string; icon: typeof Camera; badge?: number; adminOnly?: boolean }[] = [
+  const canManage = user.role !== 'photographer';
+  const tabs: { key: Tab; label: string; icon: typeof Camera; badge?: number; adminOnly?: boolean; managerOnly?: boolean }[] = [
     { key: 'shoot', label: 'Shoot', icon: Camera },
     { key: 'review', label: 'Review', icon: ClipboardCheck, badge: awaitingCount + problemCount },
-    { key: 'export', label: 'Export', icon: PackageOpen },
-    { key: 'share', label: 'Share', icon: Share2 },
+    { key: 'export', label: 'Export', icon: PackageOpen, managerOnly: true },
+    { key: 'share', label: 'Share', icon: Share2, managerOnly: true },
     { key: 'admin', label: 'Admin', icon: Settings, adminOnly: true },
   ];
 
@@ -200,7 +201,7 @@ export default function App() {
         </div>
 
         <nav className="mx-auto flex max-w-7xl gap-1 overflow-x-auto px-4 pb-2">
-          {tabs.filter((t) => !t.adminOnly || user.isAdmin).map(({ key, label, icon: Icon, badge }) => (
+          {tabs.filter((t) => (!t.adminOnly || user.isAdmin) && (!t.managerOnly || canManage)).map(({ key, label, icon: Icon, badge }) => (
             <button
               key={key}
               type="button"
@@ -283,9 +284,9 @@ export default function App() {
             needsAngle={needsAngle}
           />
         )}
-        {tab === 'review' && <ReviewView products={products} onChanged={refresh} />}
-        {tab === 'share' && <ShareView />}
-        {tab === 'export' && <ExportView driveConfigured={features?.driveExport ?? false} />}
+        {tab === 'review' && <ReviewView products={products} onChanged={refresh} role={user.role} />}
+        {tab === 'share' && canManage && <ShareView />}
+        {tab === 'export' && canManage && <ExportView driveConfigured={features?.driveExport ?? false} />}
         {tab === 'admin' && user.isAdmin && <AdminView />}
       </main>
     </div>
