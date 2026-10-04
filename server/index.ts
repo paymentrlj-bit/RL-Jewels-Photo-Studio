@@ -19,6 +19,7 @@ import { initDatabase, getDb, closeDatabase } from './db';
 import { ensureBootstrapAdmin } from './auth/users';
 import { initCpcMaster } from './integrations/cpcMaster';
 import { startWorkers, stopWorkers } from './queue/worker';
+import { startDailySummarySender } from './integrations/telegram';
 import { rehomeProductsByShootDate } from './db/products';
 import { startModelHealthChecks } from './ai/modelHealth';
 import { queueDepth } from './queue/jobs';
@@ -182,6 +183,7 @@ async function main(): Promise<void> {
   }, 5 * 60 * 1000);
   heartbeat.unref();
   startModelHealthChecks();
+  startDailySummarySender();
   try {
     const { moved } = rehomeProductsByShootDate();
     if (moved > 0) logEvent('batches.rehomed', { moved });

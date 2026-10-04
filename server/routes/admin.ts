@@ -21,6 +21,9 @@ import {
 import { getEnhancePromptState, setEnhancePrompt, resetEnhancePrompt } from '../settings';
 import { countProductsByStatus, listOutcomeRows, listStaffRows } from '../db/products';
 import { summariseOutcomes, summariseStaff } from '../catalog/outcomes';
+import {
+  telegramStatus, saveToken, saveChatId, saveSendHour, botName, discoverChats, sendMessage, summaryMessage, getToken as tgToken,
+} from '../integrations/telegram';
 import { buildDailySummary, renderSummaryText, AUDIT_CHECK_LABELS_SERVER } from '../reports/dailySummary';
 import { findDuplicatePairs, KIND_STUDIO } from '../similarity';
 import { describeMatches } from './similar';
@@ -341,6 +344,57 @@ adminRouter.get('/daily-summary', (req, res) => {
   const day = String(req.query.date || '');
   const summary = buildDailySummary(/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(day) ? day : undefined);
   res.json({ summary, text: renderSummaryText(summary, AUDIT_CHECK_LABELS_SERVER) });
+});
+
+// Telegram delivery of the daily summary. The token is never returned.
+const safeError = (err: unknown) => {
+  const token = tgToken();
+  const msg = (err as Error)?.message || 'That did not work.';
+  return token ? msg.split(token).join('***') : msg;
+};
+
+adminRouter.get('/telegram', (_req, res) => {
+  res.json(telegramStatus());
+});
+
+adminRouter.put('/telegram', async (req: AuthenticatedRequest, res) => {
+  const body = req.body || {};
+  try {
+    if (typeof body.token === 'string' && body.token.trim()) {
+      if (!/^\d{5,}:[A-Za-z0-9_-]{20,}$/.test(body.token.trim())) {
+        res.status(400).json({ error: 'That does not look like a bot token (it should look like 123456789:AAF...).' });
+        return;
+      }
+      saveToken(body.token, req.user!.username);
+      // Proves the token works before the admin goes looking for chats.
+      const name = await botName();
+      logEvent('admin.telegram_token_saved', {}, actorFrom(req.user));
+      body.botName = name;
+    }
+    if (typeof body.chatId === 'string') saveChatId(body.chatId, req.user!.username);
+    if (Number.isInteger(body.hour) && body.hour >= 0 && body.hour <= 23) saveSendHour(body.hour, req.user!.username);
+    res.json({ ...telegramStatus(), botName: body.botName });
+  } catch (err) {
+    res.status(400).json({ error: safeError(err) });
+  }
+});
+
+adminRouter.get('/telegram/chats', async (_req, res) => {
+  try {
+    res.json({ chats: await discoverChats() });
+  } catch (err) {
+    res.status(400).json({ error: safeError(err) });
+  }
+});
+
+adminRouter.post('/telegram/test', async (req: AuthenticatedRequest, res) => {
+  try {
+    await sendMessage(`Test from RL Jewels Studio.\n\n${summaryMessage()}`);
+    logEvent('admin.telegram_test', {}, actorFrom(req.user));
+    res.json({ success: true });
+  } catch (err) {
+    res.status(400).json({ error: safeError(err) });
+  }
 });
 
 adminRouter.get('/analytics/events', (req, res) => {

@@ -138,6 +138,11 @@ export const api = {
   similarCheck: (imageBase64: string) => post<{ matches: SimilarMatch[] }>('/similar/check', { imageBase64 }),
   similarTo: (id: string) => request<{ basis: 'studio' | 'original'; matches: SimilarMatch[] }>(`/products/${id}/similar`),
   duplicates: () => request<{ pairs: { score: number; tier: 'same' | 'similar'; a: SimilarMatch; b: SimilarMatch }[] }>('/admin/duplicates'),
+  telegram: () => request<TelegramStatus>('/admin/telegram'),
+  saveTelegram: (body: { token?: string; chatId?: string; hour?: number }) =>
+    request<TelegramStatus & { botName?: string }>('/admin/telegram', { method: 'PUT', body: JSON.stringify(body) }),
+  telegramChats: () => request<{ chats: { id: string; title: string; type: string }[] }>('/admin/telegram/chats'),
+  telegramTest: () => post<{ success: boolean }>('/admin/telegram/test', {}),
   dailySummary: () => request<{ summary: { date: string; shot: number; waitingForApproval: number; toRetake: number }; text: string }>('/admin/daily-summary'),
   metaFeed: () => request<MetaFeedStatus>('/admin/meta-feed'),
   analytics: (days = 30) => request<AnalyticsSummary>(`/admin/analytics/summary?days=${days}`),
@@ -154,6 +159,15 @@ export interface StaffScore {
   avgRisk: number | null;
   topIssue: { check: string; count: number } | null;
   fewShots: boolean;
+}
+
+export interface TelegramStatus {
+  hasToken: boolean;
+  tokenHint: string;
+  tokenFromEnv: boolean;
+  chatId: string;
+  hour: number;
+  lastSent: string | null;
 }
 
 export interface SimilarMatch {
