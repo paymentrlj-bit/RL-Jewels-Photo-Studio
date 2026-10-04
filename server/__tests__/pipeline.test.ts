@@ -429,3 +429,17 @@ describe('Gemini 429 handling', () => {
     expect(calls).toBe(1);
   });
 });
+
+import { countModelCall, modelForRole, proCallsToday, PRO_DAILY_BUDGET, MODEL_AUDIT, MODEL_AUDIT_STRONG } from '../ai/client';
+
+describe('Pro model daily budget', () => {
+  it('counts only Pro calls, keeps essential work on Pro, and moves flexible work to Flash Lite once the budget is spent', () => {
+    const before = proCallsToday();
+    countModelCall(MODEL_AUDIT); // not Pro: not counted
+    expect(proCallsToday()).toBe(before);
+    expect(modelForRole('flexible')).toBe(before >= PRO_DAILY_BUDGET ? MODEL_AUDIT : MODEL_AUDIT_STRONG);
+    for (let i = proCallsToday(); i < PRO_DAILY_BUDGET; i++) countModelCall(MODEL_AUDIT_STRONG);
+    expect(modelForRole('flexible')).toBe(MODEL_AUDIT);
+    expect(modelForRole('essential')).toBe(MODEL_AUDIT_STRONG);
+  });
+});

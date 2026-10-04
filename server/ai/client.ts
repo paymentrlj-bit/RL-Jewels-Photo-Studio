@@ -39,6 +39,42 @@ export const MODEL_AUDIT_STRONG = 'gemini-3.1-pro-preview';
 // being too weak for genuinely specific, sellable writing, not just a prompt
 // problem. Verified against this account's real /v1beta/models list.
 export const MODEL_COPY = 'gemini-3.1-pro-preview';
+
+// ---------------------------------------------------------------------------
+// Budget for the Pro model. Gemini 3.1 Pro allows only ~250 requests a day on
+// this account's tier (the others allow thousands), and a photo makes several
+// Pro calls. The calls that decide whether a photo is right (the audit, the
+// detail count) always get Pro; the ones that can live with Flash Lite (the
+// identity check, the copy) switch to it once the day's Pro budget is mostly
+// spent, so the accuracy checks never run dry. A per-day counter is kept in
+// memory; if a restart loses it, the 429 fallbacks below still catch the limit.
+// ---------------------------------------------------------------------------
+export const PRO_DAILY_BUDGET = Number(process.env.PRO_DAILY_BUDGET) || 200;
+
+/** The quota day runs on Pacific time (it resets at midnight there). */
+function pacificDay(): string {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+}
+let proCounter = { day: '', n: 0 };
+
+export function countModelCall(model: string): void {
+  if (model !== MODEL_AUDIT_STRONG) return;
+  const day = pacificDay();
+  proCounter = proCounter.day === day ? { day, n: proCounter.n + 1 } : { day, n: 1 };
+}
+
+export function proCallsToday(): number {
+  return proCounter.day === pacificDay() ? proCounter.n : 0;
+}
+
+/**
+ * Which model to use for a role. 'essential' roles always ask for Pro; the
+ * rest drop to Flash Lite once the day's budget is mostly used.
+ */
+export function modelForRole(role: 'essential' | 'flexible'): string {
+  if (role === 'essential') return MODEL_AUDIT_STRONG;
+  return proCallsToday() >= PRO_DAILY_BUDGET ? MODEL_AUDIT : MODEL_AUDIT_STRONG;
+}
 // UNVERIFIED - could not check this against a live /v1beta/models list (no
 // API key in this environment), against the file's own rule above. 1.6-preview
 // was returning a hard 404 "not found... or is not supported for
