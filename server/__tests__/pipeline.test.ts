@@ -392,3 +392,40 @@ describe('segmentation outline', () => {
     expect(result?.exclusions).toEqual([]);
   });
 });
+
+import { isDailyQuotaError, isTransientError, parseRetryDelayMs, withTransientRetry } from '../ai/client';
+
+describe('Gemini 429 handling', () => {
+  const perMinute = new Error('{"error":{"code":429,"message":"You exceeded your current quota","details":[{"retryDelay":"1s"},{"violations":[{"quotaMetric":"generate_content_requests_per_minute"}]}]}}');
+  const perDay = new Error('{"error":{"code":429,"message":"You exceeded your current quota. Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 250 PerDay"}}');
+
+  it('tells a per-minute limit (wait) from a daily one (stop and say so)', () => {
+    expect(isDailyQuotaError(perMinute)).toBe(false);
+    expect(isTransientError(perMinute)).toBe(true);
+    expect(isDailyQuotaError(perDay)).toBe(true);
+    expect(isTransientError(perDay)).toBe(false);
+  });
+
+  it('reads how long Google asks to wait', () => {
+    expect(parseRetryDelayMs(perMinute)).toBe(1000);
+    expect(parseRetryDelayMs(new Error('Please retry in 23.4s.'))).toBe(23400);
+    expect(parseRetryDelayMs(new Error('nothing'))).toBeNull();
+  });
+
+  it('waits out a rate limit and then succeeds, where it used to give up after about three seconds', async () => {
+    let calls = 0;
+    const result = await withTransientRetry(async () => {
+      calls++;
+      if (calls < 4) throw perMinute;
+      return 'done';
+    }, 3);
+    expect(result).toBe('done');
+    expect(calls).toBe(4);
+  }, 20_000);
+
+  it('does not keep retrying a daily limit', async () => {
+    let calls = 0;
+    await expect(withTransientRetry(async () => { calls++; throw perDay; }, 3)).rejects.toBe(perDay);
+    expect(calls).toBe(1);
+  });
+});
