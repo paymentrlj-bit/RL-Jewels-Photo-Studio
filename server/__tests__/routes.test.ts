@@ -396,19 +396,18 @@ describe('roles', () => {
     return id;
   }
 
-  it('lets a photographer shoot but not approve, send back, fix, delete or export', async () => {
+  it('lets a photographer fix, send back and delete, but not approve, export or touch an approved piece', async () => {
     const photog = await as('photographer', 'photog');
     const id = await pieceIn(photog, 'awaiting_review');
-    for (const [method, url] of [
-      ['post', `/api/products/${id}/approve`], ['post', `/api/products/${id}/reject`], ['post', `/api/products/${id}/fix`],
-      ['delete', `/api/products/${id}`], ['post', '/api/products/bulk-delete'],
-    ] as const) {
-      const res = await request(app)[method](url).set('Cookie', photog).send({ ids: [id], issues: ['beads'] });
-      expect(res.status, `${method} ${url}`).toBe(403);
-    }
+    expect((await request(app).post(`/api/products/${id}/approve`).set('Cookie', photog)).status).toBe(403);
     const batchId = (await request(app).get('/api/batches/current').set('Cookie', photog)).body.batch.id;
     expect((await request(app).get(`/api/export/batch/${batchId}/csv`).set('Cookie', photog)).status).toBe(403);
-    expect(getProduct(id)!.status).toBe('awaiting_review');
+    expect((await request(app).post(`/api/products/${id}/fix`).set('Cookie', photog).send({ issues: ['beads'] })).status).toBe(202);
+    getDb().prepare("UPDATE products SET status = 'awaiting_review' WHERE id = ?").run(id);
+    expect((await request(app).post(`/api/products/${id}/reject`).set('Cookie', photog).send({ note: 'blurry' })).status).toBe(200);
+    expect((await request(app).delete(`/api/products/${id}`).set('Cookie', photog)).status).toBe(200);
+    const approved = await pieceIn(photog, 'approved');
+    expect((await request(app).post(`/api/products/${approved}/reject`).set('Cookie', photog).send({})).status).toBe(403);
   });
 
   it('lets a photographer correct what they typed, but not the price or copy', async () => {

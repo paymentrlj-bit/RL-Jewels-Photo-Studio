@@ -160,7 +160,20 @@ export interface AuditResult {
   verdictDisagreed: boolean;
   reason: string;
   checklist: Record<AuditCheck, boolean>;
+  /** The inspector's own counts of the original and of the render, used to correct the next attempt. */
+  originalCounts: string;
+  enhancedCounts: string;
 }
+
+/**
+ * Fidelity failures worth ONE corrective retry: the inspector has counted
+ * exactly what is wrong, so the retry is told those numbers. A blurred or
+ * cropped source photo is not on this list - no retry fixes that.
+ */
+export const FIDELITY_RETRYABLE: AuditCheck[] = [
+  'stoneCountMatches', 'beadDetailPreserved', 'chainPatternMatches', 'engravingPreserved',
+  'naturalDropPhysics', 'pieceCountMatches', 'sameProductFamily',
+];
 
 export async function auditOutput(
   ai: GoogleGenAI,
@@ -220,6 +233,8 @@ export async function auditOutput(
         (parsed.reason as string) ||
         (overallPass ? 'Passed quality check.' : 'Did not meet catalogue quality standards.'),
       checklist,
+      originalCounts: String(parsed.originalCounts ?? '').slice(0, 1200),
+      enhancedCounts: String(parsed.enhancedCounts ?? '').slice(0, 1200),
     };
   } finally {
     clearTimeout(timeout);
@@ -231,11 +246,28 @@ export interface SegmentationResult {
   polygon: number[][];
   label: string;
   /**
+   * The other pieces of the same item when it is a set (the earrings beside a
+   * necklace), each outlined on its own. Absent for a single piece and on
+   * results cached before this field existed.
+   */
+  others?: { boxTwoD: number[]; polygon: number[][] }[];
+  /**
    * Things in the photo that are not the jewellery: tags, hands, watermarks.
    * Used by faithful mode to blank them from the cut-out. Absent on results
    * cached before this field existed.
    */
   exclusions?: Exclusion[];
+}
+
+function parseOthers(raw: unknown): { boxTwoD: number[]; polygon: number[][] }[] {
+  if (!Array.isArray(raw)) return [];
+  const out: { boxTwoD: number[]; polygon: number[][] }[] = [];
+  for (const o of raw.slice(0, 6)) {
+    if (Array.isArray(o?.box_2d) && o.box_2d.length === 4 && Array.isArray(o?.mask) && o.mask.length >= 3) {
+      out.push({ boxTwoD: o.box_2d, polygon: o.mask });
+    }
+  }
+  return out;
 }
 
 const EXCLUSION_KINDS = ['tag', 'hand', 'watermark', 'other'] as const;
@@ -272,9 +304,10 @@ Output one JSON object:
   "box_2d": [ymin, xmin, ymax, xmax],
   "mask": [[y, x], [y, x], ...polygon points tracing the item's actual silhouette in order...],
   "label": "short description of the item",
+  "others": [ { "box_2d": [ymin, xmin, ymax, xmax], "mask": [[y, x], ...] } ],
   "exclusions": [ { "box_2d": [ymin, xmin, ymax, xmax], "kind": "tag" | "hand" | "watermark" | "other" } ]
 }
-All coordinates normalized 0-1000. Trace the jewelry's real outline closely, including any visible interior opening (e.g. a ring or bangle's finger/wrist hole) as part of the silhouette, not as a filled solid. A pair (two earrings) is one item: outline both.
+All coordinates normalized 0-1000. Trace the jewelry's real outline closely, including any visible interior opening (e.g. a ring or bangle's finger/wrist hole) as part of the silhouette, not as a filled solid. If the photo shows a SET - a necklace with its matching earrings laid beside it - "mask" and "box_2d" are the largest piece, and "others" lists EACH remaining piece of the set (every earring separately) with its own outline. A pair of earrings on their own is one item: outline one in "mask" and the other in "others". Use an empty list for "others" when the photo is a single piece. White foam blocks, stands and cards the pieces sit on are not jewelry.
 In "exclusions" give a tight box for each price tag or label together with its string ("tag"), each finger or hand ("hand"), and any text printed on the photo by the camera such as "Shot on ..." ("watermark"). Use "other" for anything else that is not jewelry but touches or overlaps it. Use an empty list if there is nothing.`;
 
     const response = await ai.models.generateContent({
@@ -307,6 +340,7 @@ In "exclusions" give a tight box for each price tag or label together with its s
       boxTwoD: first.box_2d,
       polygon: first.mask,
       label: String(first.label || 'jewelry item'),
+      others: parseOthers(first.others),
       exclusions: parseExclusions(first.exclusions),
     };
   } catch (err) {
@@ -418,5 +452,5 @@ export function buildSegmentationBlock(segmentation: SegmentationResult): string
 
 PRECISE JEWELRY OUTLINE (from computer-vision analysis of the original photo, normalized 0-1000 [y, x] coordinates, traced in order around the actual physical silhouette including any interior opening): ${JSON.stringify(segmentation.polygon)}
 Bounding box [ymin, xmin, ymax, xmax]: ${JSON.stringify(segmentation.boxTwoD)}
-Every point inside this outline is part of the SAME physical piece described above. Use it to make sure you have not missed or misjudged any part of the item's true shape (including its interior opening, if any), and to apply your color correction and finish with perfect uniformity across the whole outlined area - including any motifs, engravings, or recessed details inside it.`;
+${segmentation.others?.length ? `\nThe photo also shows ${segmentation.others.length} more piece(s) of the same set (e.g. the earrings), outlined at: ${JSON.stringify(segmentation.others.map((o) => o.polygon))}. They belong to the item and must ALL appear in the result, each with its own details.\n` : ''}Every point inside this outline is part of the SAME physical piece described above. Use it to make sure you have not missed or misjudged any part of the item's true shape (including its interior opening, if any), and to apply your color correction and finish with perfect uniformity across the whole outlined area - including any motifs, engravings, or recessed details inside it.`;
 }

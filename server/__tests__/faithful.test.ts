@@ -129,4 +129,31 @@ describe('faithful cut-out', () => {
     expect(error).toBeInstanceOf(FaithfulUnavailableError);
     expect(error.code).toBe('no_outline');
   });
+
+  it('keeps every piece of a set when each is outlined', async () => {
+    // a second gold piece (an earring) far from the first, on its own
+    const base = await counterPhoto();
+    const { data, info } = await sharp(base).raw().toBuffer({ resolveWithObject: true });
+    for (let y = 60; y < 140; y++) for (let x = 60; x < 140; x++) {
+      const i = (y * info.width + x) * 3;
+      data[i] = GOLD.r; data[i + 1] = GOLD.g; data[i + 2] = GOLD.b;
+    }
+    const image = await sharp(data, { raw: { width: info.width, height: info.height, channels: 3 } }).jpeg({ quality: 95 }).toBuffer();
+    const earring = outline(100, 100, 55);
+
+    const alone = await buildFaithfulImage({ image, polygon: outline(300, 450, 130), exclusions: [{ box: tagBox, kind: 'tag' }], aspectRatio: '1:1' });
+    const both = await buildFaithfulImage({ image, polygon: outline(300, 450, 130), extraPolygons: [earring], exclusions: [{ box: tagBox, kind: 'tag' }], aspectRatio: '1:1' });
+    // With the earring included the piece's bounding box grows to take it in,
+    // so the pendant is drawn smaller in the same frame.
+    const goldShare = async (b: Buffer) => {
+      const { data: d, info: inf } = await sharp(b).raw().toBuffer({ resolveWithObject: true });
+      let gold = 0;
+      for (let i = 0; i < d.length; i += inf.channels) if (d[i] > 150 && d[i + 2] < 140) gold++;
+      return gold;
+    };
+    expect(await goldShare(both.buffer)).toBeGreaterThan(0);
+    expect(both.height).toBe(alone.height);
+    // the earring is in the result: the cut-out is not just the pendant scaled up
+    expect(await goldShare(both.buffer)).not.toBe(await goldShare(alone.buffer));
+  });
 });

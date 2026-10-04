@@ -67,6 +67,9 @@ function decorate(productId: string) {
   const showCutout = Boolean(
     cutout && original && processed && processed.source !== 'faithful' && cutout.createdAt >= original.createdAt
   );
+  // An AI version that failed its check, kept next to whatever replaced it.
+  const aiRender = getLatestPhoto(productId, 'airender');
+  const showAiRender = Boolean(aiRender && original && aiRender.createdAt >= original.createdAt && (!processed || processed.createdAt >= aiRender.createdAt));
   // Only angles taken for the current original - an older shoot's angles no
   // longer describe what is being processed.
   const angles = original
@@ -83,6 +86,7 @@ function decorate(productId: string) {
     // 'faithful' = the piece cut out of the real photo, nothing generated.
     renderMode: processed ? (processed.source === 'faithful' ? 'faithful' : 'ai') : null,
     cutoutPhotoId: showCutout ? cutout!.id : null,
+    aiRenderPhotoId: showAiRender ? aiRender!.id : null,
     anglePhotoIds: angles.map((p) => p.id),
     job: job
       ? {
@@ -279,7 +283,7 @@ productsRouter.patch('/products/:id', (req: AuthenticatedRequest, res) => {
   res.json({ product: decorate(product!.id) });
 });
 
-productsRouter.delete('/products/:id', requireManager, (req: AuthenticatedRequest, res) => {
+productsRouter.delete('/products/:id', (req: AuthenticatedRequest, res) => {
   const product = getProduct(req.params.id);
   if (!product) {
     res.status(404).json({ error: 'Product not found.' });
@@ -298,7 +302,7 @@ productsRouter.delete('/products/:id', requireManager, (req: AuthenticatedReques
 // Never touches an approved or exported product, even if its id is somehow
 // passed in: those are finished catalogue entries, not "pending" by any
 // definition, and this is a delete with no undo.
-productsRouter.post('/products/bulk-delete', requireManager, (req: AuthenticatedRequest, res) => {
+productsRouter.post('/products/bulk-delete', (req: AuthenticatedRequest, res) => {
   const rawIds: unknown[] = Array.isArray(req.body?.ids) ? req.body.ids : [];
   const ids: string[] = [...new Set(rawIds.map((v) => String(v)))].slice(0, 500);
   if (ids.length === 0) {
@@ -465,7 +469,7 @@ productsRouter.post('/products/:id/approve', requireManager, (req: Authenticated
 
 // Sends an item back for reshoot. Distinct from the AI's own needs_reshoot
 // verdict: this is a human overruling a photo the AI passed.
-productsRouter.post('/products/:id/reject', requireManager, (req: AuthenticatedRequest, res) => {
+productsRouter.post('/products/:id/reject', (req: AuthenticatedRequest, res) => {
   const product = getProduct(req.params.id);
   if (!product) {
     res.status(404).json({ error: 'Product not found.' });
@@ -473,7 +477,7 @@ productsRouter.post('/products/:id/reject', requireManager, (req: AuthenticatedR
   }
 
   // Pulling back something already approved (it may be in Drive or the Meta
-  // feed by now) is an admin decision; managers send back what is still in review.
+  // feed by now) is an admin decision; everyone else sends back what is still in review.
   if ((product.status === 'approved' || product.status === 'exported') && !req.user!.isAdmin) {
     res.status(403).json({ error: 'Only an admin can send back a piece that has already been approved.' });
     return;
@@ -493,7 +497,7 @@ productsRouter.post('/products/:id/reject', requireManager, (req: AuthenticatedR
 // photo", cut out of the original instead (faithful mode). Cheaper than a
 // reshoot, and it uses the eye of someone who knows the piece. Every fix is
 // also remembered against the style (design memory).
-productsRouter.post('/products/:id/fix', requireManager, (req: AuthenticatedRequest, res) => {
+productsRouter.post('/products/:id/fix', (req: AuthenticatedRequest, res) => {
   const product = getProduct(req.params.id);
   if (!product) {
     res.status(404).json({ error: 'Product not found.' });
@@ -581,6 +585,21 @@ productsRouter.post('/products/:id/whiten-background', requireManager, async (re
   saveImage({ productId: product.id, kind: 'processed', data: out.buffer, mimeType: out.mimeType, source: photo.source });
   void indexProduct(product.id, 'studio');
   logEvent('product.background_whitened', { productId: product.id, cpc: product.cpc, borderBefore: out.report.borderBefore }, actorFrom(req.user));
+  res.json({ product: decorate(product.id) });
+});
+
+// "Use the AI version anyway": the reviewer looked at the AI render that failed
+// its own check and prefers it to the real-photo fallback.
+productsRouter.post('/products/:id/use-ai-render', requireManager, (req: AuthenticatedRequest, res) => {
+  const product = getProduct(req.params.id);
+  const render = product ? getLatestPhoto(product.id, 'airender') : null;
+  if (!product || !render || !imageExists(render)) {
+    res.status(404).json({ error: 'There is no AI version to switch to for this piece.' });
+    return;
+  }
+  const photo = saveImage({ productId: product.id, kind: 'processed', data: readImageBuffer(render), mimeType: render.mimeType, source: 'upload' });
+  void indexProduct(product.id, 'studio');
+  logEvent('product.ai_render_chosen', { productId: product.id, cpc: product.cpc, photoId: photo.id }, actorFrom(req.user));
   res.json({ product: decorate(product.id) });
 });
 

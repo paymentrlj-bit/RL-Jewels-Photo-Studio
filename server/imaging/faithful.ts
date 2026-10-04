@@ -31,6 +31,8 @@ export interface FaithfulInput {
   image: Buffer;
   /** The piece's outline from segmentation, [y, x] points normalised 0-1000. */
   polygon?: number[][] | null;
+  /** Outlines of the other pieces of a set (the earrings beside the necklace): kept too. */
+  extraPolygons?: number[][][] | null;
   box?: number[] | null;
   /**
    * Things to blank, 0-1000 boxes. A hand is blanked outright; anything else
@@ -301,6 +303,11 @@ export async function buildFaithfulImage(input: FaithfulInput): Promise<Faithful
   let inside: Uint8Array;
   if (input.polygon && input.polygon.length >= 3) {
     inside = rasterizePolygon(input.polygon, w, h);
+    for (const extra of input.extraPolygons ?? []) {
+      if (extra.length < 3) continue;
+      const m = rasterizePolygon(extra, w, h);
+      for (let i = 0; i < n; i++) if (m[i]) inside[i] = 1;
+    }
   } else if (input.box && input.box.length === 4) {
     inside = new Uint8Array(n);
     const r = boxToRect(input.box, w, h);

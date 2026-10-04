@@ -71,6 +71,8 @@ export interface Product {
   processedPhotoId: string | null;
   /** The real photo cut out onto white, kept beside an AI render that passed. */
   cutoutPhotoId?: string | null;
+  /** The AI version that failed its check, shown beside the real-photo fallback. */
+  aiRenderPhotoId?: string | null;
   /** 'faithful' = the piece cut out of the real photo, nothing generated. */
   renderMode: 'ai' | 'faithful' | null;
   /** Extra photos of this piece from other angles, for the current original. */

@@ -97,7 +97,6 @@ export function renderSummaryText(s: DailySummary, labels: Record<string, string
     }
   }
   if (s.topProblem) lines.push('', `Most common problem today: ${labels[s.topProblem.check] ?? s.topProblem.check} (${s.topProblem.count})`);
-  lines.push('', `AI cost today (estimate): $${s.estCostUsd.toFixed(2)}`);
   return lines.join('\n');
 }
 

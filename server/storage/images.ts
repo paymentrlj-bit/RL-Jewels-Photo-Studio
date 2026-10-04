@@ -19,7 +19,8 @@ import { getDb, newId, nowIso } from '../db';
 // it is fed to the models alongside it.
 // 'cutout' is the real photo cut out onto white, stored next to an AI render
 // that passed so the reviewer can compare the two and choose.
-export type PhotoKind = 'original' | 'processed' | 'angle' | 'cutout';
+// 'airender' is an AI version that failed its own check, kept so the reviewer can see it.
+export type PhotoKind = 'original' | 'processed' | 'angle' | 'cutout' | 'airender';
 // 'faithful' marks a processed photo cut out of the original's own pixels
 // (imaging/faithful.ts) rather than generated.
 export type PhotoSource = 'upload' | 'phone_camera' | 'dslr' | 'sample' | 'faithful';
