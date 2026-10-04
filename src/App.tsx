@@ -159,10 +159,12 @@ export default function App() {
   const problemCount = products.filter((p) => p.status === 'needs_reshoot' || p.status === 'needs_angle' || p.status === 'failed').length;
   const needsAngle = products.filter((p) => p.status === 'needs_angle');
   const recent = products.slice(0, 8);
+  // Sent back for a new photo: each photographer sees their own, managers and admins see all.
+  const toRetake = products.filter((p) => p.status === 'needs_reshoot' && (user.role !== 'photographer' || p.createdBy === user.id));
 
   const canManage = user.role !== 'photographer';
   const tabs: { key: Tab; label: string; icon: typeof Camera; badge?: number; adminOnly?: boolean; managerOnly?: boolean }[] = [
-    { key: 'shoot', label: 'Shoot', icon: Camera },
+    { key: 'shoot', label: 'Shoot', icon: Camera, badge: toRetake.length },
     { key: 'review', label: 'Review', icon: ClipboardCheck, badge: awaitingCount + problemCount },
     { key: 'export', label: 'Export', icon: PackageOpen, managerOnly: true },
     { key: 'share', label: 'Share', icon: Share2, managerOnly: true },
@@ -282,6 +284,7 @@ export default function App() {
             onQueued={refresh}
             recent={recent}
             needsAngle={needsAngle}
+            toRetake={toRetake}
           />
         )}
         {tab === 'review' && <ReviewView products={products} onChanged={refresh} role={user.role} />}

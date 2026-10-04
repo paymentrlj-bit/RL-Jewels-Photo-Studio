@@ -441,6 +441,22 @@ describe('roles', () => {
   });
 });
 
+describe('daily summary and the retake list', () => {
+  it('gives admins today\'s numbers and keeps them from everyone else', async () => {
+    await createUser({ username: 'boss3', password: 'a-real-password-1', isAdmin: true });
+    await createUser({ username: 'shooter', password: 'a-real-password-1', role: 'photographer' });
+    const admin = (await loginAs('boss3', 'a-real-password-1')).cookie!;
+    const shooter = (await loginAs('shooter', 'a-real-password-1')).cookie!;
+    await request(app).post('/api/products').set('Cookie', shooter).send({ itemType: 'Ring' });
+    getDb().prepare("UPDATE products SET status = 'needs_reshoot'").run();
+    const res = await request(app).get('/api/admin/daily-summary').set('Cookie', admin);
+    expect(res.status).toBe(200);
+    expect(res.body.summary).toMatchObject({ shot: 1, toRetake: 1 });
+    expect(res.body.text).toMatch(/Shot today: 1/);
+    expect((await request(app).get('/api/admin/daily-summary').set('Cookie', shooter)).status).toBe(403);
+  });
+});
+
 describe('daily shoot batches', () => {
   it('puts everyone\'s shots from the same day in one batch named for that day', async () => {
     await createUser({ username: 'a1', password: 'a-real-password-1', isAdmin: false });

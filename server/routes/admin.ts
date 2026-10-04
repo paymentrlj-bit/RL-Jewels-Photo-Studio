@@ -21,6 +21,7 @@ import {
 import { getEnhancePromptState, setEnhancePrompt, resetEnhancePrompt } from '../settings';
 import { countProductsByStatus, listOutcomeRows, listStaffRows } from '../db/products';
 import { summariseOutcomes, summariseStaff } from '../catalog/outcomes';
+import { buildDailySummary, renderSummaryText, AUDIT_CHECK_LABELS_SERVER } from '../reports/dailySummary';
 import { findDuplicatePairs, KIND_STUDIO } from '../similarity';
 import { describeMatches } from './similar';
 import { buildMetaFeed } from '../sharing/metaFeed';
@@ -333,6 +334,13 @@ adminRouter.get('/duplicates', (_req, res) => {
       .map((p) => ({ score: p.score, tier: p.tier, a: describe(p.a), b: describe(p.b) }))
       .filter((p) => p.a && p.b),
   });
+});
+
+// The day's picture for whoever runs the studio, plus the same as ready-to-send text.
+adminRouter.get('/daily-summary', (req, res) => {
+  const day = String(req.query.date || '');
+  const summary = buildDailySummary(/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(day) ? day : undefined);
+  res.json({ summary, text: renderSummaryText(summary, AUDIT_CHECK_LABELS_SERVER) });
 });
 
 adminRouter.get('/analytics/events', (req, res) => {
