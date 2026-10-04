@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Users, Wand2, BarChart3, AlertTriangle, Check, UserPlus, RotateCcw, KeyRound } from 'lucide-react';
 import { api, ApiError, type AnalyticsSummary, type MetaFeedStatus } from '../api';
 import { SimilarList } from '../components/SimilarList';
+import { TelegramSetup } from '../components/TelegramSetup';
 import { AUDIT_CHECK_FAILURE_LABELS, ROLE_LABELS, type Role } from '../types';
 import type { SessionUser } from '../types';
 import { AUDIT_CHECK_LABELS } from '../types';
@@ -191,6 +192,7 @@ const InsightsPanel: React.FC = () => {
               Send on WhatsApp
             </a>
           </div>
+          <TelegramSetup />
         </section>
       )}
 

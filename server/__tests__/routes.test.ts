@@ -8,7 +8,7 @@
 // requireAuth on an admin-only route, would pass every existing test and
 // still be a real vulnerability. These tests exist to catch exactly that
 // class of mistake.
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -454,6 +454,63 @@ describe('daily summary and the retake list', () => {
     expect(res.body.summary).toMatchObject({ shot: 1, toRetake: 1 });
     expect(res.body.text).toMatch(/Shot today: 1/);
     expect((await request(app).get('/api/admin/daily-summary').set('Cookie', shooter)).status).toBe(403);
+  });
+});
+
+describe('Telegram delivery of the daily summary', () => {
+  const TOKEN = '123456789:AAFabcdefghijklmnopqrstuvwxyz_0123456';
+
+  afterAll(() => vi.unstubAllGlobals());
+
+  it('keeps the token secret, checks it works, finds chats and sends', async () => {
+    await createUser({ username: 'tgboss', password: 'a-real-password-1', isAdmin: true });
+    const cookie = (await loginAs('tgboss', 'a-real-password-1')).cookie!;
+    getDb().prepare("DELETE FROM settings WHERE key LIKE 'telegram_%'").run();
+    const calls: { url: string; body: Record<string, unknown> }[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: { body: string }) => {
+      const body = JSON.parse(init.body || '{}');
+      calls.push({ url, body });
+      const result = url.endsWith('/getMe') ? { username: 'RLJSTUDIO_BOT' }
+        : url.endsWith('/getUpdates') ? [{ message: { chat: { id: -100123, type: 'group', title: 'Managers' } } }, { message: { chat: { id: -100123, type: 'group', title: 'Managers' } } }]
+        : {};
+      return { ok: true, json: async () => ({ ok: true, result }) };
+    }));
+
+    const bad = await request(app).put('/api/admin/telegram').set('Cookie', cookie).send({ token: 'nonsense' });
+    expect(bad.status).toBe(400);
+
+    const saved = await request(app).put('/api/admin/telegram').set('Cookie', cookie).send({ token: TOKEN });
+    expect(saved.status).toBe(200);
+    expect(saved.body.botName).toBe('@RLJSTUDIO_BOT');
+    expect(JSON.stringify(saved.body)).not.toContain(TOKEN);
+    expect((await request(app).get('/api/admin/telegram').set('Cookie', cookie)).text).not.toContain(TOKEN);
+
+    const chats = await request(app).get('/api/admin/telegram/chats').set('Cookie', cookie);
+    expect(chats.body.chats).toEqual([{ id: '-100123', title: 'Managers', type: 'group' }]);
+
+    expect((await request(app).post('/api/admin/telegram/test').set('Cookie', cookie)).status).toBe(400); // no chat chosen yet
+    await request(app).put('/api/admin/telegram').set('Cookie', cookie).send({ chatId: '-100123', hour: 20 });
+    const test = await request(app).post('/api/admin/telegram/test').set('Cookie', cookie);
+    expect(test.status).toBe(200);
+    const sent = calls.find((c) => c.url.endsWith('/sendMessage'))!;
+    expect(sent.body.chat_id).toBe('-100123');
+    expect(String(sent.body.text)).toMatch(/Shot today/);
+    expect(String(sent.body.text)).not.toContain('*');
+  });
+
+  it('does not give the token away when Telegram refuses it', async () => {
+    await createUser({ username: 'tgboss2', password: 'a-real-password-1', isAdmin: true });
+    const cookie = (await loginAs('tgboss2', 'a-real-password-1')).cookie!;
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error(`boom for https://api.telegram.org/bot${TOKEN}/getUpdates`); }));
+    const res = await request(app).get('/api/admin/telegram/chats').set('Cookie', cookie);
+    expect(res.status).toBe(400);
+    expect(res.text).not.toContain(TOKEN);
+  });
+
+  it('is for admins only', async () => {
+    await createUser({ username: 'tgmgr', password: 'a-real-password-1', role: 'manager' });
+    const cookie = (await loginAs('tgmgr', 'a-real-password-1')).cookie!;
+    expect((await request(app).get('/api/admin/telegram').set('Cookie', cookie)).status).toBe(403);
   });
 });
 
