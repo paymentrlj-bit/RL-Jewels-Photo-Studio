@@ -6,7 +6,7 @@
 
 import express from 'express';
 import JSZip from 'jszip';
-import { requireAuth, type AuthenticatedRequest } from '../auth/session';
+import { requireAuth, requireManager, type AuthenticatedRequest } from '../auth/session';
 import { logEvent, actorFrom } from '../logging';
 import { isDriveConfigured, config } from '../config';
 import { getProduct, getBatch, listProducts, type Product } from '../db/products';
@@ -18,6 +18,8 @@ import { enqueueJob, getLatestJobForProduct } from '../queue/jobs';
 
 export const exportRouter = express.Router();
 exportRouter.use(requireAuth);
+// Exports hand finished catalogue data to other systems: managers and admins only.
+exportRouter.use(requireManager);
 
 // Only approved and already-exported items leave the building. A product
 // still awaiting review has not been signed off by a human, and v1's

@@ -85,11 +85,17 @@ export interface Batch {
   productCount?: number;
 }
 
+/** admin: everything. manager: approves and exports. photographer: shoots only. */
+export type Role = 'admin' | 'manager' | 'photographer';
+
+export const ROLE_LABELS: Record<Role, string> = { admin: 'Admin', manager: 'Manager', photographer: 'Photographer' };
+
 export interface SessionUser {
   id: string;
   username: string;
   displayName: string;
   isAdmin: boolean;
+  role: Role;
 }
 
 export interface CpcMasterRecord {

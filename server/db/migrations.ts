@@ -261,6 +261,16 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_product_vectors_kind ON product_vectors (kind);
     `,
   },
+  {
+    version: 7,
+    name: 'user roles: photographer, manager (admin stays the is_admin flag)',
+    up: `
+      -- Existing non-admin staff keep the ability to approve (they could before),
+      -- so they become managers; an admin then moves photographers to the
+      -- photographer role. New accounts are created as photographers by default.
+      ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'manager';
+    `,
+  },
 ];
 
 export function runMigrations(db: BetterSqlite3.Database): void {

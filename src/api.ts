@@ -87,6 +87,7 @@ export const api = {
   attachPhoto: (id: string, imageBase64: string, source: string) =>
     post<{ product: Product; photoId: string; jobId: string }>(`/products/${id}/photo`, { imageBase64, source }),
 
+  whitenBackground: (id: string) => post<{ product: Product }>(`/products/${id}/whiten-background`, {}),
   approve: (id: string, note?: string) => post<{ product: Product }>(`/products/${id}/approve`, { note }),
   reject: (id: string, note: string) => post<{ product: Product }>(`/products/${id}/reject`, { note }),
   requeue: (id: string, options: { proceedWithoutAngle?: boolean } = {}) =>

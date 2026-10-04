@@ -19,6 +19,7 @@ import { initDatabase, getDb, closeDatabase } from './db';
 import { ensureBootstrapAdmin } from './auth/users';
 import { initCpcMaster } from './integrations/cpcMaster';
 import { startWorkers, stopWorkers } from './queue/worker';
+import { rehomeProductsByShootDate } from './db/products';
 import { startModelHealthChecks } from './ai/modelHealth';
 import { queueDepth } from './queue/jobs';
 import { logEvent, flushLogs, pruneOldEvents, actorFrom } from './logging';
@@ -181,6 +182,12 @@ async function main(): Promise<void> {
   }, 5 * 60 * 1000);
   heartbeat.unref();
   startModelHealthChecks();
+  try {
+    const { moved } = rehomeProductsByShootDate();
+    if (moved > 0) logEvent('batches.rehomed', { moved });
+  } catch (err) {
+    console.warn('[batches] re-homing failed:', (err as Error).message);
+  }
   startSimilarityBackfill();
 
   const server = app.listen(config.port, () => {

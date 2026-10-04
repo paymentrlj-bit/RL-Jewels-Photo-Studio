@@ -55,7 +55,7 @@ authRouter.post('/login', async (req, res) => {
 
   setSessionCookie(res, user);
   logEvent('auth.login_success', { ip }, actorFrom(user));
-  res.json({ username: user.username, displayName: user.displayName, isAdmin: user.isAdmin });
+  res.json({ username: user.username, displayName: user.displayName, isAdmin: user.isAdmin, role: user.role });
 });
 
 authRouter.post('/logout', (req, res) => {
@@ -72,6 +72,7 @@ authRouter.get('/session', requireAuth, (req: AuthenticatedRequest, res) => {
     username: user.username,
     displayName: user.displayName,
     isAdmin: user.isAdmin,
+    role: user.role,
   });
 });
 

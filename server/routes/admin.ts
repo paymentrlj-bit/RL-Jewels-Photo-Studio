@@ -12,6 +12,9 @@ import {
   setUserPassword,
   setUserActive,
   setUserAdmin,
+  setUserRole,
+  ROLES,
+  type Role,
   findUserById,
   countAdmins,
 } from '../auth/users';
@@ -68,6 +71,8 @@ adminRouter.get('/users', (_req, res) => {
 
 adminRouter.post('/users', async (req: AuthenticatedRequest, res) => {
   const { username, password, displayName, isAdmin } = req.body || {};
+  // New accounts are photographers unless an admin says otherwise.
+  const role: Role = ROLES.includes(req.body?.role) ? req.body.role : isAdmin ? 'admin' : 'photographer';
 
   const policy = checkPasswordPolicy(String(password || ''));
   if (!policy.ok) {
@@ -80,7 +85,8 @@ adminRouter.post('/users', async (req: AuthenticatedRequest, res) => {
       username: String(username || ''),
       password: String(password),
       displayName: displayName ? String(displayName) : undefined,
-      isAdmin: Boolean(isAdmin),
+      isAdmin: role === 'admin',
+      role,
     });
     logEvent('admin.user_created', { createdUserId: user.id, username: user.username, isAdmin: user.isAdmin }, actorFrom(req.user));
     res.status(201).json({ user });
@@ -125,6 +131,15 @@ adminRouter.patch('/users/:id', async (req: AuthenticatedRequest, res) => {
   if (typeof body.isActive === 'boolean') {
     setUserActive(target.id, body.isActive);
     logEvent('admin.user_active_changed', { targetUserId: target.id, isActive: body.isActive }, actorFrom(actor));
+  }
+
+  if (ROLES.includes(body.role)) {
+    if (target.isAdmin && body.role !== 'admin' && countAdmins() <= 1) {
+      res.status(409).json({ error: 'This is the only active admin account. Promote another admin first.' });
+      return;
+    }
+    setUserRole(target.id, body.role);
+    logEvent('admin.user_role_changed', { targetUserId: target.id, role: body.role }, actorFrom(actor));
   }
 
   if (typeof body.isAdmin === 'boolean') {

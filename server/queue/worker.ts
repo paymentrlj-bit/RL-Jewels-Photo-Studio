@@ -55,6 +55,7 @@ import {
 } from '../ai/inventory';
 import { aspectRatioFor, describeItemType, parseLengthInches } from '../catalog/taxonomy';
 import { indexProduct } from '../similarity';
+import { whitenBackground } from '../imaging/background';
 import { computeRisk } from '../catalog/risk';
 import { describeNameRules } from '../catalog/copyRules';
 import { buildStaffTagsBlock } from '../catalog/tags';
@@ -729,6 +730,17 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
       recordAttempt(stage, model)
     );
 
+  const whiten = async (e: EnhanceResult): Promise<EnhanceResult> => {
+    try {
+      const out = await whitenBackground(Buffer.from(e.imageBase64, 'base64'), e.mimeType);
+      logEvent('pipeline.background_whitened', { requestId, productId: product.id, ...out.report });
+      return out.report.changed ? { imageBase64: out.buffer.toString('base64'), mimeType: out.mimeType } : e;
+    } catch (err) {
+      logEvent('pipeline.background_whitened', { requestId, productId: product.id, changed: false, errorMessage: debugDetail(err) });
+      return e;
+    }
+  };
+
   // --- Attempt 1: default (cheap/fast) tier ---
   let enhanced: EnhanceResult | null = null;
   try {
@@ -783,6 +795,10 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
     }
     return;
   }
+
+  // The image model often leaves a pale grey backdrop and the audit lets it
+  // through; make it exactly white before anyone (or the audit) looks.
+  enhanced = await whiten(enhanced);
 
   setJobStage(job.id, 'auditing');
   let audit = await runAudit('audit', enhanced.imageBase64, enhanced.mimeType);
@@ -853,10 +869,11 @@ Correct this specific issue while still following every rule above.`;
 
     try {
       setJobStage(job.id, 'escalating');
-      const retryEnhanced = await runEnhance(MODEL_ENHANCE_ESCALATED, 'enhance-escalated', correctivePrompt, enhanceRefs);
+      let retryEnhanced = await runEnhance(MODEL_ENHANCE_ESCALATED, 'enhance-escalated', correctivePrompt, enhanceRefs);
       attemptCount = 2;
 
       if (retryEnhanced) {
+        retryEnhanced = await whiten(retryEnhanced);
         setJobStage(job.id, 'auditing');
         // Stronger grader for the re-audit: this is the last gate before a
         // photo ships, and both passes have already been paid for.
