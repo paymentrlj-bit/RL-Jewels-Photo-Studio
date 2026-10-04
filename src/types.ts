@@ -127,7 +127,7 @@ export interface CpcLookupResult {
 
 /** A failure that isn't about one photo - the whole queue is stuck until this clears. */
 export interface BlockingIssue {
-  code: 'billing_cap' | 'escalation_model_missing';
+  code: 'billing_cap' | 'escalation_model_missing' | 'quota_exceeded';
   message: string;
   since: string;
 }

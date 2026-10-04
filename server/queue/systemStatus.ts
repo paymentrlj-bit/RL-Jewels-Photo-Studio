@@ -9,7 +9,7 @@
 // restart costs nothing, since the very next job that hits the same problem
 // sets it again.
 
-export type BlockingIssueCode = 'billing_cap' | 'escalation_model_missing';
+export type BlockingIssueCode = 'billing_cap' | 'escalation_model_missing' | 'quota_exceeded';
 
 export interface BlockingIssue {
   code: BlockingIssueCode;

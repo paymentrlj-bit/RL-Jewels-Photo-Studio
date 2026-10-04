@@ -12,6 +12,7 @@ import {
   withTransientRetry,
   isTransientError,
   isBillingError,
+  isDailyQuotaError,
   isModelNotFoundError,
   debugDetail,
   COST_PER_CALL_USD,
@@ -150,6 +151,11 @@ async function workerLoop(workerId: string): Promise<void> {
       // A throw that escapes runJob is a bug rather than an expected failure,
       // but it must never take the worker loop down with it - one bad job
       // would otherwise stall the whole queue.
+      if (isDailyQuotaError(err)) {
+        // Say so on every screen, rather than leaving photos to fail one by one with no explanation.
+        reportBlockingIssue('quota_exceeded', 'Google Gemini says the daily request limit for this API key has been used up. It resets on its own (usually at midnight Pacific time), or an admin can raise the limit by turning on billing for the key at https://ai.studio/projects. Photos will process again once it clears.');
+        logEvent('pipeline.quota_exceeded', { workerId, jobId: job.id, errorMessage: debugDetail(err).slice(0, 400) });
+      }
       console.error(`[queue] ${workerId} crashed on job ${job.id}:`, err);
       const requeued = failJob(job.id, debugDetail(err), isTransientError(err));
       if (!requeued) setProductStatus(job.productId, 'failed');
@@ -785,6 +791,14 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
       reportBlockingIssue('billing_cap', reason);
       finish('failed', { reason });
       completeJob(job.id, 'failed', { reason: 'billing_cap' });
+      failJob(job.id, debugDetail(err), false);
+      setProductStatus(product.id, 'failed');
+      return;
+    }
+    if (isDailyQuotaError(err)) {
+      const reason = 'Google Gemini says the daily request limit for this API key has been used up. It resets on its own (usually at midnight Pacific time), or an admin can raise the limit by turning on billing for the key at https://ai.studio/projects. Photos will process again once it clears.';
+      reportBlockingIssue('quota_exceeded', reason);
+      finish('failed', { reason });
       failJob(job.id, debugDetail(err), false);
       setProductStatus(product.id, 'failed');
       return;

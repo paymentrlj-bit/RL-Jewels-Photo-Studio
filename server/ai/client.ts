@@ -144,6 +144,25 @@ export function isBillingError(err: unknown): boolean {
   return /prepayment credits are depleted|spending cap|exceeded its monthly/i.test(message);
 }
 
+/**
+ * A 429 that will not clear by waiting a minute: the day's (or project's)
+ * allowance is used up. Google names the metric in the message, e.g.
+ * "...RequestsPerDayPerProjectPerModel...". Per-minute limits clear on their own.
+ */
+export function isDailyQuotaError(err: unknown): boolean {
+  const e = err as { message?: string; status?: number; code?: number };
+  const message = String(e?.message || err || '');
+  const is429 = (e?.status || e?.code) === 429 || /RESOURCE_EXHAUSTED|"code":\s*429|exceeded your current quota/i.test(message);
+  return is429 && /PerDay|per day|daily|free_tier_requests|FreeTier/i.test(message);
+}
+
+/** How long Google asks to wait before trying again, from its error text, or null. */
+export function parseRetryDelayMs(err: unknown): number | null {
+  const message = String((err as { message?: string })?.message || err || '');
+  const m = /"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/i.exec(message) ?? /retry in (\d+(?:\.\d+)?)\s*s/i.exec(message);
+  return m ? Math.ceil(Number(m[1]) * 1000) : null;
+}
+
 export function isTransientError(err: unknown): boolean {
   const e = err as { message?: string; status?: number; code?: number; name?: string };
   const message = String(e?.message || err || '');
@@ -154,6 +173,9 @@ export function isTransientError(err: unknown): boolean {
   if (/prepayment credits are depleted|spending cap|exceeded its monthly/i.test(message)) {
     return false;
   }
+  // The day's allowance is gone: waiting a minute will not bring it back.
+  if (isDailyQuotaError(err)) return false;
+  if (/"code":\s*429/.test(message)) return true;
   if (code === 429 || code === 500 || code === 503 || code === 504) return true;
   // AbortController timeouts throw a DOMException/AbortError whose message is
   // just "The operation was aborted" - that's exactly the kind of thing worth
@@ -206,6 +228,19 @@ export interface RetryAttemptInfo {
 // single attempt, success or failure - this is what gives the analytics log
 // per-attempt latency/outcome data instead of only the final outcome, which
 // is what actually shows retry/timeout patterns over time.
+// Every Gemini call in this process shares one pause: when any call is told
+// to slow down, the others wait too instead of piling more requests onto a
+// limit that is already hit (a photo makes several calls, and two photos run
+// at once).
+let pausedUntil = 0;
+const MAX_RATE_LIMIT_WAIT_MS = 60_000;
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+export function isRateLimitError(err: unknown): boolean {
+  const e = err as { status?: number; code?: number; message?: string };
+  return (e?.status || e?.code) === 429 || /RESOURCE_EXHAUSTED|exceeded your current quota|"code":\s*429/i.test(String(e?.message || ''));
+}
+
 export async function withTransientRetry<T>(
   fn: () => Promise<T>,
   maxAttempts = 3,
@@ -213,7 +248,11 @@ export async function withTransientRetry<T>(
   onAttempt?: (info: RetryAttemptInfo) => void
 ): Promise<T> {
   let lastErr: unknown;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+  // A rate limit is worth more patience than a hiccup: a minute's wait usually clears it.
+  let limit = maxAttempts;
+  for (let attempt = 1; attempt <= limit; attempt++) {
+    const paused = pausedUntil - Date.now();
+    if (paused > 0 && (!deadline || Date.now() + paused < deadline)) await sleep(Math.min(paused, MAX_RATE_LIMIT_WAIT_MS));
     if (deadline && Date.now() > deadline) {
       throw lastErr || new Error('Pipeline time budget exceeded before this step could run.');
     }
@@ -225,8 +264,14 @@ export async function withTransientRetry<T>(
     } catch (err) {
       lastErr = err;
       onAttempt?.({ attempt, latencyMs: Date.now() - startedAt, success: false, error: err });
-      if (attempt < maxAttempts && isTransientError(err) && (!deadline || Date.now() < deadline)) {
-        await new Promise((r) => setTimeout(r, 1000 * attempt));
+      if (isRateLimitError(err) && isTransientError(err)) {
+        limit = Math.max(limit, maxAttempts + 2);
+        const wait = Math.min(parseRetryDelayMs(err) ?? 15_000 * attempt, MAX_RATE_LIMIT_WAIT_MS) + 500;
+        pausedUntil = Math.max(pausedUntil, Date.now() + wait);
+        if (attempt < limit && (!deadline || Date.now() + wait < deadline)) continue; // the pause above does the waiting
+      }
+      if (attempt < limit && isTransientError(err) && !isRateLimitError(err) && (!deadline || Date.now() < deadline)) {
+        await sleep(1000 * attempt);
         continue;
       }
       throw err;
