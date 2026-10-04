@@ -11,7 +11,7 @@ import type { GoogleGenAI } from '@google/genai';
 import { MODEL_AUDIT_STRONG, type TokenUsage } from './client';
 import { callJson } from './inventory';
 import { cleanTags } from '../catalog/tags';
-import { FAMILY_LABEL, PRODUCT_FAMILIES, familyFor, type ProductFamily } from '../catalog/taxonomy';
+import { FAMILY_LABEL, PRODUCT_FAMILIES, familyFor, setPieces, type ProductFamily } from '../catalog/taxonomy';
 
 export interface PieceIdentity {
   family: ProductFamily;
@@ -95,6 +95,14 @@ export function compareIdentity(formItemType: string | undefined, identity: Piec
   const formFamily = familyFor(formItemType);
   if (identity.confidence === 'low') {
     return { status: 'unsure', message: 'The AI could not tell for sure what this piece is from the photo. Add another photo from a different angle, or confirm the category.' };
+  }
+  // A "set" promises a necklace and both earrings: if the photo shows fewer, ask for them in the picture.
+  const promised = setPieces(formItemType);
+  if (promised && identity.pieceCount !== null && identity.pieceCount < promised && identity.family !== 'earring') {
+    return {
+      status: 'mismatch',
+      message: `"${formItemType}" is a set - the necklace and both earrings - but the photo shows only ${identity.pieceCount} piece${identity.pieceCount === 1 ? '' : 's'}. Put the earrings next to the necklace and retake the photo.`,
+    };
   }
   if (!formFamily || formFamily === 'other' || identity.family === 'other') return { status: 'unchecked', message: '' };
   if (formFamily !== identity.family) {

@@ -82,7 +82,7 @@ export const ReviewView: React.FC<ReviewViewProps> = ({ products, onChanged, rol
         </div>
       )}
 
-      {canManage && pendingIds.length > 0 && (
+      {pendingIds.length > 0 && (
         // A hard reset for a whole batch gone wrong - a bad lighting setup,
         // a wrong CPC used all morning - without deleting each item by hand.
         <div className="flex justify-end">
@@ -135,7 +135,6 @@ export const ReviewView: React.FC<ReviewViewProps> = ({ products, onChanged, rol
                 key={product.id}
                 product={product}
                 busy={busyId === product.id}
-                canManage={canManage}
                 onRequeue={() => act(product.id, () => api.requeue(product.id))}
                 onProceed={() => act(product.id, () => api.requeue(product.id, { proceedWithoutAngle: true }))}
                 onDelete={() => void deleteOne(product.id)}
@@ -232,6 +231,7 @@ const ReviewCard: React.FC<{
   if (product.processedPhotoId) photos.push({ label: isFaithful ? 'Real photo, cut out' : 'Studio', url: api.photoUrl(product.processedPhotoId) });
   if (product.originalPhotoId) photos.push({ label: 'Original', url: api.photoUrl(product.originalPhotoId) });
   if (product.cutoutPhotoId) photos.push({ label: 'Real photo, cut out', url: api.photoUrl(product.cutoutPhotoId) });
+  if (product.aiRenderPhotoId) photos.push({ label: 'AI version (failed its check)', url: api.photoUrl(product.aiRenderPhotoId) });
   const indexOf = (url: string) => photos.findIndex((p) => p.url === url);
   const thumbs = photos.slice(1);
 
@@ -358,7 +358,6 @@ const ReviewCard: React.FC<{
         )}
       </div>
 
-      {canManage ? (
       <div className="border-t border-stone-200 p-3">
         {mode === 'fixing' ? (
           <FixPanel
@@ -397,15 +396,37 @@ const ReviewCard: React.FC<{
           </div>
         ) : (
           <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={onApprove}
-              disabled={busy}
-              className="flex min-h-[44px] flex-1 items-center justify-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
-            >
-              <CheckCircle2 className="w-4 h-4" /> Approve
-            </button>
-            {product.cutoutPhotoId && (
+            {canManage ? (
+              <button
+                type="button"
+                onClick={onApprove}
+                disabled={busy}
+                className="flex min-h-[44px] flex-1 items-center justify-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60"
+              >
+                <CheckCircle2 className="w-4 h-4" /> Approve
+              </button>
+            ) : (
+              <p className="flex min-h-[44px] flex-1 items-center justify-center rounded-lg bg-stone-50 px-3 text-xs text-stone-500">Waiting for a manager to approve</p>
+            )}
+            {canManage && product.aiRenderPhotoId && (
+              <button
+                type="button"
+                disabled={busy}
+                title="The AI version did not pass its own check; use it anyway"
+                onClick={async () => {
+                  try {
+                    await api.useAiRender(product.id);
+                    onChanged();
+                  } catch (err) {
+                    onError(err instanceof ApiError ? err.message : 'Could not switch to the AI version.');
+                  }
+                }}
+                className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-amber-500 px-3 py-2 text-sm text-amber-800 hover:bg-amber-50 disabled:opacity-60"
+              >
+                Use AI version anyway
+              </button>
+            )}
+            {canManage && product.cutoutPhotoId && (
               <button
                 type="button"
                 onClick={useCutout}
@@ -445,11 +466,6 @@ const ReviewCard: React.FC<{
           </div>
         )}
       </div>
-      ) : (
-        <p className="border-t border-stone-200 p-3 text-center text-xs text-stone-500">
-          Waiting for a manager to approve.
-        </p>
-      )}
     </article>
   );
 };
@@ -457,15 +473,15 @@ const ReviewCard: React.FC<{
 const ProblemRow: React.FC<{
   product: Product;
   busy: boolean;
-  canManage: boolean;
   onRequeue: () => void;
   onProceed: () => void;
   onDelete: () => void;
   onChanged: () => void;
   onError: (message: string) => void;
-}> = ({ product, busy, canManage, onRequeue, onProceed, onDelete, onChanged, onError }) => {
+}> = ({ product, busy, onRequeue, onProceed, onDelete, onChanged, onError }) => {
   const [fixing, setFixing] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
+  const [viewingAi, setViewingAi] = useState(false);
   const rawReason = product.auditReason || product.reviewNote || product.job?.lastError || 'No reason recorded.';
   const summary = plainSummary(product);
   return (
@@ -488,6 +504,24 @@ const ProblemRow: React.FC<{
               plain words used everywhere else. The AI's full sentence is one
               tap away for anyone who wants it, not the first thing read. */}
           <p className="mt-0.5 text-xs text-stone-600">{summary || rawReason}</p>
+          {product.aiRenderPhotoId && (
+            <button
+              type="button"
+              onClick={() => setViewingAi(true)}
+              className="mt-0.5 min-h-[32px] text-xs font-medium text-stone-600 underline hover:text-stone-900"
+            >
+              See the AI attempt that failed
+            </button>
+          )}
+          {viewingAi && product.aiRenderPhotoId && (
+            <PhotoViewer
+              photos={[
+                { label: 'AI version (failed its check)', url: api.photoUrl(product.aiRenderPhotoId) },
+                ...(product.originalPhotoId ? [{ label: 'Original', url: api.photoUrl(product.originalPhotoId) }] : []),
+              ]}
+              onClose={() => setViewingAi(false)}
+            />
+          )}
           {summary && rawReason && (
             <button
               type="button"
@@ -516,7 +550,7 @@ const ProblemRow: React.FC<{
           )}
           {/* Before a full reshoot: say what went wrong and have it redone,
               or use the real photo cut out. */}
-          {canManage && product.status === 'needs_reshoot' && !fixing && (
+          {product.status === 'needs_reshoot' && !fixing && (
             <button
               type="button"
               onClick={() => setFixing(true)}
@@ -545,8 +579,7 @@ const ProblemRow: React.FC<{
               <RefreshCw className={`w-4 h-4 ${busy ? 'animate-spin' : ''}`} /> Retry
             </button>
           )}
-          {canManage && (
-            <button
+          <button
               type="button"
               onClick={onDelete}
               disabled={busy}
@@ -555,8 +588,7 @@ const ProblemRow: React.FC<{
               className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg border border-stone-300 px-3 py-2 text-stone-500 hover:bg-red-50 hover:text-red-700 disabled:opacity-60"
             >
               <Trash2 className="w-4 h-4" />
-            </button>
-          )}
+          </button>
         </div>
       </div>
       {fixing && (

@@ -354,7 +354,8 @@ export function describeItemType(itemType: string | undefined): { line: string; 
   // black-bead rule rides along with any name that carries the word.
   const name = normalize(raw);
   const blackBeads = category?.type !== 'Mangalsutra' && hasPoteWord(name) ? BLACK_BEAD_NOTE : null;
-  const style = STYLE_NOTES.filter(({ words }) => words.some((w) => new RegExp(`(^| )${normalize(w)}( |$)`).test(name))).map((s) => s.note);
+  const pieces = setPieces(raw);
+  const style = [...(pieces ? [SET_NOTE] : []), ...STYLE_NOTES.filter(({ words }) => words.some((w) => new RegExp(`(^| )${normalize(w)}( |$)`).test(name))).map((s) => s.note)];
   if (!category) {
     const notes = [blackBeads, ...style].filter(Boolean).join(' ');
     return { line: raw ? `"${raw}" (the store's own style name)` : 'jewellery', notes: notes || null };
@@ -362,6 +363,22 @@ export function describeItemType(itemType: string | undefined): { line: string; 
   const line = name === normalize(category.type) ? category.type : `${category.type} (store tag name: "${raw}")`;
   const notes = [category.modelNotes, blackBeads, ...style].filter(Boolean).join(' ');
   return { line, notes: notes || null };
+}
+
+const SET_NOTE = 'This is a SET: the necklace together with a matching pair of earrings - three pieces in all. The photo shows all three and the result must show all three (the necklace AND BOTH earrings), each with its own details; none may be left out. Judge each piece on its own: never copy colours, enamel or stones from one piece onto another. The earrings may or may not carry the colour the necklace has, so each piece gets only the colours it has in the original.';
+
+/**
+ * How many separate pieces a name promises: 3 for a "set" of necklace and
+ * earrings ("FANCY HAR SET", "LONG SET", "PENDANT SET"), otherwise null. "Set"
+ * on the POS means a pair of earrings comes with the necklace.
+ */
+export function setPieces(itemType: string | undefined): number | null {
+  const name = normalize(itemType ?? '');
+  if (!/(^| )(set|harset|haarset)( |$)|(^| )(harset|haarset)( |$)/.test(name)) return null;
+  const category = resolveCategory(itemType ?? '');
+  // Sets with their own meaning keep it: a vati set is cups and beads, a bridal or temple set is a bigger suite.
+  if (!category) return null;
+  return ['Haar', 'Necklace', 'Choker', 'Mala', 'Mangalsutra', 'Pendant Set', 'Chain'].includes(category.type) ? 3 : null;
 }
 
 /** "pote" / "pbb" / "pot" (unless it is a vessel) in a normalized name. */

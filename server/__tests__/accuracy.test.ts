@@ -339,7 +339,55 @@ describe('daily summary', () => {
     expect(text).toMatch(/Waiting for approval: 3 \(oldest 5h\)/);
     expect(text).toMatch(/Asha: 12 shot, 7 approved, 2 sent back, 1 need another photo/);
     expect(text).toMatch(/photo is blurry \(3\)/);
-    expect(text).toMatch(/\$1\.23/);
+    expect(text).not.toMatch(/cost|\$/i);
     expect(text).not.toMatch(/Processing errors/);
+  });
+});
+
+
+import { setPieces } from '../catalog/taxonomy';
+
+describe('sets: a necklace with its earrings', () => {
+  it('knows which names promise three pieces', () => {
+    expect(setPieces('FANCY HAR SET')).toBe(3);
+    expect(setPieces('SET LONG')).toBe(3);
+    expect(setPieces('Rani Haar')).toBeNull();
+    expect(setPieces('Vati Set')).toBeNull();
+    expect(setPieces('Bangle')).toBeNull();
+  });
+
+  it('tells the AI to keep all three and not to move colour between pieces', () => {
+    const notes = describeItemType('FANCY HAR SET').notes ?? '';
+    expect(notes).toMatch(/BOTH earrings/);
+    expect(notes).toMatch(/never copy colours/i);
+    expect(describeItemType('Rani Haar').notes ?? '').not.toMatch(/SET:/);
+  });
+
+  it('asks for the earrings when the photo of a set shows only the necklace', () => {
+    const one = parseIdentity({ family: 'neckpiece', description: 'necklace', pieceCount: 1, confidence: 'high' });
+    const v = compareIdentity('FANCY HAR SET', one);
+    expect(v.status).toBe('mismatch');
+    expect(v.message).toMatch(/earrings/);
+    const three = parseIdentity({ family: 'neckpiece', description: 'necklace and earrings', pieceCount: 3, confidence: 'high' });
+    expect(compareIdentity('FANCY HAR SET', three).status).toBe('match');
+  });
+
+  it('tells the checker about flat chains and colour on the wrong piece', () => {
+    const prompt = buildAuditPrompt({ itemType: 'FANCY HAR SET', purity: '22kt' });
+    expect(prompt).toMatch(/flat hand-made chain is one chain/);
+    expect(prompt).toMatch(/plain in IMAGE 1/);
+    expect(buildNaturalArrangementBlock()).toMatch(/ONE chain/);
+  });
+});
+
+import { FIDELITY_RETRYABLE } from '../ai/operations';
+
+describe('corrective retry', () => {
+  it('is for count and design failures, never for a bad source photo', () => {
+    expect(FIDELITY_RETRYABLE).toContain('beadDetailPreserved');
+    expect(FIDELITY_RETRYABLE).toContain('chainPatternMatches');
+    expect(FIDELITY_RETRYABLE).not.toContain('sharpFocus');
+    expect(FIDELITY_RETRYABLE).not.toContain('notCropped');
+    expect(FIDELITY_RETRYABLE).not.toContain('clearlyIdentifiableCategory');
   });
 });

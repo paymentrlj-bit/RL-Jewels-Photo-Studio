@@ -35,6 +35,7 @@ import {
   buildAuditFactsBlock,
   buildSegmentationBlock,
   classifyAuditFailure,
+  FIDELITY_RETRYABLE,
   type EnhanceResult,
   type AuditResult,
   type AuditCheck,
@@ -537,6 +538,7 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
     const cutOut = await buildFaithfulImage({
       image: originalBuffer,
       polygon: outline.polygon,
+      extraPolygons: outline.others?.map((o) => o.polygon),
       box: outline.boxTwoD,
       exclusions: outline.exclusions,
       aspectRatio,
@@ -610,7 +612,18 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
   // Every route to "reshoot" goes through here, so faithful mode gets its
   // chance first. A blurred or cropped original is the one thing a cut-out
   // cannot help with - it would be just as blurred or cropped.
+  // The latest AI version, kept if it fails its check so the reviewer can see
+  // it next to the real-photo fallback instead of never knowing what it was.
+  let lastRender: EnhanceResult | null = null;
+
   const reshootOrFaithful = async (reason: string, checklist: AuditResult['checklist'] | null, attempts: number, extra: Record<string, unknown> = {}) => {
+    if (lastRender) {
+      try {
+        saveImage({ productId: product.id, kind: 'airender', data: lastRender.imageBase64, mimeType: lastRender.mimeType, source: 'upload' });
+      } catch (err) {
+        logEvent('pipeline.airender_save_failed', { requestId, productId: product.id, errorMessage: debugDetail(err) });
+      }
+    }
     const sourcePhotoProblem = checklist ? checklist.sharpFocus === false || checklist.notCropped === false : false;
     if (!sourcePhotoProblem && (await tryFaithful({ reason, attemptCount: attempts, trigger: 'audit_failed' }))) return;
     finish('needs_reshoot', { reason, checklist, attemptCount: attempts });
@@ -799,6 +812,7 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
   // The image model often leaves a pale grey backdrop and the audit lets it
   // through; make it exactly white before anyone (or the audit) looks.
   enhanced = await whiten(enhanced);
+  lastRender = enhanced;
 
   setJobStage(job.id, 'auditing');
   let audit = await runAudit('audit', enhanced.imageBase64, enhanced.mimeType);
@@ -841,7 +855,12 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
 
     const decision = classifyAuditFailure(audit.checklist);
 
-    if (!decision.escalate) {
+    // A failed count is not a capability problem, but it is fixable by telling
+    // the next attempt the exact numbers the inspector found: one corrective
+    // retry for those, none for a bad source photo.
+    const fidelityOnly = !decision.escalate && decision.failedUnfixable.every((c) => FIDELITY_RETRYABLE.includes(c));
+
+    if (!decision.escalate && !fidelityOnly) {
       logEvent('pipeline.escalation_skipped', {
         requestId,
         reason: audit.reason,
@@ -855,14 +874,18 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
     const correctivePrompt = `${buildEnhancePrompt(enhanceRefs)}
 
 IMPORTANT: A previous attempt at this edit failed quality review for this specific reason:
-"${audit.reason}"
+"${audit.reason}"${audit.originalCounts ? `
+The inspector counted the ORIGINAL photo as: ${audit.originalCounts}
+The rejected attempt came out as: ${audit.enhancedCounts}
+Reproduce the original's counts EXACTLY, element by element - do not add, remove, simplify or "balance" anything, and keep every chain exactly as wide and as many as in the original. If unsure, copy what the original shows.` : ''}
 Correct this specific issue while still following every rule above.`;
 
     escalatedFlag = true;
     logEvent('pipeline.escalated', {
       requestId,
       reason: audit.reason,
-      failedChecks: decision.failedFixable,
+      failedChecks: decision.escalate ? decision.failedFixable : decision.failedUnfixable,
+      fidelityRetry: fidelityOnly,
       fromModel: MODEL_ENHANCE_DEFAULT,
       toModel: MODEL_ENHANCE_ESCALATED,
     });
@@ -874,6 +897,7 @@ Correct this specific issue while still following every rule above.`;
 
       if (retryEnhanced) {
         retryEnhanced = await whiten(retryEnhanced);
+        lastRender = retryEnhanced;
         setJobStage(job.id, 'auditing');
         // Stronger grader for the re-audit: this is the last gate before a
         // photo ships, and both passes have already been paid for.
