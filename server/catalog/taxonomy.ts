@@ -165,7 +165,7 @@ export const CATEGORIES: Category[] = [
       // HC: the haar chain that goes at the back of haars and rani haars.
       'hc', 'haar chain',
     ],
-    modelNotes: 'The link style defines the chain - flat hand-made links, box, rope, curb, ball chain and so on are different products. Reproduce exactly the link style shown; never substitute a different one, and never change a flat link into a round one.',
+    modelNotes: 'The link style defines the chain - flat hand-made links, box, rope, curb, ball chain and so on are different products. Reproduce exactly the link style shown; never substitute a different one, and never change a flat link into a round one. Chains here close with an S hook: keep it, and show the whole chain end to end.',
   },
   {
     // "Kayamat" is a long chain attachment worn with tops - an earring, not a
@@ -215,6 +215,7 @@ export const CATEGORIES: Category[] = [
     // of bracelet" - given its own Drive department rather than folded into
     // Bangles Category.
     type: 'Bracelet',    defaultGender: 'unisex',  aspectRatio: '3:4', genderVaries: true, group: 'Bracelet Category', synonyms: ['brasslet', 'braclet', 'bracelate', 'charm bracelet'],
+    modelNotes: 'Almost every bracelet here closes with an S hook (a small S-shaped wire hook) at one end: keep it, visible and the same size, and never swap it for another clasp. Show the whole bracelet end to end.',
   },
   {
     // "Kansakhali" is the store's own trade name for this (owner's

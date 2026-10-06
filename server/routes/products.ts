@@ -45,7 +45,7 @@ import { indexProduct } from '../similarity';
 import { whitenBackground } from '../imaging/background';
 import { cleanPrice } from '../sharing/caption';
 import { cleanTags, cleanStaffNote, recordTagsPicked, recordTagsApproved } from '../catalog/tags';
-import { isFixCode, cleanNote, USE_REAL_PHOTO } from '../catalog/fixes';
+import { isFixCode, isReshootReason, fixOption, RESHOOT_ONLY_REASONS, cleanNote, USE_REAL_PHOTO } from '../catalog/fixes';
 import { recordFixRequest } from '../db/fixRequests';
 import { matchesFilter, categoryOptions, parseWeightParam } from '../catalog/filters';
 import { cleanReasonCode, cleanReasonNote } from '../catalog/deletionReasons';
@@ -520,12 +520,18 @@ productsRouter.post('/products/:id/reject', (req: AuthenticatedRequest, res) => 
     return;
   }
 
-  const note = String(req.body?.note || '').trim();
+  // What was wrong: tapped reasons (the same problems as Fix, plus "my photo was bad")
+  // and/or a few words. Both are kept - the counts show which problems keep coming back.
+  const typed = cleanNote(req.body?.note);
+  const rawReasons: unknown[] = Array.isArray(req.body?.reasons) ? req.body.reasons : [];
+  const reasons: string[] = [...new Set(rawReasons.map(String).filter(isReshootReason))];
+  const labels = reasons.map((c) => fixOption(c)?.label ?? RESHOOT_ONLY_REASONS.find((r) => r.code === c)?.label).filter(Boolean) as string[];
+  const note = typed || labels.join(', ');
   const wasApproved = product.status === 'approved' || product.status === 'exported';
   setProductStatus(product.id, 'needs_reshoot', { reviewNote: note });
   // The reason is design memory for the next piece of this style.
-  recordFixRequest({ productId: product.id, itemType: product.itemType, issues: [], note, source: 'reject', createdBy: req.user?.id });
-  logEvent('product.rejected', { productId: product.id, cpc: product.cpc, note, wasApproved, previousStatus: product.status }, actorFrom(req.user));
+  recordFixRequest({ productId: product.id, itemType: product.itemType, issues: reasons.filter(isFixCode), note: typed, source: 'reject', createdBy: req.user?.id });
+  logEvent('product.rejected', { productId: product.id, cpc: product.cpc, note, reasons, wasApproved, previousStatus: product.status, itemType: product.itemType || null }, actorFrom(req.user));
   res.json({ product: decorate(product.id) });
 });
 
