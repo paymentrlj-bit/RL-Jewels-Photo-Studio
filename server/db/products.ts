@@ -74,6 +74,9 @@ export interface Product {
   archivedBy: string | null;
   /** The status it had when it was deleted. */
   archivedStatus: string;
+  /** Why staff said they deleted it (catalog/deletionReasons.ts code), or ''. */
+  archivedReason: string;
+  archivedNote: string;
 }
 
 interface ProductRow {
@@ -117,6 +120,8 @@ interface ProductRow {
   archived_at: string | null;
   archived_by: string | null;
   archived_status: string;
+  archived_reason: string;
+  archived_note: string;
 }
 
 function parseStringArray(json: string | null): string[] {
@@ -178,6 +183,8 @@ function toProduct(row: ProductRow): Product {
     archivedAt: row.archived_at ?? null,
     archivedBy: row.archived_by ?? null,
     archivedStatus: row.archived_status ?? '',
+    archivedReason: row.archived_reason ?? '',
+    archivedNote: row.archived_note ?? '',
   };
 }
 
@@ -252,6 +259,8 @@ export function createProduct(input: { createdBy: string; batchId?: string | nul
     archived_at: null,
     archived_by: null,
     archived_status: '',
+    archived_reason: '',
+    archived_note: '',
   };
 
   getDb()
@@ -557,12 +566,12 @@ export function deleteProduct(id: string): void {
  * cancelled so a deleted photo is never processed (and never paid for).
  * Returns false when it was already archived or does not exist.
  */
-export function archiveProduct(id: string, by: string): boolean {
+export function archiveProduct(id: string, by: string, why: { reason?: string; note?: string } = {}): boolean {
   const db = getDb();
   const at = nowIso();
   const res = db
-    .prepare(`UPDATE products SET archived_at = ?, archived_by = ?, archived_status = status, updated_at = ? WHERE id = ? AND archived_at IS NULL`)
-    .run(at, by, at, id);
+    .prepare(`UPDATE products SET archived_at = ?, archived_by = ?, archived_status = status, archived_reason = ?, archived_note = ?, updated_at = ? WHERE id = ? AND archived_at IS NULL`)
+    .run(at, by, why.reason ?? '', why.note ?? '', at, id);
   if (res.changes === 0) return false;
   db.prepare(`UPDATE jobs SET status = 'failed', last_error = 'Deleted before it was processed.', finished_at = ? WHERE product_id = ? AND status = 'queued'`).run(at, id);
   return true;
@@ -571,7 +580,7 @@ export function archiveProduct(id: string, by: string): boolean {
 /** Brings an archived product back exactly as it was. */
 export function restoreProduct(id: string): boolean {
   const res = getDb()
-    .prepare(`UPDATE products SET archived_at = NULL, archived_by = NULL, archived_status = '', updated_at = ? WHERE id = ? AND archived_at IS NOT NULL`)
+    .prepare(`UPDATE products SET archived_at = NULL, archived_by = NULL, archived_status = '', archived_reason = '', archived_note = '', updated_at = ? WHERE id = ? AND archived_at IS NOT NULL`)
     .run(nowIso(), id);
   return res.changes > 0;
 }

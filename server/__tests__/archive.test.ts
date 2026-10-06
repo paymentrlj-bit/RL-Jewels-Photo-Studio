@@ -94,9 +94,46 @@ describe('delete is an archive', () => {
 });
 
 describe('the admin Archive', () => {
-  it('is for admins only', async () => {
+  it('is for managers and admins, not photographers, and only an admin can erase', async () => {
+    const photog = await loginAs('photog', 'photographer');
     const mgr = await loginAs('mgr', 'manager');
-    expect((await request(app).get('/api/admin/archive').set('Cookie', mgr)).status).toBe(403);
+    const admin = await loginAs('boss', 'admin');
+    const id = await shoot(photog);
+    await request(app).delete(`/api/products/${id}`).set('Cookie', photog);
+
+    expect((await request(app).get('/api/archive').set('Cookie', photog)).status).toBe(403);
+    expect((await request(app).post(`/api/archive/${id}/restore`).set('Cookie', photog)).status).toBe(403);
+    expect((await request(app).get('/api/archive').set('Cookie', mgr)).status).toBe(200);
+    expect((await request(app).delete(`/api/archive/${id}`).set('Cookie', mgr)).status).toBe(403);
+    expect((await request(app).delete(`/api/archive/${id}`).set('Cookie', admin)).status).toBe(200);
+  });
+
+  it('keeps the reason staff gave, and shows it with a summary', async () => {
+    const staff = await loginAs('photog', 'photographer');
+    const mgr = await loginAs('mgr', 'manager');
+    const a = await shoot(staff);
+    const b = await shoot(staff);
+    const c = await shoot(staff);
+    await request(app).delete(`/api/products/${a}`).set('Cookie', staff).send({ reason: 'ai_not_true' });
+    await request(app).delete(`/api/products/${b}`).set('Cookie', staff).send({ reason: 'other', note: '  chain  looked   wrong  ' });
+    await request(app).delete(`/api/products/${c}`).set('Cookie', staff).send({ reason: 'made-up' });
+
+    const res = await request(app).get('/api/archive').set('Cookie', mgr);
+    const byId = Object.fromEntries(res.body.items.map((i: { id: string }) => [i.id, i]));
+    expect(byId[a]).toMatchObject({ reason: 'AI picture not true to the piece', reasonCode: 'ai_not_true', reasonNote: '' });
+    expect(byId[b]).toMatchObject({ reason: 'Other', reasonNote: 'chain looked wrong' });
+    // A code the app does not know is not stored as if it were one.
+    expect(byId[c]).toMatchObject({ reason: 'No reason given', reasonCode: '' });
+    expect(res.body.summary.byReason).toEqual(expect.arrayContaining([{ name: 'AI picture not true to the piece', count: 1 }, { name: 'Other', count: 1 }]));
+  });
+
+  it('gives bulk deletes one reason for all of them', async () => {
+    const staff = await loginAs('mgr', 'manager');
+    const x = await shoot(staff);
+    const y = await shoot(staff);
+    await request(app).post('/api/products/bulk-delete').set('Cookie', staff).send({ ids: [x, y], reason: 'test' });
+    const res = await request(app).get('/api/archive').set('Cookie', staff);
+    expect(res.body.items.map((i: { reasonCode: string }) => i.reasonCode)).toEqual(['test', 'test']);
   });
 
   it('shows what was deleted, who shot it, what the AI flagged, and a summary', async () => {
@@ -107,7 +144,7 @@ describe('the admin Archive', () => {
       .run(JSON.stringify({ chainPatternMatches: false, sharpFocus: true }), id);
     await request(app).delete(`/api/products/${id}`).set('Cookie', staff);
 
-    const res = await request(app).get('/api/admin/archive').set('Cookie', admin);
+    const res = await request(app).get('/api/archive').set('Cookie', admin);
     expect(res.status).toBe(200);
     expect(res.body.items).toHaveLength(1);
     const item = res.body.items[0];
@@ -123,22 +160,22 @@ describe('the admin Archive', () => {
     const admin = await loginAs('boss', 'admin');
     const id = await shoot(staff);
     await request(app).delete(`/api/products/${id}`).set('Cookie', staff);
-    expect((await request(app).post(`/api/admin/archive/${id}/restore`).set('Cookie', admin)).status).toBe(200);
+    expect((await request(app).post(`/api/archive/${id}/restore`).set('Cookie', admin)).status).toBe(200);
     expect((await request(app).get(`/api/products/${id}`).set('Cookie', staff)).status).toBe(200);
-    expect((await request(app).get('/api/admin/archive').set('Cookie', admin)).body.items).toHaveLength(0);
+    expect((await request(app).get('/api/archive').set('Cookie', admin)).body.items).toHaveLength(0);
   });
 
   it('erases only archived products, files included', async () => {
     const staff = await loginAs('photog', 'photographer');
     const admin = await loginAs('boss', 'admin');
     const live = await shoot(staff);
-    expect((await request(app).delete(`/api/admin/archive/${live}`).set('Cookie', admin)).status).toBe(404);
+    expect((await request(app).delete(`/api/archive/${live}`).set('Cookie', admin)).status).toBe(404);
     expect(getProduct(live)).not.toBeNull();
 
     await request(app).delete(`/api/products/${live}`).set('Cookie', staff);
     const photo = getLatestPhoto(live, 'original')!;
     expect(imageExists(photo)).toBe(true);
-    expect((await request(app).delete(`/api/admin/archive/${live}`).set('Cookie', admin)).status).toBe(200);
+    expect((await request(app).delete(`/api/archive/${live}`).set('Cookie', admin)).status).toBe(200);
     expect(getDb().prepare('SELECT id FROM products WHERE id = ?').get(live)).toBeUndefined();
     expect(imageExists(photo)).toBe(false);
   });

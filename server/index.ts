@@ -33,6 +33,7 @@ import { productsRouter } from './routes/products';
 import { catalogRouter } from './routes/catalog';
 import { exportRouter } from './routes/exports';
 import { adminRouter, clientRouter } from './routes/admin';
+import { archiveRouter } from './routes/archive';
 import { publicRouter } from './routes/publicFeed';
 import { similarRouter } from './routes/similar';
 import { startSimilarityBackfill } from './similarity';
@@ -87,6 +88,7 @@ export function createApp(): express.Express {
   app.use('/api', similarRouter);
   app.use('/api', exportRouter);
   app.use('/api', clientRouter);
+  app.use('/api', archiveRouter);
   app.use('/api/admin', adminRouter);
 
   // Any unmatched /api path is a 404 in JSON, not the SPA's index.html, so a
