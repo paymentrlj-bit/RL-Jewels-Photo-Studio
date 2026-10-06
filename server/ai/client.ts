@@ -5,7 +5,7 @@
 // failure data, and the comment explaining why is the only thing stopping
 // someone from "fixing" them back to the wrong value.
 
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import { config } from '../config';
 
 let genAIClient: GoogleGenAI | null = null;
@@ -49,6 +49,9 @@ export const MODEL_COPY = 'gemini-3.1-pro-preview';
 // spent, so the accuracy checks never run dry. A per-day counter is kept in
 // memory; if a restart loses it, the 429 fallbacks below still catch the limit.
 // ---------------------------------------------------------------------------
+/** Pieces whose form-only risk score is at least this get the Pro grader on the first audit; simpler ones the cheap grader. */
+export const AUDIT_PRO_MIN_RISK = Number(process.env.AUDIT_PRO_MIN_RISK) || 30;
+
 export const PRO_DAILY_BUDGET = Number(process.env.PRO_DAILY_BUDGET) || 200;
 
 /** The quota day runs on Pacific time (it resets at midnight there). */
@@ -234,21 +237,90 @@ export function isTransientError(err: unknown): boolean {
 export interface TokenUsage {
   promptTokens: number;
   candidatesTokens: number;
+  /** Hidden "thinking" tokens. Billed as output, and on the Pro model usually the biggest part of a call's cost. */
+  thoughtsTokens: number;
   totalTokens: number;
 }
 
 export function extractUsage(response: {
-  usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number };
+  usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; thoughtsTokenCount?: number; totalTokenCount?: number };
 }): TokenUsage | null {
   const u = response?.usageMetadata;
   if (!u) return null;
   const promptTokens = u.promptTokenCount ?? 0;
   const candidatesTokens = u.candidatesTokenCount ?? 0;
+  const thoughtsTokens = u.thoughtsTokenCount ?? 0;
   return {
     promptTokens,
     candidatesTokens,
-    totalTokens: u.totalTokenCount ?? promptTokens + candidatesTokens,
+    thoughtsTokens,
+    totalTokens: u.totalTokenCount ?? promptTokens + candidatesTokens + thoughtsTokens,
   };
+}
+
+// ---------------------------------------------------------------------------
+// What a call actually costs, from the token counts Google reports.
+//
+// USD per million tokens, from Google's published list prices as best known -
+// an ESTIMATE, to be checked against the Cloud Billing page and overridden with
+// GEMINI_PRICES_JSON ({"model": {"in": 2, "out": 12}}) if Google changes them.
+// Thinking tokens are billed at the output rate. Image models' output is mostly
+// image tokens, billed at a much higher rate than text.
+// ---------------------------------------------------------------------------
+const PRICES_PER_M: Record<string, { in: number; out: number }> = {
+  'gemini-3.1-pro-preview': { in: 2, out: 12 },
+  'gemini-3.1-flash-lite': { in: 0.25, out: 1.5 },
+  'gemini-3.1-flash-image': { in: 0.5, out: 60 },
+  'nano-banana-pro-preview': { in: 2, out: 120 },
+  'gemini-robotics-er-2-preview': { in: 0.3, out: 2.5 },
+};
+try {
+  if (process.env.GEMINI_PRICES_JSON) Object.assign(PRICES_PER_M, JSON.parse(process.env.GEMINI_PRICES_JSON));
+} catch {
+  console.warn('[ai] GEMINI_PRICES_JSON is not valid JSON - using the built-in prices.');
+}
+
+/** Estimated USD for one call, or null for a model with no known price. */
+export function estimateCostUsd(model: string, usage: TokenUsage): number | null {
+  const p = PRICES_PER_M[model];
+  if (!p) return null;
+  return (usage.promptTokens * p.in + (usage.candidatesTokens + usage.thoughtsTokens) * p.out) / 1_000_000;
+}
+
+// ---------------------------------------------------------------------------
+// Thinking. The Pro model "thinks" before answering and bills those hidden
+// tokens as output; for checks like counting beads or naming the product type
+// a little thinking is plenty. Defaults to LOW for the Pro model; THINKING_LEVEL
+// = low | medium | high | default overrides it. If the API ever refuses the
+// setting, the call is retried without it and the setting is dropped for the
+// rest of the process, so the pipeline never breaks over it.
+// ---------------------------------------------------------------------------
+const THINKING_ENV = (process.env.THINKING_LEVEL || 'low').trim().toLowerCase();
+let thinkingRefused = false;
+
+function thinkingConfigFor(model: string): Record<string, unknown> {
+  if (thinkingRefused || THINKING_ENV === 'default' || model !== MODEL_AUDIT_STRONG) return {};
+  const level = { minimal: ThinkingLevel.MINIMAL, low: ThinkingLevel.LOW, medium: ThinkingLevel.MEDIUM, high: ThinkingLevel.HIGH }[THINKING_ENV];
+  return level ? { thinkingConfig: { thinkingLevel: level } } : {};
+}
+
+/** generateContent with the thinking limit applied, and retried plain if the API objects to it. */
+export async function generateWithThinkingLimit(
+  ai: GoogleGenAI,
+  params: { model: string; contents: unknown; config?: Record<string, unknown> }
+): Promise<Awaited<ReturnType<GoogleGenAI['models']['generateContent']>>> {
+  const thinking = thinkingConfigFor(params.model);
+  try {
+    return await ai.models.generateContent({ ...params, config: { ...params.config, ...thinking } } as never);
+  } catch (err) {
+    const msg = String((err as { message?: string })?.message || err);
+    if (Object.keys(thinking).length > 0 && /thinking|INVALID_ARGUMENT|"code":\s*400/i.test(msg) && !/quota|429/i.test(msg)) {
+      thinkingRefused = true;
+      console.warn('[ai] the API refused the thinking setting; continuing without it:', msg.slice(0, 200));
+      return ai.models.generateContent(params as never);
+    }
+    throw err;
+  }
 }
 
 export interface RetryAttemptInfo {
