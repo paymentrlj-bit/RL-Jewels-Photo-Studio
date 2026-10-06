@@ -169,7 +169,7 @@ export default function App() {
     { key: 'review', label: 'Review', icon: ClipboardCheck, badge: awaitingCount + problemCount },
     { key: 'export', label: 'Export', icon: PackageOpen, managerOnly: true },
     { key: 'share', label: 'Share', icon: Share2, managerOnly: true },
-    { key: 'archive', label: 'Archive', icon: Archive, adminOnly: true },
+    { key: 'archive', label: 'Archive', icon: Archive, managerOnly: true },
     { key: 'admin', label: 'Admin', icon: Settings, adminOnly: true },
   ];
 
@@ -291,7 +291,7 @@ export default function App() {
         )}
         {tab === 'review' && <ReviewView products={products} onChanged={refresh} role={user.role} />}
         {tab === 'share' && canManage && <ShareView />}
-        {tab === 'archive' && user.isAdmin && <ArchiveView />}
+        {tab === 'archive' && canManage && <ArchiveView isAdmin={user.isAdmin} />}
         {tab === 'export' && canManage && <ExportView driveConfigured={features?.driveExport ?? false} />}
         {tab === 'admin' && user.isAdmin && <AdminView />}
       </main>

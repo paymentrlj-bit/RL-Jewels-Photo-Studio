@@ -12,6 +12,7 @@ import {
 import { api, ApiError } from '../api';
 import { AngleCaptureButton } from '../components/AngleCaptureButton';
 import { FixPanel } from '../components/FixPanel';
+import { DeleteReasonDialog } from '../components/DeleteReasonDialog';
 import { PhotoViewer, type ViewerPhoto } from '../components/PhotoViewer';
 import { SimilarPieces } from '../components/SimilarList';
 import type { Product, Role } from '../types';
@@ -30,6 +31,8 @@ export const ReviewView: React.FC<ReviewViewProps> = ({ products, onChanged, rol
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [clearingAll, setClearingAll] = useState(false);
+  // Which products the reason dialog is open for (one, or everything pending).
+  const [deleting, setDeleting] = useState<string[] | null>(null);
 
   const act = useCallback(async (id: string, action: () => Promise<unknown>) => {
     setBusyId(id);
@@ -52,30 +55,39 @@ export const ReviewView: React.FC<ReviewViewProps> = ({ products, onChanged, rol
   const approved = products.filter((p) => p.status === 'approved' || p.status === 'exported');
   const pendingIds = useMemo(() => [...awaiting, ...problems].map((p) => p.id), [awaiting, problems]);
 
-  const deleteOne = useCallback(async (id: string) => {
-    if (!window.confirm('Delete this photo and its details for good? This cannot be undone.')) return;
-    await act(id, () => api.deleteProduct(id));
-  }, [act]);
+  const deleteOne = useCallback((id: string) => setDeleting([id]), []);
+  const clearAllPending = useCallback(() => {
+    if (pendingIds.length > 0) setDeleting(pendingIds);
+  }, [pendingIds]);
 
-  const clearAllPending = useCallback(async () => {
-    if (pendingIds.length === 0) return;
-    if (!window.confirm(
-      `Delete all ${pendingIds.length} pending item${pendingIds.length === 1 ? '' : 's'} on this screen for good? This cannot be undone.`
-    )) return;
+  const confirmDelete = useCallback(async (reason: string, note: string) => {
+    const ids = deleting;
+    if (!ids) return;
     setClearingAll(true);
     setError(null);
     try {
-      await api.bulkDeleteProducts(pendingIds);
+      if (ids.length === 1) await api.deleteProduct(ids[0], { reason, note });
+      else await api.bulkDeleteProducts(ids, { reason, note });
+      setDeleting(null);
       onChanged();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Could not clear everything.');
+      setError(err instanceof ApiError ? err.message : 'Could not delete.');
+      setDeleting(null);
     } finally {
       setClearingAll(false);
     }
-  }, [pendingIds, onChanged]);
+  }, [deleting, onChanged]);
 
   return (
     <div className="space-y-8">
+      {deleting && (
+        <DeleteReasonDialog
+          what={deleting.length === 1 ? 'this photo and its details' : `all ${deleting.length} pending items on this screen`}
+          busy={clearingAll}
+          onCancel={() => setDeleting(null)}
+          onConfirm={(reason, note) => void confirmDelete(reason, note)}
+        />
+      )}
       {error && (
         <div className="flex items-start gap-2 rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-red-800 text-sm">
           <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" /><span>{error}</span>
@@ -88,7 +100,7 @@ export const ReviewView: React.FC<ReviewViewProps> = ({ products, onChanged, rol
         <div className="flex justify-end">
           <button
             type="button"
-            onClick={() => void clearAllPending()}
+            onClick={clearAllPending}
             disabled={clearingAll}
             className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-red-200 px-3 py-2 text-sm text-red-700 hover:bg-red-50 disabled:opacity-60"
           >
@@ -115,7 +127,7 @@ export const ReviewView: React.FC<ReviewViewProps> = ({ products, onChanged, rol
                 canManage={canManage}
                 onApprove={() => act(product.id, () => api.approve(product.id))}
                 onReject={(note) => act(product.id, () => api.reject(product.id, note))}
-                onDelete={() => void deleteOne(product.id)}
+                onDelete={() => deleteOne(product.id)}
                 onChanged={onChanged}
                 onError={setError}
               />

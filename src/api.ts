@@ -82,9 +82,10 @@ export const api = {
   createProduct: (fields: Record<string, unknown>) => post<{ product: Product }>('/products', fields),
   updateProduct: (id: string, fields: Record<string, unknown>) =>
     request<{ product: Product }>(`/products/${id}`, { method: 'PATCH', body: JSON.stringify(fields) }),
-  deleteProduct: (id: string) => request<{ success: boolean }>(`/products/${id}`, { method: 'DELETE' }),
-  bulkDeleteProducts: (ids: string[]) =>
-    post<{ success: boolean; deleted: number; skipped: string[] }>('/products/bulk-delete', { ids }),
+  deleteProduct: (id: string, why: { reason: string; note?: string }) =>
+    request<{ success: boolean }>(`/products/${id}`, { method: 'DELETE', body: JSON.stringify(why) }),
+  bulkDeleteProducts: (ids: string[], why: { reason: string; note?: string }) =>
+    post<{ success: boolean; deleted: number; skipped: string[] }>('/products/bulk-delete', { ids, ...why }),
 
   attachPhoto: (id: string, imageBase64: string, source: string) =>
     post<{ product: Product; photoId: string; jobId: string }>(`/products/${id}/photo`, { imageBase64, source }),
@@ -140,9 +141,9 @@ export const api = {
   resetPrompt: () => post<{ prompt: string; isCustom: boolean }>('/admin/prompt', { reset: true }),
   similarCheck: (imageBase64: string) => post<{ matches: SimilarMatch[] }>('/similar/check', { imageBase64 }),
   similarTo: (id: string) => request<{ basis: 'studio' | 'original'; matches: SimilarMatch[] }>(`/products/${id}/similar`),
-  archive: () => request<ArchiveData>('/admin/archive'),
-  restoreArchived: (id: string) => post<{ success: boolean }>(`/admin/archive/${id}/restore`, {}),
-  purgeArchived: (id: string) => request<{ success: boolean }>(`/admin/archive/${id}`, { method: 'DELETE' }),
+  archive: () => request<ArchiveData>('/archive'),
+  restoreArchived: (id: string) => post<{ success: boolean }>(`/archive/${id}/restore`, {}),
+  purgeArchived: (id: string) => request<{ success: boolean }>(`/archive/${id}`, { method: 'DELETE' }),
   duplicates: () => request<{ pairs: { score: number; tier: 'same' | 'similar'; a: SimilarMatch; b: SimilarMatch }[] }>('/admin/duplicates'),
   telegram: () => request<TelegramStatus>('/admin/telegram'),
   saveTelegram: (body: { token?: string; chatId?: string; hour?: number }) =>
@@ -256,6 +257,9 @@ export interface ArchiveItem {
   staffName: string;
   archivedAt: string | null;
   archivedByName: string | null;
+  reason: string;
+  reasonCode: string;
+  reasonNote: string;
   statusWhenDeleted: string;
   riskScore: number | null;
   riskTier: string;
@@ -273,6 +277,7 @@ export interface ArchiveData {
   items: ArchiveItem[];
   summary: {
     total: number;
+    byReason: { name: string; count: number }[];
     byCategory: { name: string; count: number }[];
     byStatus: { name: string; count: number }[];
     byPhotographer: { name: string; count: number }[];

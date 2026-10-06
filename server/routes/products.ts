@@ -48,6 +48,7 @@ import { cleanTags, cleanStaffNote, recordTagsPicked, recordTagsApproved } from 
 import { isFixCode, cleanNote, USE_REAL_PHOTO } from '../catalog/fixes';
 import { recordFixRequest } from '../db/fixRequests';
 import { matchesFilter, categoryOptions, parseWeightParam } from '../catalog/filters';
+import { cleanReasonCode, cleanReasonNote } from '../catalog/deletionReasons';
 
 export const productsRouter = express.Router();
 
@@ -320,8 +321,10 @@ productsRouter.delete('/products/:id', (req: AuthenticatedRequest, res) => {
   // "Delete" hides the product from staff but keeps it, with its photos and audit
   // data, in the admin Archive tab: a piece someone threw away is a piece whose
   // output was not good, which is what we learn from. Staff are told it is gone.
-  archiveProduct(product.id, req.user!.id);
-  logEvent('product.deleted', { productId: product.id, cpc: product.cpc, status: product.status, riskScore: product.riskScore, archived: true }, actorFrom(req.user));
+  const reason = cleanReasonCode(req.body?.reason);
+  const note = cleanReasonNote(req.body?.note);
+  archiveProduct(product.id, req.user!.id, { reason, note });
+  logEvent('product.deleted', { productId: product.id, cpc: product.cpc, status: product.status, riskScore: product.riskScore, archived: true, reason, note }, actorFrom(req.user));
   res.json({ success: true });
 });
 
@@ -338,6 +341,8 @@ productsRouter.post('/products/bulk-delete', (req: AuthenticatedRequest, res) =>
     return;
   }
 
+  const reason = cleanReasonCode(req.body?.reason);
+  const note = cleanReasonNote(req.body?.note);
   let deleted = 0;
   const skipped: string[] = [];
   for (const id of ids) {
@@ -347,11 +352,11 @@ productsRouter.post('/products/bulk-delete', (req: AuthenticatedRequest, res) =>
       skipped.push(id);
       continue;
     }
-    archiveProduct(product.id, req.user!.id);
+    archiveProduct(product.id, req.user!.id, { reason, note });
     deleted++;
   }
 
-  logEvent('product.bulk_deleted', { requested: ids.length, deleted, skipped: skipped.length }, actorFrom(req.user));
+  logEvent('product.bulk_deleted', { requested: ids.length, deleted, skipped: skipped.length, reason, note }, actorFrom(req.user));
   res.json({ success: true, deleted, skipped });
 });
 

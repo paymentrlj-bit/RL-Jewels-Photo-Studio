@@ -286,6 +286,15 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_products_archived ON products (archived_at);
     `,
   },
+  {
+    version: 9,
+    name: 'why a product was deleted',
+    up: `
+      -- A code from catalog/deletionReasons.ts, and an optional few words.
+      ALTER TABLE products ADD COLUMN archived_reason TEXT NOT NULL DEFAULT '';
+      ALTER TABLE products ADD COLUMN archived_note TEXT NOT NULL DEFAULT '';
+    `,
+  },
 ];
 
 export function runMigrations(db: BetterSqlite3.Database): void {

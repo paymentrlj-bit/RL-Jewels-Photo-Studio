@@ -22,9 +22,10 @@ const STATUS_LABEL: Record<string, string> = {
 const dateText = (iso: string | null) =>
   iso ? new Date(iso).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : '';
 
-export const ArchiveView: React.FC = () => {
+export const ArchiveView: React.FC<{ isAdmin: boolean }> = ({ isAdmin }) => {
   const [data, setData] = useState<ArchiveData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [reason, setReason] = useState('');
   const [category, setCategory] = useState('');
   const [photographer, setPhotographer] = useState('');
   const [failedCheck, setFailedCheck] = useState('');
@@ -48,12 +49,13 @@ export const ArchiveView: React.FC = () => {
     const q = search.trim().toLowerCase();
     return (data?.items ?? []).filter(
       (i) =>
+        (!reason || i.reason === reason) &&
         (!category || i.category === category) &&
         (!photographer || i.staffName === photographer) &&
         (!failedCheck || i.failedChecks.some((c) => c.label === failedCheck)) &&
         (!q || `${i.cpc} ${i.name} ${i.itemType}`.toLowerCase().includes(q))
     );
-  }, [data, category, photographer, failedCheck, search]);
+  }, [data, reason, category, photographer, failedCheck, search]);
 
   const openPhotos = (item: ArchiveItem) => {
     const photos: ViewerPhoto[] = [];
@@ -95,8 +97,8 @@ export const ArchiveView: React.FC = () => {
       <div className="rounded-2xl border border-stone-200 bg-white p-4">
         <p className="flex items-center gap-2 text-sm font-semibold text-stone-900"><Archive className="h-4 w-4" /> Archive - products staff deleted</p>
         <p className="mt-1 text-sm text-stone-600">
-          Staff see these as deleted. They are kept here, with their photos and the AI check results, because a piece that gets deleted is usually a piece whose picture was not good enough.
-          Nothing here appears in Review, Share or Export.
+          Staff see these as deleted. They are kept here, with their photos, the reason they gave and the AI check results, because a piece that gets deleted is usually a piece whose picture was not good enough.
+          Nothing here appears in Review, Share or Export. Keep this to yourselves - staff think deleted means gone.
         </p>
       </div>
 
@@ -106,6 +108,7 @@ export const ArchiveView: React.FC = () => {
       {summary && summary.total > 0 && (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <SummaryCard title="Deleted so far" big={`${summary.total}`} note={summary.estimatedCostInr > 0 ? `about ₹${summary.estimatedCostInr.toLocaleString('en-IN')} of AI spend` : undefined} />
+          <SummaryCard title="Why staff deleted them" rows={summary.byReason.slice(0, 5)} />
           <SummaryCard title="Most deleted categories" rows={summary.byCategory.slice(0, 4)} />
           <SummaryCard title="What the AI check flagged" rows={summary.byFailedCheck.slice(0, 4)} empty="Nothing flagged - they were deleted without a failed check." />
           <SummaryCard title="Deleted while" rows={summary.byStatus.slice(0, 4).map((r) => ({ ...r, name: STATUS_LABEL[r.name] ?? r.name }))} />
@@ -118,11 +121,12 @@ export const ArchiveView: React.FC = () => {
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
             <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="CPC or name" aria-label="Search the archive" className="min-h-[44px] w-full rounded-xl border border-stone-300 bg-white py-2 pl-10 pr-3 text-sm focus:border-amber-400 focus:ring-2 focus:ring-amber-400" />
           </div>
+          {select(reason, setReason, 'Reason', summary.byReason)}
           {select(category, setCategory, 'Category', summary.byCategory)}
           {select(photographer, setPhotographer, 'Shot by', summary.byPhotographer)}
           {select(failedCheck, setFailedCheck, 'AI flagged', summary.byFailedCheck)}
-          {(category || photographer || failedCheck || search) && (
-            <button type="button" onClick={() => { setCategory(''); setPhotographer(''); setFailedCheck(''); setSearch(''); }} className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl border border-stone-300 px-4 text-sm text-stone-700 hover:bg-stone-50">
+          {(reason || category || photographer || failedCheck || search) && (
+            <button type="button" onClick={() => { setReason(''); setCategory(''); setPhotographer(''); setFailedCheck(''); setSearch(''); }} className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl border border-stone-300 px-4 text-sm text-stone-700 hover:bg-stone-50">
               <X className="h-4 w-4" /> Clear
             </button>
           )}
@@ -137,7 +141,7 @@ export const ArchiveView: React.FC = () => {
       )}
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {items.map((item) => <ArchiveCard key={item.id} item={item} onOpen={() => openPhotos(item)} onRestore={() => void restore(item)} onPurge={() => void purge(item)} />)}
+        {items.map((item) => <ArchiveCard key={item.id} item={item} canErase={isAdmin} onOpen={() => openPhotos(item)} onRestore={() => void restore(item)} onPurge={() => void purge(item)} />)}
       </div>
 
       {viewer && <PhotoViewer photos={viewer.photos} onClose={() => setViewer(null)} />}
@@ -160,7 +164,7 @@ const SummaryCard: React.FC<{ title: string; big?: string; note?: string; rows?:
   </div>
 );
 
-const ArchiveCard: React.FC<{ item: ArchiveItem; onOpen: () => void; onRestore: () => void; onPurge: () => void }> = ({ item, onOpen, onRestore, onPurge }) => {
+const ArchiveCard: React.FC<{ item: ArchiveItem; canErase: boolean; onOpen: () => void; onRestore: () => void; onPurge: () => void }> = ({ item, canErase, onOpen, onRestore, onPurge }) => {
   const [confirming, setConfirming] = useState(false);
   const shown = [item.photos.original, item.photos.aiRender || item.photos.processed].filter((id): id is string => Boolean(id));
   return (
@@ -172,6 +176,10 @@ const ArchiveCard: React.FC<{ item: ArchiveItem; onOpen: () => void; onRestore: 
       )}
       <div className="flex-1 space-y-2 p-4 text-sm">
         <p className="font-semibold text-stone-900">{item.name || item.itemType || 'Untitled'}</p>
+        <p className="rounded-lg bg-amber-50 px-2.5 py-1.5 text-sm text-amber-900">
+          <span className="font-medium">{item.reason}</span>
+          {item.reasonNote ? <span className="text-amber-800"> - {item.reasonNote}</span> : null}
+        </p>
         <p className="text-xs text-stone-500">
           {item.cpc || 'No CPC'} · {item.category}{item.weightGrams !== null ? ` · ${item.weightGrams}g` : ''}
         </p>
@@ -196,7 +204,7 @@ const ArchiveCard: React.FC<{ item: ArchiveItem; onOpen: () => void; onRestore: 
         <button type="button" onClick={onRestore} className="inline-flex min-h-[44px] flex-1 items-center justify-center gap-1.5 rounded-lg border border-stone-300 px-3 text-sm text-stone-700 hover:bg-stone-50">
           <RotateCcw className="h-4 w-4" /> Restore
         </button>
-        {confirming ? (
+        {!canErase ? null : confirming ? (
           <button type="button" onClick={onPurge} className="inline-flex min-h-[44px] flex-1 items-center justify-center gap-1.5 rounded-lg bg-red-600 px-3 text-sm font-medium text-white hover:bg-red-700">
             <Trash2 className="h-4 w-4" /> Yes, erase it
           </button>
