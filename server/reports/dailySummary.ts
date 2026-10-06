@@ -112,6 +112,8 @@ export const AUDIT_CHECK_LABELS_SERVER: Record<string, string> = {
   stoneCountMatches: 'stone count changed',
   beadDetailPreserved: 'bead count changed',
   chainPatternMatches: 'chain pattern changed',
+  hookClaspMatches: 'hook or clasp changed',
+  chainComplete: 'chain cut off or shortened',
   engravingPreserved: 'engraving changed',
   naturalDropPhysics: 'does not hang naturally',
   sameProductFamily: 'turned into a different product',

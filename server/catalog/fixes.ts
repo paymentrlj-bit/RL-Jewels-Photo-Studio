@@ -27,9 +27,27 @@ export const FIX_OPTIONS: FixOption[] = [
   },
   {
     code: 'beads',
-    label: 'Beads or drops changed',
-    instruction: 'Beads, balls, drops or tassels were changed. Keep every one exactly as in the original: same count, size, shape and positions.',
-    lesson: 'beads, balls or drops were changed - keep every one, same count and positions',
+    label: 'Beads, moti or latkan changed',
+    instruction: 'Beads, moti (pearls), latkan (hanging drops), balls or tassels were changed. Keep every one exactly as in the original: same count, size, shape and positions.',
+    lesson: 'beads, moti, latkan or drops were changed - keep every one, same count and positions',
+  },
+  {
+    code: 'hook',
+    label: 'Hook or clasp wrong',
+    instruction: 'The hook or clasp was changed. Keep the exact hook from the original, at the same end, same size and style, fully visible. Most pieces here close with an S hook (a small S-shaped wire hook): if the original shows one, draw that same S hook - never swap it for a lobster clasp, spring ring or box clasp, and never leave it out.',
+    lesson: 'the hook or clasp was changed - keep the exact hook (usually an S hook), visible, at the same end',
+  },
+  {
+    code: 'chain_cut',
+    label: 'Chain cut off or too short',
+    instruction: 'The chain was cut off, faded out or shortened. Draw the WHOLE chain from one end to the other, as long as in the original, with both ends and the hook inside the frame. If needed, make the piece smaller in the frame - never crop or shorten it.',
+    lesson: 'the chain came out cut off or too short - show it end to end with both ends and the hook in the frame',
+  },
+  {
+    code: 'earring_design',
+    label: 'Earring design changed',
+    instruction: 'The earrings were changed. Copy each earring exactly as in the original: same shape, size, stones, beads, drops and top fitting, and a matching pair like the original. Do not redesign, simplify or restyle them.',
+    lesson: 'the earrings were redesigned - copy each one exactly, same shape, drops and top fitting',
   },
   {
     code: 'stones',
@@ -75,11 +93,21 @@ export const FIX_OPTIONS: FixOption[] = [
   },
   {
     code: 'leftovers',
-    label: 'Tag, hand or stand showing',
-    instruction: 'Something that is not jewellery was left in. Remove every price tag, string, label, finger, stand and clip completely. Only the jewellery may remain.',
-    lesson: 'a tag, string, hand or stand was left in - remove everything that is not jewellery',
+    label: 'Thread, tag, back chain or stand showing',
+    instruction: 'Something that is not part of the jewellery was left in. Remove every thread, string or tie, price tag, label, sticker, stand, pin, clip and finger completely, and any holding chain that is only there to hang or hold the piece. Only the jewellery itself may remain.',
+    lesson: 'a thread, tag, stand or holding chain was left in - remove everything that is not part of the jewellery',
   },
 ];
+
+/** Reasons for sending a piece back for a new photo that are about the photo, not the AI. Not an AI instruction. */
+export const RESHOOT_ONLY_REASONS: { code: string; label: string }[] = [
+  { code: 'photo_bad', label: 'My own photo was bad (blurry, cropped, dark)' },
+];
+
+/** Every reason the Reshoot picker accepts: the fix problems, plus the photo being bad. */
+export function isReshootReason(code: string): boolean {
+  return BY_CODE.has(code) || RESHOOT_ONLY_REASONS.some((r) => r.code === code);
+}
 
 /** Not an AI instruction: cut the piece out of the real photo instead (faithful mode). */
 export const USE_REAL_PHOTO = 'real_photo';
@@ -104,6 +132,8 @@ export const AUDIT_CHECK_TO_FIX: Partial<Record<AuditCheck, string>> = {
   engravingPreserved: 'motif',
   naturalDropPhysics: 'shape',
   backgroundCleanWhite: 'background',
+  hookClaspMatches: 'hook',
+  chainComplete: 'chain_cut',
 };
 
 // Staff notes go into a prompt, so they are kept short and on one line.

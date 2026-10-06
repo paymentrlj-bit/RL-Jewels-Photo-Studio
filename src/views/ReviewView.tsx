@@ -13,6 +13,7 @@ import { api, ApiError } from '../api';
 import { AngleCaptureButton } from '../components/AngleCaptureButton';
 import { FixPanel } from '../components/FixPanel';
 import { DeleteReasonDialog } from '../components/DeleteReasonDialog';
+import { ReshootPanel } from '../components/ReshootPanel';
 import { PhotoViewer, type ViewerPhoto } from '../components/PhotoViewer';
 import { SimilarPieces } from '../components/SimilarList';
 import type { Product, Role } from '../types';
@@ -126,7 +127,7 @@ export const ReviewView: React.FC<ReviewViewProps> = ({ products, onChanged, rol
                 busy={busyId === product.id}
                 canManage={canManage}
                 onApprove={() => act(product.id, () => api.approve(product.id))}
-                onReject={(note) => act(product.id, () => api.reject(product.id, note))}
+                onReject={(reasons, note) => act(product.id, () => api.reject(product.id, note, reasons))}
                 onDelete={() => deleteOne(product.id)}
                 onChanged={onChanged}
                 onError={setError}
@@ -169,7 +170,7 @@ export const ReviewView: React.FC<ReviewViewProps> = ({ products, onChanged, rol
                 key={product.id}
                 product={product}
                 busy={busyId === product.id}
-                onSendBack={(note) => act(product.id, () => api.reject(product.id, note))}
+                onSendBack={(reasons, note) => act(product.id, () => api.reject(product.id, note, reasons))}
                 onWhiten={() => act(product.id, () => api.whitenBackground(product.id))}
               />
             ))}
@@ -183,11 +184,10 @@ export const ReviewView: React.FC<ReviewViewProps> = ({ products, onChanged, rol
 const ApprovedRow: React.FC<{
   product: Product;
   busy: boolean;
-  onSendBack: (note: string) => void;
+  onSendBack: (reasons: string[], note: string) => void;
   onWhiten: () => void;
 }> = ({ product, busy, onSendBack, onWhiten }) => {
   const [open, setOpen] = useState(false);
-  const [note, setNote] = useState('');
   const photoId = product.processedPhotoId || product.originalPhotoId;
   return (
     <div className="rounded-xl border border-stone-200 bg-white p-3">
@@ -199,18 +199,8 @@ const ApprovedRow: React.FC<{
         </div>
       </div>
       {open ? (
-        <div className="mt-2 space-y-2">
-          <input
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            placeholder="What is wrong? (optional)"
-            aria-label="Why this approved piece is being sent back"
-            className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm"
-          />
-          <div className="flex gap-2">
-            <button type="button" disabled={busy} onClick={() => onSendBack(note)} className="min-h-[44px] flex-1 rounded-lg bg-red-600 px-3 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-60">Send back for reshoot</button>
-            <button type="button" onClick={() => setOpen(false)} className="min-h-[44px] rounded-lg px-3 text-sm text-stone-600 hover:bg-stone-100">Cancel</button>
-          </div>
+        <div className="mt-2">
+          <ReshootPanel itemType={product.itemType} busy={busy} sendLabel="Send back for reshoot" onSend={onSendBack} onCancel={() => setOpen(false)} />
         </div>
       ) : (
         <div className="mt-2 flex flex-wrap gap-2">
@@ -227,14 +217,13 @@ const ReviewCard: React.FC<{
   busy: boolean;
   canManage: boolean;
   onApprove: () => void;
-  onReject: (note: string) => void;
+  onReject: (reasons: string[], note: string) => void;
   onDelete: () => void;
   onChanged: () => void;
   onError: (message: string) => void;
 }> = ({ product, busy, canManage, onApprove, onReject, onDelete, onChanged, onError }) => {
   const [showChecks, setShowChecks] = useState(false);
   const [mode, setMode] = useState<'idle' | 'rejecting' | 'fixing'>('idle');
-  const [note, setNote] = useState('');
   const isFaithful = product.renderMode === 'faithful';
   const [viewerAt, setViewerAt] = useState<number | null>(null);
 
@@ -379,33 +368,7 @@ const ReviewCard: React.FC<{
             onError={onError}
           />
         ) : mode === 'rejecting' ? (
-          <div className="space-y-2">
-            <label htmlFor={`note-${product.id}`} className="sr-only">Reason for reshoot</label>
-            <input
-              id={`note-${product.id}`}
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              placeholder="What is wrong with it?"
-              className="w-full min-h-[44px] rounded-lg border border-stone-300 px-2 py-1.5 text-xs"
-            />
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => onReject(note)}
-                disabled={busy}
-                className="min-h-[44px] flex-1 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-60"
-              >
-                Send for reshoot
-              </button>
-              <button
-                type="button"
-                onClick={() => setMode('idle')}
-                className="min-h-[44px] rounded-lg px-3 py-1.5 text-xs text-stone-600 hover:bg-stone-100"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
+          <ReshootPanel itemType={product.itemType} busy={busy} onSend={onReject} onCancel={() => setMode('idle')} />
         ) : (
           <div className="flex flex-wrap gap-2">
             {canManage ? (

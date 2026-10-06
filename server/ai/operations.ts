@@ -108,6 +108,10 @@ export const UNFIXABLE_BY_ESCALATION = [
   'beadDetailPreserved',
   'chainPatternMatches',
   'engravingPreserved',
+  // The two the reviewer sent pieces back for most (hook changed; chain cut off),
+  // which nothing checked by name until now.
+  'hookClaspMatches',
+  'chainComplete',
 ] as const;
 
 // Checks a stronger pass plausibly DOES fix: rendering quality, not fidelity
@@ -176,7 +180,7 @@ export interface AuditResult {
  */
 export const FIDELITY_RETRYABLE: AuditCheck[] = [
   'stoneCountMatches', 'beadDetailPreserved', 'chainPatternMatches', 'engravingPreserved',
-  'naturalDropPhysics', 'pieceCountMatches', 'sameProductFamily',
+  'naturalDropPhysics', 'pieceCountMatches', 'sameProductFamily', 'hookClaspMatches', 'chainComplete',
 ];
 
 export async function auditOutput(
@@ -215,8 +219,11 @@ export async function auditOutput(
     onUsage?.(extractUsage(response));
 
     const parsed = JSON.parse(response.text?.trim() || '{}') as Record<string, unknown>;
+    // A check the model left out reads as a fail - except the two added later, where a
+    // model that has not picked up the new fields yet must not fail every piece.
+    const OPTIONAL_CHECKS: readonly string[] = ['hookClaspMatches', 'chainComplete'];
     const checklist = Object.fromEntries(
-      AUDIT_CHECKS.map((key) => [key, Boolean(parsed[key])])
+      AUDIT_CHECKS.map((key) => [key, parsed[key] === undefined && OPTIONAL_CHECKS.includes(key) ? true : Boolean(parsed[key])])
     ) as Record<AuditCheck, boolean>;
 
     // The server ALWAYS recomputes the verdict as the logical AND of every

@@ -93,7 +93,7 @@ export const api = {
   useAiRender: (id: string) => post<{ product: Product }>(`/products/${id}/use-ai-render`, {}),
   whitenBackground: (id: string) => post<{ product: Product }>(`/products/${id}/whiten-background`, {}),
   approve: (id: string, note?: string) => post<{ product: Product }>(`/products/${id}/approve`, { note }),
-  reject: (id: string, note: string) => post<{ product: Product }>(`/products/${id}/reject`, { note }),
+  reject: (id: string, note: string, reasons: string[] = []) => post<{ product: Product }>(`/products/${id}/reject`, { note, reasons }),
   requeue: (id: string, options: { proceedWithoutAngle?: boolean } = {}) =>
     post<{ product: Product }>(`/products/${id}/requeue`, options),
   fix: (id: string, body: { issues: string[]; note?: string }) =>
