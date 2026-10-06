@@ -25,7 +25,7 @@ function makeProduct(overrides: Partial<Product> = {}): Product {
     status: 'approved', reviewNote: '', auditChecklist: null, auditReason: '', riskScore: null, riskTier: '', riskReasons: [], tags: [], aiTags: [], staffNote: '', priceInr: '',
     modelUsed: '', attemptCount: 1, estimatedCostUsd: 0.05,
     createdBy: 'usr_1', createdAt: '2026-01-01T00:00:00.000Z',
-    updatedAt: '2026-01-01T00:00:00.000Z', approvedAt: null, exportedAt: null,
+    updatedAt: '2026-01-01T00:00:00.000Z', approvedAt: null, exportedAt: null, archivedAt: null, archivedBy: null, archivedStatus: '',
     ...overrides,
   };
 }

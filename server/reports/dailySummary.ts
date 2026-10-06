@@ -43,7 +43,7 @@ export function buildDailySummary(day?: string): DailySummary {
       `SELECT p.created_by AS user_id, COALESCE(NULLIF(u.display_name, ''), u.username, 'Unknown') AS name,
               p.status, p.risk_score, p.audit_checklist, p.estimated_cost_usd
          FROM products p LEFT JOIN users u ON u.id = p.created_by
-        WHERE p.created_at >= ? AND p.created_at < ? AND p.status != 'draft'`
+        WHERE p.created_at >= ? AND p.created_at < ? AND p.status != 'draft' AND p.archived_at IS NULL`
     )
     .all(startIso, endIso) as { user_id: string; name: string; status: string; risk_score: number | null; audit_checklist: string | null; estimated_cost_usd: number }[];
 
@@ -62,18 +62,18 @@ export function buildDailySummary(day?: string): DailySummary {
   const top = [...failures].sort((a, b) => b[1] - a[1])[0];
 
   const count = (sql: string, ...args: unknown[]) => (db.prepare(sql).get(...args) as { n: number }).n;
-  const oldest = db.prepare("SELECT MIN(updated_at) AS at FROM products WHERE status = 'awaiting_review'").get() as { at: string | null };
+  const oldest = db.prepare("SELECT MIN(updated_at) AS at FROM products WHERE status = 'awaiting_review' AND archived_at IS NULL").get() as { at: string | null };
 
   return {
     date: label,
     shot: rows.length,
-    approvedToday: count('SELECT COUNT(*) AS n FROM products WHERE approved_at >= ? AND approved_at < ?', startIso, endIso),
+    approvedToday: count('SELECT COUNT(*) AS n FROM products WHERE approved_at >= ? AND approved_at < ? AND archived_at IS NULL', startIso, endIso),
     sentBackToday: count("SELECT COUNT(*) AS n FROM events WHERE type = 'product.rejected' AND at >= ? AND at < ?", startIso, endIso),
-    waitingForApproval: count("SELECT COUNT(*) AS n FROM products WHERE status = 'awaiting_review'"),
+    waitingForApproval: count("SELECT COUNT(*) AS n FROM products WHERE status = 'awaiting_review' AND archived_at IS NULL"),
     oldestWaitingHours: oldest.at ? Math.max(0, Math.round((Date.now() - new Date(oldest.at).getTime()) / 36e5)) : null,
-    toRetake: count("SELECT COUNT(*) AS n FROM products WHERE status = 'needs_reshoot'"),
-    needAngle: count("SELECT COUNT(*) AS n FROM products WHERE status = 'needs_angle'"),
-    failed: count("SELECT COUNT(*) AS n FROM products WHERE status = 'failed'"),
+    toRetake: count("SELECT COUNT(*) AS n FROM products WHERE status = 'needs_reshoot' AND archived_at IS NULL"),
+    needAngle: count("SELECT COUNT(*) AS n FROM products WHERE status = 'needs_angle' AND archived_at IS NULL"),
+    failed: count("SELECT COUNT(*) AS n FROM products WHERE status = 'failed' AND archived_at IS NULL"),
     estCostUsd: Number(todays.reduce((n, r) => n + (r.estimated_cost_usd || 0), 0).toFixed(2)),
     byPhotographer: summariseStaff(rows),
     topProblem: top ? { check: top[0], count: top[1] } : null,

@@ -3,37 +3,71 @@
 // typed here once; it goes into the caption and is what lets the product into
 // the Meta catalogue feed.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Share2, Copy, Download, MessageCircle, Search, Check, AlertTriangle } from 'lucide-react';
+import { Share2, Copy, Download, MessageCircle, Search, Check, AlertTriangle, X } from 'lucide-react';
 import { api, ApiError } from '../api';
 import type { Product } from '../types';
 import { buildShareCaption, cleanPrice, formatRupees } from '../../server/sharing/caption';
 import { SimilarPieces } from '../components/SimilarList';
+import { ComboBox, type ComboOption } from '../components/ComboBox';
 import { shareProduct, copyText, savePhoto, whatsappTextUrl } from '../utils/share';
+
+const STATUSES = 'approved,exported';
+const PAGE = 60;
 
 export const ShareView: React.FC = () => {
   const [products, setProducts] = useState<Product[]>([]);
+  const [total, setTotal] = useState<number | null>(null);
   const [search, setSearch] = useState('');
+  const [category, setCategory] = useState('');
+  const [minWeight, setMinWeight] = useState('');
+  const [maxWeight, setMaxWeight] = useState('');
+  const [categories, setCategories] = useState<ComboOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async (q: string) => {
+  // The categories that actually have shareable products, with how many each.
+  useEffect(() => {
+    api.productCategories(STATUSES)
+      .then((res) => setCategories(res.categories.map((c) => ({ value: c.type, hint: `${c.count}`, aliases: c.aliases }))))
+      .catch(() => setCategories([]));
+  }, []);
+
+  const load = useCallback(async () => {
     try {
-      const res = await api.listProducts({ status: 'approved,exported', search: q, limit: 60 });
+      const res = await api.listProducts({ status: STATUSES, search, limit: PAGE, category: category.trim(), minWeight: minWeight.trim(), maxWeight: maxWeight.trim() });
       setProducts(res.products);
+      setTotal(res.total ?? res.products.length);
       setError(null);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not load products.');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [search, category, minWeight, maxWeight]);
 
   useEffect(() => {
-    const t = window.setTimeout(() => void load(search), 250);
+    const t = window.setTimeout(() => void load(), 250);
     return () => window.clearTimeout(t);
-  }, [search, load]);
+  }, [load]);
 
   const replace = (updated: Product) => setProducts((prev) => prev.map((p) => (p.id === updated.id ? { ...p, ...updated } : p)));
+  const filtered = Boolean(category.trim() || minWeight.trim() || maxWeight.trim() || search.trim());
+  const clearAll = () => {
+    setSearch('');
+    setCategory('');
+    setMinWeight('');
+    setMaxWeight('');
+  };
+  const weightInput = (value: string, set: (v: string) => void, label: string) => (
+    <input
+      inputMode="decimal"
+      value={value}
+      onChange={(e) => set(e.target.value.replace(/[^0-9.,]/g, ''))}
+      placeholder={label}
+      aria-label={label}
+      className="w-full rounded-xl border border-stone-300 bg-white px-3 py-3 text-sm focus:border-amber-400 focus:ring-2 focus:ring-amber-400"
+    />
+  );
 
   return (
     <div className="space-y-4">
@@ -47,10 +81,25 @@ export const ShareView: React.FC = () => {
           className="w-full rounded-xl border border-stone-300 bg-white py-3 pl-10 pr-3 text-sm focus:border-amber-400 focus:ring-2 focus:ring-amber-400"
         />
       </div>
+      <div className="grid gap-3 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-center">
+        <ComboBox value={category} onChange={setCategory} options={categories} label="Category" placeholder="Category - pick or type, e.g. Haar" />
+        {weightInput(minWeight, setMinWeight, 'From grams')}
+        {weightInput(maxWeight, setMaxWeight, 'To grams')}
+        {filtered ? (
+          <button type="button" onClick={clearAll} className="inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-xl border border-stone-300 px-4 text-sm text-stone-700 hover:bg-stone-50">
+            <X className="h-4 w-4" /> Clear
+          </button>
+        ) : <span className="hidden sm:block" />}
+      </div>
+      {!loading && total !== null && filtered && products.length > 0 && (
+        <p className="text-sm text-stone-500">
+          {total > products.length ? `Showing the newest ${products.length} of ${total} matching pieces.` : `${total} matching piece${total === 1 ? '' : 's'}.`}
+        </p>
+      )}
       {error && <p className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />{error}</p>}
       {!loading && products.length === 0 && (
         <p className="rounded-xl border border-dashed border-stone-300 p-6 text-sm text-stone-500">
-          Nothing to share yet. Products appear here once they are approved in Review.
+          {filtered ? 'No approved piece matches these filters. Widen the weight range or clear the category.' : 'Nothing to share yet. Products appear here once they are approved in Review.'}
         </p>
       )}
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">

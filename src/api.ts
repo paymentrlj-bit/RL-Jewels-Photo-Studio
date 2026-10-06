@@ -67,14 +67,16 @@ export const api = {
   closeBatch: (id: string) => post<{ success: boolean }>(`/batches/${id}/close`),
 
   // --- products ---
-  listProducts: (params: { batchId?: string; status?: string; search?: string; limit?: number } = {}) => {
+  listProducts: (params: { batchId?: string; status?: string; search?: string; limit?: number; category?: string; minWeight?: string; maxWeight?: string } = {}) => {
     const query = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) {
       if (value !== undefined && value !== '') query.set(key, String(value));
     }
     const suffix = query.toString();
-    return request<{ products: Product[]; counts: Record<string, number> }>(`/products${suffix ? `?${suffix}` : ''}`);
+    return request<{ products: Product[]; counts: Record<string, number>; total?: number }>(`/products${suffix ? `?${suffix}` : ''}`);
   },
+  productCategories: (status: string) =>
+    request<{ categories: { type: string; count: number; aliases: string[] }[] }>(`/products/categories?status=${encodeURIComponent(status)}`),
   getProduct: (id: string) =>
     request<{ product: Product; previousShoots: Product[] }>(`/products/${id}`),
   createProduct: (fields: Record<string, unknown>) => post<{ product: Product }>('/products', fields),
@@ -138,6 +140,9 @@ export const api = {
   resetPrompt: () => post<{ prompt: string; isCustom: boolean }>('/admin/prompt', { reset: true }),
   similarCheck: (imageBase64: string) => post<{ matches: SimilarMatch[] }>('/similar/check', { imageBase64 }),
   similarTo: (id: string) => request<{ basis: 'studio' | 'original'; matches: SimilarMatch[] }>(`/products/${id}/similar`),
+  archive: () => request<ArchiveData>('/admin/archive'),
+  restoreArchived: (id: string) => post<{ success: boolean }>(`/admin/archive/${id}/restore`, {}),
+  purgeArchived: (id: string) => request<{ success: boolean }>(`/admin/archive/${id}`, { method: 'DELETE' }),
   duplicates: () => request<{ pairs: { score: number; tier: 'same' | 'similar'; a: SimilarMatch; b: SimilarMatch }[] }>('/admin/duplicates'),
   telegram: () => request<TelegramStatus>('/admin/telegram'),
   saveTelegram: (body: { token?: string; chatId?: string; hour?: number }) =>
@@ -236,5 +241,43 @@ export interface AnalyticsSummary {
     cpcMaster: { totalRows: number; totalProducts: number };
     erpMapping: string;
     axiomMirror: boolean;
+  };
+}
+
+export interface ArchiveItem {
+  id: string;
+  cpc: string;
+  name: string;
+  itemType: string;
+  category: string;
+  purity: string;
+  weightGrams: number | null;
+  createdAt: string;
+  staffName: string;
+  archivedAt: string | null;
+  archivedByName: string | null;
+  statusWhenDeleted: string;
+  riskScore: number | null;
+  riskTier: string;
+  riskReasons: string[];
+  attemptCount: number;
+  estimatedCostInr: number;
+  modelUsed: string;
+  auditReason: string;
+  reviewNote: string;
+  failedChecks: { check: string; label: string }[];
+  photos: { original: string | null; processed: string | null; aiRender: string | null; cutout: string | null };
+}
+
+export interface ArchiveData {
+  items: ArchiveItem[];
+  summary: {
+    total: number;
+    byCategory: { name: string; count: number }[];
+    byStatus: { name: string; count: number }[];
+    byPhotographer: { name: string; count: number }[];
+    byFailedCheck: { name: string; count: number }[];
+    byRiskTier: { name: string; count: number }[];
+    estimatedCostInr: number;
   };
 }

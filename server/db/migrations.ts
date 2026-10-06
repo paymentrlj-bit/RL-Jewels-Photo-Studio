@@ -271,6 +271,21 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'manager';
     `,
   },
+  {
+    version: 8,
+    name: 'archive: a deleted product is hidden from staff but kept for admins',
+    up: `
+      -- Staff "delete" a product and it disappears for them, but the row, its
+      -- photos and its audit data are kept: a product that was thrown away is a
+      -- product whose output was not good, which is exactly what the admin
+      -- Archive tab exists to learn from.
+      ALTER TABLE products ADD COLUMN archived_at TEXT;
+      ALTER TABLE products ADD COLUMN archived_by TEXT;
+      -- The status the product had when it was deleted (awaiting_review, needs_reshoot ...).
+      ALTER TABLE products ADD COLUMN archived_status TEXT NOT NULL DEFAULT '';
+      CREATE INDEX idx_products_archived ON products (archived_at);
+    `,
+  },
 ];
 
 export function runMigrations(db: BetterSqlite3.Database): void {
