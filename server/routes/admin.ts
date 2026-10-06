@@ -19,7 +19,8 @@ import {
   countAdmins,
 } from '../auth/users';
 import { getEnhancePromptState, setEnhancePrompt, resetEnhancePrompt } from '../settings';
-import { countProductsByStatus, listOutcomeRows, listStaffRows } from '../db/products';
+import { countProductsByStatus, listOutcomeRows, listStaffRows, listProducts, getProduct, restoreProduct, deleteProduct, type Product } from '../db/products';
+import { categoryOf, weightOf } from '../catalog/filters';
 import { summariseOutcomes, summariseStaff } from '../catalog/outcomes';
 import {
   telegramStatus, saveToken, saveChatId, saveSendHour, botName, discoverChats, sendMessage, summaryMessage, getToken as tgToken,
@@ -30,7 +31,7 @@ import { describeMatches } from './similar';
 import { buildMetaFeed } from '../sharing/metaFeed';
 import { baseUrlFor, collectFeedProducts } from './publicFeed';
 import { queueDepth } from '../queue/jobs';
-import { storageStats } from '../storage/images';
+import { storageStats, getLatestPhoto, deleteImagesForProduct } from '../storage/images';
 import { getCpcMasterStats } from '../integrations/cpcMaster';
 import { COSTS_ARE_CALIBRATED } from '../ai/client';
 import { getUsdToInrRate } from '../integrations/exchangeRate';
@@ -401,4 +402,90 @@ adminRouter.get('/analytics/events', (req, res) => {
   const limit = Math.min(Number(req.query.limit) || 200, 2000);
   const types = req.query.types ? String(req.query.types).split(',') : undefined;
   res.json({ events: readEvents({ types, limit }) });
+});
+
+// ---------------------------------------------------------------------------
+// Archive: products staff deleted. Staff are told they are gone; they are kept so
+// the admin can see what was thrown away and why - a deleted piece is almost
+// always a piece whose output was not good.
+// ---------------------------------------------------------------------------
+
+function archiveItem(p: Product, usdToInr: number) {
+  const failedChecks = Object.entries(p.auditChecklist ?? {})
+    .filter(([, ok]) => ok === false)
+    .map(([check]) => ({ check, label: AUDIT_CHECK_LABELS_SERVER[check] ?? check }));
+  const photo = (kind: 'original' | 'processed' | 'airender' | 'cutout') => getLatestPhoto(p.id, kind)?.id ?? null;
+  return {
+    id: p.id,
+    cpc: p.cpc,
+    name: p.name,
+    itemType: p.itemType,
+    category: categoryOf(p.itemType),
+    purity: p.purity,
+    weightGrams: weightOf(p),
+    createdAt: p.createdAt,
+    staffName: findUserById(p.createdBy)?.displayName || findUserById(p.createdBy)?.username || 'Unknown',
+    archivedAt: p.archivedAt,
+    archivedByName: p.archivedBy ? findUserById(p.archivedBy)?.displayName || findUserById(p.archivedBy)?.username || 'Unknown' : null,
+    statusWhenDeleted: p.archivedStatus || p.status,
+    riskScore: p.riskScore,
+    riskTier: p.riskTier,
+    riskReasons: p.riskReasons,
+    attemptCount: p.attemptCount,
+    estimatedCostInr: Number((p.estimatedCostUsd * usdToInr).toFixed(2)),
+    modelUsed: p.modelUsed,
+    auditReason: p.auditReason,
+    reviewNote: p.reviewNote,
+    failedChecks,
+    photos: { original: photo('original'), processed: photo('processed'), aiRender: photo('airender'), cutout: photo('cutout') },
+  };
+}
+
+function tally<T>(items: T[], key: (item: T) => string | null | undefined): { name: string; count: number }[] {
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    const k = key(item);
+    if (k) counts.set(k, (counts.get(k) ?? 0) + 1);
+  }
+  return [...counts].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+}
+
+adminRouter.get('/archive', async (_req, res) => {
+  const { rate } = await getUsdToInrRate();
+  const items = listProducts({ archived: 'only', limit: 500 }).map((p) => archiveItem(p, rate));
+  res.json({
+    items,
+    summary: {
+      total: items.length,
+      byCategory: tally(items, (i) => i.category),
+      byStatus: tally(items, (i) => i.statusWhenDeleted),
+      byPhotographer: tally(items, (i) => i.staffName),
+      byFailedCheck: tally(items.flatMap((i) => i.failedChecks), (c) => c.label),
+      byRiskTier: tally(items, (i) => i.riskTier || 'not scored'),
+      estimatedCostInr: Number(items.reduce((n, i) => n + (i.estimatedCostInr || 0), 0).toFixed(0)),
+    },
+  });
+});
+
+adminRouter.post('/archive/:id/restore', (req: AuthenticatedRequest, res) => {
+  if (!restoreProduct(req.params.id)) {
+    res.status(404).json({ error: 'That product is not in the archive.' });
+    return;
+  }
+  logEvent('admin.archive_restored', { productId: req.params.id }, actorFrom(req.user));
+  res.json({ success: true });
+});
+
+// The only place anything is really deleted. Only an archived product can go, so
+// a live one can never be erased by a stale screen or a guessed id.
+adminRouter.delete('/archive/:id', (req: AuthenticatedRequest, res) => {
+  const product = getProduct(req.params.id, { includeArchived: true });
+  if (!product?.archivedAt) {
+    res.status(404).json({ error: 'That product is not in the archive.' });
+    return;
+  }
+  deleteImagesForProduct(product.id);
+  deleteProduct(product.id);
+  logEvent('admin.archive_purged', { productId: product.id, cpc: product.cpc }, actorFrom(req.user));
+  res.json({ success: true });
 });

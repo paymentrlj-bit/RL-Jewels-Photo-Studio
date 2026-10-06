@@ -69,6 +69,11 @@ export interface Product {
   updatedAt: string;
   approvedAt: string | null;
   exportedAt: string | null;
+  /** Set when staff deleted it. Archived products are invisible everywhere except the admin Archive tab. */
+  archivedAt: string | null;
+  archivedBy: string | null;
+  /** The status it had when it was deleted. */
+  archivedStatus: string;
 }
 
 interface ProductRow {
@@ -109,6 +114,9 @@ interface ProductRow {
   updated_at: string;
   approved_at: string | null;
   exported_at: string | null;
+  archived_at: string | null;
+  archived_by: string | null;
+  archived_status: string;
 }
 
 function parseStringArray(json: string | null): string[] {
@@ -167,6 +175,9 @@ function toProduct(row: ProductRow): Product {
     updatedAt: row.updated_at,
     approvedAt: row.approved_at,
     exportedAt: row.exported_at,
+    archivedAt: row.archived_at ?? null,
+    archivedBy: row.archived_by ?? null,
+    archivedStatus: row.archived_status ?? '',
   };
 }
 
@@ -238,6 +249,9 @@ export function createProduct(input: { createdBy: string; batchId?: string | nul
     updated_at: at,
     approved_at: null,
     exported_at: null,
+    archived_at: null,
+    archived_by: null,
+    archived_status: '',
   };
 
   getDb()
@@ -265,9 +279,15 @@ export function createProduct(input: { createdBy: string; batchId?: string | nul
   return toProduct(row);
 }
 
-export function getProduct(id: string): Product | null {
+/**
+ * A product, unless it has been deleted: an archived product reads as "not found"
+ * to everything that serves staff (and to the pipeline, so a deleted photo is
+ * never processed). Only the admin Archive tab asks for archived ones.
+ */
+export function getProduct(id: string, options: { includeArchived?: boolean } = {}): Product | null {
   const row = getDb().prepare('SELECT * FROM products WHERE id = ?').get(id) as ProductRow | undefined;
-  return row ? toProduct(row) : null;
+  if (!row || (row.archived_at && !options.includeArchived)) return null;
+  return toProduct(row);
 }
 
 export function updateProduct(id: string, fields: Partial<Product>): Product | null {
@@ -387,6 +407,8 @@ export function applyGeneratedCopy(
 }
 
 export interface ListProductsOptions {
+  /** 'exclude' (default) hides deleted products; 'only' lists just those. */
+  archived?: 'exclude' | 'only';
   batchId?: string;
   statuses?: ProductStatus[];
   search?: string;
@@ -395,7 +417,7 @@ export interface ListProductsOptions {
 }
 
 export function listProducts(options: ListProductsOptions = {}): Product[] {
-  const clauses: string[] = [];
+  const clauses: string[] = [options.archived === 'only' ? 'archived_at IS NOT NULL' : 'archived_at IS NULL'];
   const params: unknown[] = [];
 
   if (options.batchId) {
@@ -414,22 +436,44 @@ export function listProducts(options: ListProductsOptions = {}): Product[] {
 
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
   const rows = getDb()
-    .prepare(`SELECT * FROM products ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`)
+    .prepare(`SELECT * FROM products ${where} ORDER BY ${options.archived === 'only' ? 'archived_at' : 'created_at'} DESC LIMIT ? OFFSET ?`)
     .all(...params, Math.min(options.limit ?? 100, 500), options.offset ?? 0) as ProductRow[];
 
   return rows.map(toProduct);
 }
 
+/**
+ * Just the columns a category or weight filter needs, for every matching product
+ * (no 500-row cap), newest first. The caller filters, then loads the page it shows.
+ */
+export function listFilterRows(options: { statuses?: ProductStatus[]; search?: string } = {}): { id: string; itemType: string; netWeightGrams: string; grossWeightGrams: string }[] {
+  const clauses = ['archived_at IS NULL'];
+  const params: unknown[] = [];
+  if (options.statuses?.length) {
+    clauses.push(`status IN (${options.statuses.map(() => '?').join(', ')})`);
+    params.push(...options.statuses);
+  }
+  if (options.search) {
+    clauses.push('(cpc LIKE ? OR name LIKE ? OR item_type LIKE ?)');
+    const like = `%${options.search}%`;
+    params.push(like, like, like);
+  }
+  const rows = getDb()
+    .prepare(`SELECT id, item_type, net_weight_grams, gross_weight_grams FROM products WHERE ${clauses.join(' AND ')} ORDER BY created_at DESC`)
+    .all(...params) as { id: string; item_type: string; net_weight_grams: string; gross_weight_grams: string }[];
+  return rows.map((r) => ({ id: r.id, itemType: r.item_type, netWeightGrams: r.net_weight_grams, grossWeightGrams: r.gross_weight_grams }));
+}
+
 export function countProductsByStatus(): Record<string, number> {
   const rows = getDb()
-    .prepare('SELECT status, COUNT(*) AS n FROM products GROUP BY status')
+    .prepare('SELECT status, COUNT(*) AS n FROM products WHERE archived_at IS NULL GROUP BY status')
     .all() as { status: string; n: number }[];
   return Object.fromEntries(rows.map((r) => [r.status, r.n]));
 }
 
 export function listOutcomeRows(sinceIso: string): { itemType: string; status: string; riskTier: string; riskScore: number | null }[] {
   const rows = getDb()
-    .prepare("SELECT item_type, status, risk_tier, risk_score FROM products WHERE created_at >= ? AND status NOT IN ('draft')")
+    .prepare("SELECT item_type, status, risk_tier, risk_score FROM products WHERE created_at >= ? AND status NOT IN ('draft') AND archived_at IS NULL")
     .all(sinceIso) as { item_type: string; status: string; risk_tier: string; risk_score: number | null }[];
   return rows.map((r) => ({ itemType: r.item_type, status: r.status, riskTier: r.risk_tier, riskScore: r.risk_score }));
 }
@@ -440,7 +484,7 @@ export function listStaffRows(sinceIso: string): { userId: string; name: string;
       `SELECT p.created_by AS user_id, COALESCE(NULLIF(u.display_name, ''), u.username, 'Unknown') AS name,
               p.status, p.risk_score, p.audit_checklist
          FROM products p LEFT JOIN users u ON u.id = p.created_by
-        WHERE p.created_at >= ? AND p.status NOT IN ('draft')`
+        WHERE p.created_at >= ? AND p.status NOT IN ('draft') AND p.archived_at IS NULL`
     )
     .all(sinceIso) as { user_id: string; name: string; status: string; risk_score: number | null; audit_checklist: string | null }[];
   return rows.map((r) => {
@@ -463,6 +507,7 @@ export function findPreviousShoots(catalogProductId: string, excludeProductId?: 
     .prepare(
       `SELECT * FROM products
        WHERE catalog_product_id = ? AND id != COALESCE(?, '')
+         AND archived_at IS NULL
          AND status IN ('approved', 'exported')
        ORDER BY created_at DESC LIMIT 5`
     )
@@ -493,6 +538,7 @@ export function findActiveDuplicate(cpc: string, excludeProductId?: string): Pro
     .prepare(
       `SELECT * FROM products
        WHERE UPPER(TRIM(cpc)) = ? AND id != COALESCE(?, '')
+         AND archived_at IS NULL
          AND status IN (${ACTIVE_STATUSES})
        ORDER BY created_at DESC LIMIT 1`
     )
@@ -500,8 +546,34 @@ export function findActiveDuplicate(cpc: string, excludeProductId?: string): Pro
   return row ? toProduct(row) : null;
 }
 
+/** Removes the row for good. Only the admin Archive tab's "Delete forever" uses this. */
 export function deleteProduct(id: string): void {
   getDb().prepare('DELETE FROM products WHERE id = ?').run(id);
+}
+
+/**
+ * What "delete" means for staff: the product vanishes from every screen, but the
+ * row, photos and audit data stay for the admin Archive tab. Any waiting job is
+ * cancelled so a deleted photo is never processed (and never paid for).
+ * Returns false when it was already archived or does not exist.
+ */
+export function archiveProduct(id: string, by: string): boolean {
+  const db = getDb();
+  const at = nowIso();
+  const res = db
+    .prepare(`UPDATE products SET archived_at = ?, archived_by = ?, archived_status = status, updated_at = ? WHERE id = ? AND archived_at IS NULL`)
+    .run(at, by, at, id);
+  if (res.changes === 0) return false;
+  db.prepare(`UPDATE jobs SET status = 'failed', last_error = 'Deleted before it was processed.', finished_at = ? WHERE product_id = ? AND status = 'queued'`).run(at, id);
+  return true;
+}
+
+/** Brings an archived product back exactly as it was. */
+export function restoreProduct(id: string): boolean {
+  const res = getDb()
+    .prepare(`UPDATE products SET archived_at = NULL, archived_by = NULL, archived_status = '', updated_at = ? WHERE id = ? AND archived_at IS NOT NULL`)
+    .run(nowIso(), id);
+  return res.changes > 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -556,7 +628,7 @@ export function getBatch(id: string): Batch | null {
 export function listBatches(limit = 50): (Batch & { productCount: number })[] {
   const rows = getDb()
     .prepare(
-      `SELECT b.*, (SELECT COUNT(*) FROM products p WHERE p.batch_id = b.id) AS product_count
+      `SELECT b.*, (SELECT COUNT(*) FROM products p WHERE p.batch_id = b.id AND p.archived_at IS NULL) AS product_count
        FROM batches b ORDER BY b.created_at DESC LIMIT ?`
     )
     .all(limit) as (BatchRow & { product_count: number })[];

@@ -17,7 +17,8 @@ import {
   countProductsByStatus,
   findPreviousShoots,
   findActiveDuplicate,
-  deleteProduct,
+  archiveProduct,
+  listFilterRows,
   createBatch,
   getBatch,
   listBatches,
@@ -33,7 +34,6 @@ import {
   listPhotos,
   readImageBuffer,
   imageExists,
-  deleteImagesForProduct,
   type PhotoSource,
 } from '../storage/images';
 import { enqueueJob, getLatestJobForProduct, queueDepth, requeueJob, getJob } from '../queue/jobs';
@@ -47,6 +47,7 @@ import { cleanPrice } from '../sharing/caption';
 import { cleanTags, cleanStaffNote, recordTagsPicked, recordTagsApproved } from '../catalog/tags';
 import { isFixCode, cleanNote, USE_REAL_PHOTO } from '../catalog/fixes';
 import { recordFixRequest } from '../db/fixRequests';
+import { matchesFilter, categoryOptions, parseWeightParam } from '../catalog/filters';
 
 export const productsRouter = express.Router();
 
@@ -144,6 +145,23 @@ productsRouter.get('/products', (req, res) => {
     ? (statusParam.split(',').filter((s) => (PRODUCT_STATUSES as readonly string[]).includes(s)) as ProductStatus[])
     : undefined;
 
+  // Category and weight filters (the Share tab). A category is not a column - it
+  // comes from the store's vocabulary - so these are applied to the matching rows
+  // first, and only the page being shown is loaded in full.
+  const category = req.query.category ? String(req.query.category) : '';
+  const minWeight = parseWeightParam(req.query.minWeight);
+  const maxWeight = parseWeightParam(req.query.maxWeight);
+  if (category.trim() || minWeight !== null || maxWeight !== null) {
+    const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
+    const offset = Math.max(Number(req.query.offset) || 0, 0);
+    const matching = listFilterRows({ statuses, search: req.query.search ? String(req.query.search) : undefined }).filter((r) =>
+      matchesFilter(r, { category, minWeight, maxWeight })
+    );
+    const page = matching.slice(offset, offset + limit).map((r) => decorate(r.id)).filter(Boolean);
+    res.json({ products: page, total: matching.length, counts: countProductsByStatus() });
+    return;
+  }
+
   const products = listProducts({
     batchId: req.query.batchId ? String(req.query.batchId) : undefined,
     statuses,
@@ -156,6 +174,16 @@ productsRouter.get('/products', (req, res) => {
     products: products.map((p) => decorate(p.id)).filter(Boolean),
     counts: countProductsByStatus(),
   });
+});
+
+// The categories present among products in these statuses, for the Share tab's
+// category picker (scroll the list, or type and it narrows).
+productsRouter.get('/products/categories', (req, res) => {
+  const statusParam = String(req.query.status || '').trim();
+  const statuses = statusParam
+    ? (statusParam.split(',').filter((s) => (PRODUCT_STATUSES as readonly string[]).includes(s)) as ProductStatus[])
+    : undefined;
+  res.json({ categories: categoryOptions(listFilterRows({ statuses })) });
 });
 
 productsRouter.post('/products', (req: AuthenticatedRequest, res) => {
@@ -289,11 +317,11 @@ productsRouter.delete('/products/:id', (req: AuthenticatedRequest, res) => {
     res.status(404).json({ error: 'Product not found.' });
     return;
   }
-  // Files first: the rows cascade away with the product, and an orphaned
-  // photos row is easier to reason about than an orphaned file on disk.
-  deleteImagesForProduct(product.id);
-  deleteProduct(product.id);
-  logEvent('product.deleted', { productId: product.id, cpc: product.cpc }, actorFrom(req.user));
+  // "Delete" hides the product from staff but keeps it, with its photos and audit
+  // data, in the admin Archive tab: a piece someone threw away is a piece whose
+  // output was not good, which is what we learn from. Staff are told it is gone.
+  archiveProduct(product.id, req.user!.id);
+  logEvent('product.deleted', { productId: product.id, cpc: product.cpc, status: product.status, riskScore: product.riskScore, archived: true }, actorFrom(req.user));
   res.json({ success: true });
 });
 
@@ -319,8 +347,7 @@ productsRouter.post('/products/bulk-delete', (req: AuthenticatedRequest, res) =>
       skipped.push(id);
       continue;
     }
-    deleteImagesForProduct(product.id);
-    deleteProduct(product.id);
+    archiveProduct(product.id, req.user!.id);
     deleted++;
   }
 

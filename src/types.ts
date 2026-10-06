@@ -64,6 +64,7 @@ export interface Product {
   estimatedCostUsd: number;
   createdAt: string;
   approvedAt: string | null;
+  archivedAt?: string | null;
   staffName: string;
   /** User id of the person who shot it. */
   createdBy: string;

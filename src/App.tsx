@@ -1,17 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Camera, ClipboardCheck, PackageOpen, Settings, Share2, LogOut, WifiOff, AlertTriangle, RefreshCw } from 'lucide-react';
+import { Camera, ClipboardCheck, PackageOpen, Settings, Share2, Archive, LogOut, WifiOff, AlertTriangle, RefreshCw } from 'lucide-react';
 import { api, ApiError, setUnauthorizedHandler } from './api';
 import type { Batch, BlockingIssue, HealthFeatures, Product, QueueDepth, SessionUser } from './types';
 import { ShootView } from './views/ShootView';
 import { ReviewView } from './views/ReviewView';
 import { ExportView } from './views/ExportView';
 import { ShareView } from './views/ShareView';
+import { ArchiveView } from './views/ArchiveView';
 import { AdminView } from './views/AdminView';
 import { LoginView } from './views/LoginView';
 import { BrandLogo } from './components/BrandLogo';
 import { useNetworkStatus } from './utils/useNetworkStatus';
 
-type Tab = 'shoot' | 'review' | 'share' | 'export' | 'admin';
+type Tab = 'shoot' | 'review' | 'share' | 'archive' | 'export' | 'admin';
 
 // How often the queue and product lists refresh. Three seconds is frequent
 // enough that a finished photo appears while the staff member is still
@@ -168,6 +169,7 @@ export default function App() {
     { key: 'review', label: 'Review', icon: ClipboardCheck, badge: awaitingCount + problemCount },
     { key: 'export', label: 'Export', icon: PackageOpen, managerOnly: true },
     { key: 'share', label: 'Share', icon: Share2, managerOnly: true },
+    { key: 'archive', label: 'Archive', icon: Archive, adminOnly: true },
     { key: 'admin', label: 'Admin', icon: Settings, adminOnly: true },
   ];
 
@@ -289,6 +291,7 @@ export default function App() {
         )}
         {tab === 'review' && <ReviewView products={products} onChanged={refresh} role={user.role} />}
         {tab === 'share' && canManage && <ShareView />}
+        {tab === 'archive' && user.isAdmin && <ArchiveView />}
         {tab === 'export' && canManage && <ExportView driveConfigured={features?.driveExport ?? false} />}
         {tab === 'admin' && user.isAdmin && <AdminView />}
       </main>
