@@ -36,7 +36,7 @@ import {
   imageExists,
   type PhotoSource,
 } from '../storage/images';
-import { enqueueJob, getLatestJobForProduct, queueDepth, requeueJob, getJob } from '../queue/jobs';
+import { enqueueJob, enqueueOrCoalesceEnhance, getLatestJobForProduct, queueDepth, requeueJob, getJob } from '../queue/jobs';
 import { getBlockingIssue } from '../queue/systemStatus';
 import { findUserById } from '../auth/users';
 import { deriveProductIdFromCpc } from '../integrations/cpcMaster';
@@ -49,6 +49,9 @@ import { isFixCode, cleanNote, USE_REAL_PHOTO } from '../catalog/fixes';
 import { recordFixRequest } from '../db/fixRequests';
 import { matchesFilter, categoryOptions, parseWeightParam } from '../catalog/filters';
 import { cleanReasonCode, cleanReasonNote } from '../catalog/deletionReasons';
+
+/** How long a new angle photo waits for the next one before the run starts. */
+const ANGLE_SETTLE_MS = Number(process.env.ANGLE_SETTLE_MS) || 8000;
 
 export const productsRouter = express.Router();
 
@@ -400,6 +403,7 @@ productsRouter.post('/products/:id/photo', (req: AuthenticatedRequest, res) => {
     productId: product.id,
     type: 'enhance',
     priority: isReshoot ? 10 : 0,
+    payload: { trigger: isReshoot ? 'retake' : 'photo' },
   });
 
   setProductStatus(product.id, 'queued');
@@ -446,8 +450,9 @@ productsRouter.post('/products/:id/angle', (req: AuthenticatedRequest, res) => {
     return;
   }
 
-  // Someone is at the counter with the piece in hand - jump the queue.
-  const job = enqueueJob({ productId: product.id, type: 'enhance', priority: 10 });
+  // Someone is at the counter with the piece in hand - jump the queue. Photos
+  // arrive one after another, so wait a few seconds and let them become one run.
+  const job = enqueueOrCoalesceEnhance({ productId: product.id, priority: 10, payload: { trigger: 'angle' }, holdMs: ANGLE_SETTLE_MS });
   setProductStatus(product.id, 'queued');
   logEvent('product.angle_added', {
     productId: product.id,
@@ -559,7 +564,7 @@ productsRouter.post('/products/:id/fix', (req: AuthenticatedRequest, res) => {
     productId: product.id,
     type: 'enhance',
     priority: 10,
-    payload: useRealPhoto ? { mode: 'faithful' } : { fix: { issues, note }, skipAngleRequest: true },
+    payload: useRealPhoto ? { mode: 'faithful', trigger: 'real_photo' } : { fix: { issues, note }, skipAngleRequest: true, trigger: 'fix' },
   });
   setProductStatus(product.id, 'queued');
   logEvent('product.fix_requested', {
@@ -568,6 +573,8 @@ productsRouter.post('/products/:id/fix', (req: AuthenticatedRequest, res) => {
     issues,
     useRealPhoto,
     hasNote: Boolean(note),
+    // What staff wrote, so the patterns in what they keep asking for can be read back.
+    note,
     previousStatus: product.status,
     itemType: product.itemType || null,
   }, actorFrom(req.user));
@@ -654,10 +661,10 @@ productsRouter.post('/products/:id/requeue', (req: AuthenticatedRequest, res) =>
   const proceedWithoutAngle = req.body?.proceedWithoutAngle === true;
   const existing = getLatestJobForProduct(product.id, 'enhance');
   const jobId = proceedWithoutAngle
-    ? enqueueJob({ productId: product.id, type: 'enhance', priority: 10, payload: { skipAngleRequest: true } }).id
+    ? enqueueJob({ productId: product.id, type: 'enhance', priority: 10, payload: { skipAngleRequest: true, trigger: 'process_anyway' } }).id
     : existing && requeueJob(existing.id)
       ? existing.id
-      : enqueueJob({ productId: product.id, type: 'enhance', priority: 5 }).id;
+      : enqueueJob({ productId: product.id, type: 'enhance', priority: 5, payload: { trigger: 'requeue' } }).id;
 
   setProductStatus(product.id, 'queued');
   logEvent('product.requeued', { productId: product.id, jobId, proceedWithoutAngle }, actorFrom(req.user));

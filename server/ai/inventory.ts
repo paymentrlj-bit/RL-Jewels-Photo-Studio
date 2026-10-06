@@ -156,6 +156,11 @@ export function parseDetailRegions(raw: unknown): DetailRegion[] {
   return regions;
 }
 
+/** The model sometimes wraps its one answer in a list: take the object inside. */
+export function unwrapObject(raw: unknown): unknown {
+  return Array.isArray(raw) ? raw.find((x) => x && typeof x === 'object' && !Array.isArray(x)) ?? null : raw;
+}
+
 export function parseInventory(raw: unknown): DetailInventory | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const r = raw as Record<string, unknown>;
@@ -242,12 +247,21 @@ export async function cropDetailRegions(
 // retry, and so a failure is never cached) and fail soft on odd output.
 // ---------------------------------------------------------------------------
 
+/** What came back, for when the answer was not usable: why it stopped, how long it was, how it began. */
+export interface JsonCallMeta {
+  finishReason?: string;
+  blockReason?: string;
+  textLength?: number;
+  sample?: string;
+}
+
 export async function callJson(
   ai: GoogleGenAI,
   model: string,
   parts: object[],
   timeoutMs: number,
-  onUsage?: (usage: TokenUsage | null) => void
+  onUsage?: (usage: TokenUsage | null) => void,
+  meta?: JsonCallMeta
 ): Promise<unknown> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -259,7 +273,20 @@ export async function callJson(
       config: { responseMimeType: 'application/json', abortSignal: controller.signal },
     });
     onUsage?.(extractUsage(response));
-    return JSON.parse(response.text?.trim() || 'null');
+    const text = response.text?.trim() || '';
+    if (meta) {
+      meta.finishReason = String(response.candidates?.[0]?.finishReason ?? '');
+      meta.blockReason = String((response as { promptFeedback?: { blockReason?: string } }).promptFeedback?.blockReason ?? '');
+      meta.textLength = text.length;
+      meta.sample = text.slice(0, 160);
+    }
+    // Not JSON (cut off, or prose): the caller treats it like an empty answer and says why.
+    try {
+      return JSON.parse(text || 'null');
+    } catch (err) {
+      if (!meta) throw err;
+      return null;
+    }
   } finally {
     clearTimeout(timeout);
   }
@@ -337,16 +364,29 @@ Field guide:
     { text: prompt },
   ];
 
+  const meta: JsonCallMeta = {};
   let raw: unknown;
   try {
-    raw = await callJson(ai, MODEL_INVENTORY, parts, INVENTORY_TIMEOUT_MS, onUsage);
+    raw = await callJson(ai, MODEL_INVENTORY, parts, INVENTORY_TIMEOUT_MS, onUsage, meta);
   } catch (err) {
     // Pro's allowance is gone for now: a count from the lighter model beats no count.
     if (!isDailyQuotaError(err) && !isRateLimitError(err)) throw err;
-    raw = await callJson(ai, MODEL_AUDIT, parts, INVENTORY_TIMEOUT_MS, onUsage);
+    raw = await callJson(ai, MODEL_AUDIT, parts, INVENTORY_TIMEOUT_MS, onUsage, meta);
   }
-  const inventory = parseInventory(raw);
-  if (!inventory) throw new Error('The inventory model returned no usable inventory.');
+  let inventory = parseInventory(unwrapObject(raw));
+  if (!inventory) {
+    // About one in four counts came back empty on busy pieces (haars, sets). It is
+    // a cheap call next to the picture it protects, so ask once more before giving up.
+    try {
+      raw = await callJson(ai, MODEL_INVENTORY, parts, INVENTORY_TIMEOUT_MS, onUsage, meta);
+    } catch (err) {
+      if (!isDailyQuotaError(err) && !isRateLimitError(err)) throw err;
+    }
+    inventory = parseInventory(unwrapObject(raw));
+  }
+  if (!inventory) {
+    throw new Error(`The inventory model returned no usable inventory (finish=${meta.finishReason || '?'}, block=${meta.blockReason || 'none'}, length=${meta.textLength ?? '?'}, starts: ${JSON.stringify(meta.sample ?? '')}).`);
+  }
   return inventory;
 }
 

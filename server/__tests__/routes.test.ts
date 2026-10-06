@@ -216,7 +216,7 @@ describe('extra angle photos', () => {
     const res = await request(app).post(`/api/products/${id}/requeue`).set('Cookie', cookie!).send({ proceedWithoutAngle: true });
     expect(res.status).toBe(202);
     const job = getDb().prepare("SELECT payload FROM jobs WHERE product_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1").get(id) as { payload: string };
-    expect(JSON.parse(job.payload)).toEqual({ skipAngleRequest: true });
+    expect(JSON.parse(job.payload)).toEqual({ skipAngleRequest: true, trigger: 'process_anyway' });
   });
 });
 
@@ -569,7 +569,7 @@ describe('one-tap fix', () => {
       .send({ issues: ['black_beads', 'made-up-code'], note: ' 7 drops,\n not 5 ' });
     expect(res.status).toBe(202);
     expect(res.body.product.status).toBe('queued');
-    expect(latestJobPayload(id)).toEqual({ fix: { issues: ['black_beads'], note: '7 drops, not 5' }, skipAngleRequest: true });
+    expect(latestJobPayload(id)).toEqual({ fix: { issues: ['black_beads'], note: '7 drops, not 5' }, skipAngleRequest: true, trigger: 'fix' });
     const memory = getDb().prepare('SELECT style_key, category, issues, source FROM fix_requests WHERE product_id = ?').get(id);
     expect(memory).toEqual({ style_key: 'attached chain pote', category: 'Mangalsutra', issues: '["black_beads"]', source: 'staff' });
   });
@@ -578,7 +578,7 @@ describe('one-tap fix', () => {
     const { cookie, id } = await pieceInReview();
     const res = await request(app).post(`/api/products/${id}/fix`).set('Cookie', cookie).send({ issues: ['real_photo'] });
     expect(res.status).toBe(202);
-    expect(latestJobPayload(id)).toEqual({ mode: 'faithful' });
+    expect(latestJobPayload(id)).toEqual({ mode: 'faithful', trigger: 'real_photo' });
   });
 
   it('needs to be told what is wrong', async () => {

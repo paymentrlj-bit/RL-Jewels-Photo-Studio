@@ -54,6 +54,8 @@ interface JobRow {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+  /** Not picked up before this time (ISO). Null = straight away. */
+  available_at?: string | null;
 }
 
 function parseJson<T>(raw: string | null, fallback: T): T {
@@ -92,6 +94,8 @@ export function enqueueJob(input: {
   payload?: Record<string, unknown>;
   priority?: number;
   maxAttempts?: number;
+  /** Wait this long before a worker may take it. */
+  holdMs?: number;
 }): Job {
   const row: JobRow = {
     id: newId('job'),
@@ -114,16 +118,17 @@ export function enqueueJob(input: {
     created_at: nowIso(),
     started_at: null,
     finished_at: null,
+    available_at: input.holdMs ? new Date(Date.now() + input.holdMs).toISOString() : null,
   };
 
   getDb()
     .prepare(
       `INSERT INTO jobs (id, product_id, type, status, priority, attempts, max_attempts,
                          payload, result, last_error, stage, locked_by, locked_at,
-                         created_at, started_at, finished_at)
+                         created_at, started_at, finished_at, available_at)
        VALUES (@id, @product_id, @type, @status, @priority, @attempts, @max_attempts,
                @payload, @result, @last_error, @stage, @locked_by, @locked_at,
-               @created_at, @started_at, @finished_at)`
+               @created_at, @started_at, @finished_at, @available_at)`
     )
     .run(row);
 
@@ -141,11 +146,11 @@ export function claimNextJob(workerId: string): Job | null {
     const candidate = db
       .prepare(
         `SELECT id FROM jobs
-         WHERE status = 'queued'
+         WHERE status = 'queued' AND (available_at IS NULL OR available_at <= ?)
          ORDER BY priority DESC, created_at ASC
          LIMIT 1`
       )
-      .get() as { id: string } | undefined;
+      .get(at) as { id: string } | undefined;
 
     if (!candidate) return null;
 
@@ -204,6 +209,25 @@ export function failJob(jobId: string, error: string, retryable: boolean): boole
   return false;
 }
 
+/**
+ * Queues a run for a piece that just got another photo - or, if a run for it is
+ * already waiting, makes that one wait a little longer and reuses it. Photographers
+ * add angles one after another, and every extra run costs a full picture, so a
+ * burst of photos must settle into a single run that sees all of them.
+ */
+export function enqueueOrCoalesceEnhance(input: { productId: string; priority?: number; payload?: Record<string, unknown>; holdMs: number }): Job {
+  const db = getDb();
+  const waiting = db
+    .prepare(`SELECT * FROM jobs WHERE product_id = ? AND type = 'enhance' AND status = 'queued' ORDER BY created_at DESC LIMIT 1`)
+    .get(input.productId) as JobRow | undefined;
+  if (waiting) {
+    const until = new Date(Date.now() + input.holdMs).toISOString();
+    db.prepare(`UPDATE jobs SET available_at = ?, priority = MAX(priority, ?) WHERE id = ?`).run(until, input.priority ?? 0, waiting.id);
+    return toJob({ ...waiting, available_at: until });
+  }
+  return enqueueJob({ productId: input.productId, type: 'enhance', priority: input.priority, payload: input.payload, holdMs: input.holdMs });
+}
+
 // Puts a job back on the queue WITHOUT using up an attempt. For when the account
 // is out of credit or quota: the photo did nothing wrong, and it should start
 // again by itself once an admin has fixed the account (the worker loop holds
@@ -216,6 +240,12 @@ export function deferJob(jobId: string, error: string): void {
        WHERE id = ? AND status = 'running'`
     )
     .run(error.slice(0, 500), jobId);
+}
+
+/** How many photo runs this product has had, this one included (a re-queued job counts once). */
+export function countEnhanceRuns(productId: string): number {
+  const row = getDb().prepare(`SELECT COUNT(*) AS n FROM jobs WHERE product_id = ? AND type = 'enhance'`).get(productId) as { n: number };
+  return row.n;
 }
 
 export function getJob(jobId: string): Job | null {
