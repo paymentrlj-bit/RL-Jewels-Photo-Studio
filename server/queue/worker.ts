@@ -80,6 +80,8 @@ import {
   setJobStage,
   enqueueJob,
   recoverOrphanedJobs,
+  getLatestJobForProduct,
+  countEnhanceRuns,
   type Job,
 } from './jobs';
 import {
@@ -246,6 +248,7 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
   const pipelineStart = Date.now();
   const deadline = pipelineStart + PIPELINE_BUDGET_MS;
   let estimatedCostUsd = 0;
+  const costByStage: Record<string, number> = {};
   let apiCallCount = 0;
   // Recorded on every pipeline.completed event, so reshoot rates with and
   // without the detail inventory can be compared directly in Axiom.
@@ -289,6 +292,12 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
     detailInventoryEnabled: config.detailInventory,
     anglePhotos: angles.length,
     attempt: job.attempts,
+    // Why this run exists, and how many the piece has had: the answer to "where did the
+    // money go" is almost always "a person asked again", and this is how to see which.
+    trigger: job.attempts > 1 ? 'auto_retry' : String(job.payload.trigger ?? 'unknown'),
+    productRunNumber: countEnhanceRuns(product.id),
+    productCostSoFarUsd: Number((product.estimatedCostUsd || 0).toFixed(4)),
+    fixNote: fixNote || undefined,
   });
 
   // Every Gemini attempt funnels through here, so retry/timeout/latency
@@ -321,6 +330,7 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
     // only when Google sent none.
     const cost = usage ? estimateCostUsd(model, usage) : null;
     estimatedCostUsd += cost ?? COST_PER_CALL_USD[model] ?? 0;
+    costByStage[stage] = (costByStage[stage] ?? 0) + (cost ?? COST_PER_CALL_USD[model] ?? 0);
     if (!usage) return;
     logEvent('pipeline.token_usage', {
       requestId,
@@ -374,6 +384,8 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
       totalLatencyMs: Date.now() - pipelineStart,
       apiCallCount,
       estimatedCostUsd: Number(estimatedCostUsd.toFixed(4)),
+      // Where this run's money went, by stage (USD).
+      costByStage: JSON.stringify(Object.fromEntries(Object.entries(costByStage).map(([k, v]) => [k, Number(v.toFixed(4))]))),
       modelUsed: detail.modelUsed,
       attemptCount: detail.attemptCount,
       itemType: product.itemType || null,
@@ -557,7 +569,10 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
   // the last gate before a photo ships. (Pro "thinks" at a cost per call that
   // is several times a photo's whole image-generation cost.)
   const preRisk = computeRisk({ itemType: product.itemType, size: product.size, weight: product.netWeightGrams || product.grossWeightGrams });
-  const proFirstAudit = preRisk.score >= AUDIT_PRO_MIN_RISK;
+  // Anything that gets the detail count is a piece with counts to get wrong (chains,
+  // hooks, beads, earrings, sets), so it gets the strong grader too: the cheap one
+  // passed 101 of 103 such renders in one day while the reviewer sent back over half.
+  const proFirstAudit = preRisk.score >= AUDIT_PRO_MIN_RISK || inventoryNeeded({ itemType: product.itemType, size: product.size });
 
   const runAudit = async (stage: string, imageBase64: string, imageMime: string): Promise<AuditResult> => {
     const attemptWith = (model: string) =>
@@ -659,7 +674,7 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
       finish('awaiting_review', { reason, checklist: null, modelUsed: 'faithful', attemptCount: why.attemptCount, renderMode: 'faithful' });
       setProductStatus(product.id, 'awaiting_review');
       completeJob(job.id, 'succeeded', { processedPhotoId: processedPhoto.id, modelUsed: 'faithful', reason });
-      enqueueJob({ productId: product.id, type: 'copy', priority: -1 });
+      queueCopyIfNeeded(product.id);
       return true;
     } catch (err) {
       logEvent('pipeline.faithful_unavailable', {
@@ -899,7 +914,7 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
     finish('awaiting_review', { reason, checklist: null, modelUsed: MODEL_ENHANCE_DEFAULT, attemptCount: 1 });
     setProductStatus(product.id, 'awaiting_review');
     completeJob(job.id, 'succeeded', { processedPhotoId: unchecked.id, modelUsed: MODEL_ENHANCE_DEFAULT, attemptCount: 1, reason: 'audit_unavailable' });
-    enqueueJob({ productId: product.id, type: 'copy', priority: -1 });
+    queueCopyIfNeeded(product.id);
     return;
   }
   let modelUsed = MODEL_ENHANCE_DEFAULT;
@@ -908,6 +923,7 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
   logEvent('pipeline.audit_verdict', {
     requestId,
     attempt: 1,
+    auditModel: proFirstAudit ? MODEL_AUDIT_STRONG : MODEL_AUDIT,
     overallPass: audit.overallPass,
     reason: audit.reason,
     checklist: audit.checklist,
@@ -1056,12 +1072,26 @@ Correct this specific issue while still following every rule above.`;
   // Copy generation is queued rather than run inline so the photo shows up
   // for review the moment it is ready, instead of waiting on a text call the
   // reviewer does not need yet.
-  enqueueJob({ productId: product.id, type: 'copy', priority: -1 });
+  queueCopyIfNeeded(product.id);
 }
 
 // ---------------------------------------------------------------------------
 // Catalogue copy. Runs against the PROCESSED photo, as in v1.
 // ---------------------------------------------------------------------------
+
+/**
+ * The catalogue copy is written from the ORIGINAL photo, which a Fix or an extra
+ * angle does not change - so writing it again after every re-run bought the same
+ * text (125 Pro calls for 58 products in one day, and the daily Pro allowance with
+ * them). Write it once, when the piece has none.
+ */
+function queueCopyIfNeeded(productId: string): void {
+  const current = getProduct(productId);
+  if (!current || current.description.trim()) return;
+  const waiting = getLatestJobForProduct(productId, 'copy');
+  if (waiting && (waiting.status === 'queued' || waiting.status === 'running')) return;
+  enqueueJob({ productId, type: 'copy', priority: -1 });
+}
 
 async function runCopyJob(job: Job, workerId: string): Promise<void> {
   const product = getProduct(job.productId);
@@ -1079,6 +1109,7 @@ async function runCopyJob(job: Job, workerId: string): Promise<void> {
   }
 
   const startedAt = Date.now();
+  let copyCostUsd = 0;
   setJobStage(job.id, 'writing_copy');
 
   try {
@@ -1099,13 +1130,17 @@ async function runCopyJob(job: Job, workerId: string): Promise<void> {
           staffNote: product.staffNote,
         }, (usage) => {
           if (!usage) return;
+          const cost = estimateCostUsd(MODEL_COPY, usage);
+          copyCostUsd += cost ?? 0;
           logEvent('pipeline.token_usage', {
             productId: product.id,
             stage: 'copy',
             model: MODEL_COPY,
             promptTokens: usage.promptTokens,
             candidatesTokens: usage.candidatesTokens,
+            thoughtsTokens: usage.thoughtsTokens,
             totalTokens: usage.totalTokens,
+            estimatedCostUsd: cost === null ? undefined : Number(cost.toFixed(5)),
           });
         }),
       2
@@ -1123,7 +1158,7 @@ async function runCopyJob(job: Job, workerId: string): Promise<void> {
       return;
     }
 
-    applyGeneratedCopy(product.id, copy, COST_PER_CALL_USD[MODEL_COPY] || 0);
+    applyGeneratedCopy(product.id, copy, copyCostUsd);
 
     logEvent('copy.generated', {
       productId: product.id,
@@ -1140,7 +1175,7 @@ async function runCopyJob(job: Job, workerId: string): Promise<void> {
       hasSeoFields: Boolean(copy.metaTitle && copy.metaDescription),
       metaTitleLength: copy.metaTitle.length || null,
       metaDescriptionLength: copy.metaDescription.length || null,
-      estimatedCostUsd: COST_PER_CALL_USD[MODEL_COPY] || 0,
+      estimatedCostUsd: Number(copyCostUsd.toFixed(5)),
     });
 
     completeJob(job.id, 'succeeded', { name: copy.name });

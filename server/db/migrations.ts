@@ -295,6 +295,15 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE products ADD COLUMN archived_note TEXT NOT NULL DEFAULT '';
     `,
   },
+  {
+    version: 10,
+    name: 'jobs can wait a few seconds before they are picked up',
+    up: `
+      -- Lets a burst of extra photos of one piece settle into ONE run instead of
+      -- starting a full (paid) run per photo.
+      ALTER TABLE jobs ADD COLUMN available_at TEXT;
+    `,
+  },
 ];
 
 export function runMigrations(db: BetterSqlite3.Database): void {

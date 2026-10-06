@@ -39,6 +39,8 @@ import { startWorkers, stopWorkers } from '../queue/worker';
 import { getBlockingIssue, clearBlockingIssue } from '../queue/systemStatus';
 import { clearSegmentationCache, clearInventoryCache } from '../queue/groundingCache';
 import { AUDIT_CHECKS } from '../ai/operations';
+import { MODEL_AUDIT, MODEL_AUDIT_STRONG } from '../ai/client';
+import { listProducts, updateProduct } from '../db/products';
 import { inventoryNeeded } from '../catalog/risk';
 
 let dir: string;
@@ -138,6 +140,42 @@ describe('the worker', () => {
     await until(() => getJob(job.id)!.status === 'queued');
     expect(getJob(job.id)!.attempts).toBe(0);
     expect(getProduct(id)!.status).toBe('queued');
+  });
+});
+
+describe('which grader checks a render', () => {
+  const graderFor = async (itemType: string) => {
+    const id = shoot(itemType);
+    enqueueJob({ productId: id, type: 'enhance' });
+    startWorkers();
+    await until(() => ['awaiting_review', 'needs_reshoot', 'needs_angle', 'failed'].includes(getProduct(id)!.status));
+    await stopWorkers();
+    return mocks.auditOutput.mock.calls[0]?.[6];
+  };
+
+  it('gives chains, haars and sets the strong grader, and plain pieces the cheap one', async () => {
+    mocks.identifyPiece.mockResolvedValue(null);
+    expect(await graderFor('FANCY HAR SET')).toBe(MODEL_AUDIT_STRONG);
+    vi.clearAllMocks();
+    mocks.enhanceImage.mockResolvedValue({ imageBase64: photo, mimeType: 'image/jpeg' });
+    mocks.auditOutput.mockResolvedValue({ overallPass: true, modelClaimedPass: true, verdictDisagreed: false, reason: 'ok', checklist: Object.fromEntries(AUDIT_CHECKS.map((c) => [c, true])), originalCounts: '', enhancedCounts: '' });
+    expect(await graderFor('Stud')).toBe(MODEL_AUDIT);
+  });
+});
+
+describe('catalogue copy', () => {
+  const copyJobs = (id: string) => (getDb().prepare(`SELECT COUNT(*) AS n FROM jobs WHERE product_id = ? AND type = 'copy'`).get(id) as { n: number }).n;
+
+  it('is queued for a piece with no description, and not again for one that already has it', async () => {
+    const fresh = shoot('Stud');
+    const written = shoot('Stud');
+    updateProduct(written, { description: 'Already written.' });
+    for (const id of [fresh, written]) enqueueJob({ productId: id, type: 'enhance' });
+    startWorkers();
+    await until(() => [fresh, written].every((id) => getProduct(id)!.status === 'awaiting_review'));
+    expect(copyJobs(fresh)).toBe(1);
+    expect(copyJobs(written)).toBe(0);
+    expect(listProducts().length).toBe(2);
   });
 });
 
