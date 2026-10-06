@@ -40,7 +40,6 @@ import { getBlockingIssue, clearBlockingIssue } from '../queue/systemStatus';
 import { clearSegmentationCache, clearInventoryCache } from '../queue/groundingCache';
 import { AUDIT_CHECKS } from '../ai/operations';
 import { MODEL_AUDIT, MODEL_AUDIT_STRONG } from '../ai/client';
-import { listProducts, updateProduct } from '../db/products';
 import { inventoryNeeded } from '../catalog/risk';
 
 let dir: string;
@@ -163,19 +162,15 @@ describe('which grader checks a render', () => {
   });
 });
 
-describe('catalogue copy', () => {
-  const copyJobs = (id: string) => (getDb().prepare(`SELECT COUNT(*) AS n FROM jobs WHERE product_id = ? AND type = 'copy'`).get(id) as { n: number }).n;
-
-  it('is queued for a piece with no description, and not again for one that already has it', async () => {
-    const fresh = shoot('Stud');
-    const written = shoot('Stud');
-    updateProduct(written, { description: 'Already written.' });
-    for (const id of [fresh, written]) enqueueJob({ productId: id, type: 'enhance' });
+describe('counting tries', () => {
+  it('counts one try per picture drawn, and writes no catalogue copy yet', async () => {
+    const drawn = shoot('Stud');
+    enqueueJob({ productId: drawn, type: 'enhance' });
     startWorkers();
-    await until(() => [fresh, written].every((id) => getProduct(id)!.status === 'awaiting_review'));
-    expect(copyJobs(fresh)).toBe(1);
-    expect(copyJobs(written)).toBe(0);
-    expect(listProducts().length).toBe(2);
+    await until(() => getProduct(drawn)!.status === 'awaiting_review');
+    expect(getProduct(drawn)!.aiRuns).toBe(1);
+    // Copy is no longer written after every run - it waits for approval.
+    expect((getDb().prepare(`SELECT COUNT(*) AS n FROM jobs WHERE product_id = ? AND type = 'copy'`).get(drawn) as { n: number }).n).toBe(0);
   });
 });
 

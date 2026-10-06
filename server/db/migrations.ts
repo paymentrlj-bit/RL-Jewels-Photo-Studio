@@ -304,6 +304,15 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE jobs ADD COLUMN available_at TEXT;
     `,
   },
+  {
+    version: 11,
+    name: 'how many AI pictures a product has had, and extra tries an admin allowed',
+    up: `
+      -- Every picture is paid for. A product gets a few tries; an admin can allow more.
+      ALTER TABLE products ADD COLUMN ai_runs INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE products ADD COLUMN extra_tries INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
 ];
 
 export function runMigrations(db: BetterSqlite3.Database): void {

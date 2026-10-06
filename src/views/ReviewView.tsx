@@ -14,6 +14,7 @@ import { AngleCaptureButton } from '../components/AngleCaptureButton';
 import { FixPanel } from '../components/FixPanel';
 import { DeleteReasonDialog } from '../components/DeleteReasonDialog';
 import { ReshootPanel } from '../components/ReshootPanel';
+import { TriesNotice, isOutOfTries } from '../components/TriesNotice';
 import { PhotoViewer, type ViewerPhoto } from '../components/PhotoViewer';
 import { SimilarPieces } from '../components/SimilarList';
 import type { Product, Role } from '../types';
@@ -126,6 +127,7 @@ export const ReviewView: React.FC<ReviewViewProps> = ({ products, onChanged, rol
                 product={product}
                 busy={busyId === product.id}
                 canManage={canManage}
+                isAdmin={isAdmin}
                 onApprove={() => act(product.id, () => api.approve(product.id))}
                 onReject={(reasons, note) => act(product.id, () => api.reject(product.id, note, reasons))}
                 onDelete={() => deleteOne(product.id)}
@@ -148,6 +150,7 @@ export const ReviewView: React.FC<ReviewViewProps> = ({ products, onChanged, rol
                 key={product.id}
                 product={product}
                 busy={busyId === product.id}
+                isAdmin={isAdmin}
                 onRequeue={() => act(product.id, () => api.requeue(product.id))}
                 onProceed={() => act(product.id, () => api.requeue(product.id, { proceedWithoutAngle: true }))}
                 onDelete={() => void deleteOne(product.id)}
@@ -216,12 +219,14 @@ const ReviewCard: React.FC<{
   product: Product;
   busy: boolean;
   canManage: boolean;
+  isAdmin: boolean;
   onApprove: () => void;
   onReject: (reasons: string[], note: string) => void;
   onDelete: () => void;
   onChanged: () => void;
   onError: (message: string) => void;
-}> = ({ product, busy, canManage, onApprove, onReject, onDelete, onChanged, onError }) => {
+}> = ({ product, busy, canManage, isAdmin, onApprove, onReject, onDelete, onChanged, onError }) => {
+  const outOfTries = isOutOfTries(product);
   const [showChecks, setShowChecks] = useState(false);
   const [mode, setMode] = useState<'idle' | 'rejecting' | 'fixing'>('idle');
   const isFaithful = product.renderMode === 'faithful';
@@ -305,10 +310,10 @@ const ReviewCard: React.FC<{
         )}
 
         {!product.description && (
-          // Copy is queued separately from the photo, so it can legitimately
-          // still be on its way. Saying so beats an unexplained empty space.
+          // The catalogue copy is written once the piece is approved, so there is
+          // nothing to read yet. Saying so beats an unexplained empty space.
           <p className="flex items-center gap-1.5 text-xs text-stone-400">
-            <Sparkles className="w-3 h-3" /> Catalogue copy is still being written…
+            <Sparkles className="w-3 h-3" /> The catalogue copy is written once you approve this piece.
           </p>
         )}
 
@@ -360,6 +365,7 @@ const ReviewCard: React.FC<{
       </div>
 
       <div className="border-t border-stone-200 p-3">
+        <TriesNotice product={product} isAdmin={isAdmin} onChanged={onChanged} onError={onError} />
         {mode === 'fixing' ? (
           <FixPanel
             product={product}
@@ -412,22 +418,26 @@ const ReviewCard: React.FC<{
                 <ImageIcon className="w-4 h-4" /> Use real photo
               </button>
             )}
-            <button
-              type="button"
-              onClick={() => setMode('fixing')}
-              disabled={busy}
-              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-700 hover:bg-stone-50 disabled:opacity-60"
-            >
-              <Wand2 className="w-4 h-4" /> Fix
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode('rejecting')}
-              disabled={busy}
-              className="min-h-[44px] rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-700 hover:bg-stone-50 disabled:opacity-60"
-            >
-              Reshoot
-            </button>
+            {!outOfTries && (
+              <button
+                type="button"
+                onClick={() => setMode('fixing')}
+                disabled={busy}
+                className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-700 hover:bg-stone-50 disabled:opacity-60"
+              >
+                <Wand2 className="w-4 h-4" /> Fix
+              </button>
+            )}
+            {!outOfTries && (
+              <button
+                type="button"
+                onClick={() => setMode('rejecting')}
+                disabled={busy}
+                className="min-h-[44px] rounded-lg border border-stone-300 px-3 py-2 text-sm text-stone-700 hover:bg-stone-50 disabled:opacity-60"
+              >
+                Reshoot
+              </button>
+            )}
             <button
               type="button"
               onClick={onDelete}
@@ -448,12 +458,14 @@ const ReviewCard: React.FC<{
 const ProblemRow: React.FC<{
   product: Product;
   busy: boolean;
+  isAdmin: boolean;
   onRequeue: () => void;
   onProceed: () => void;
   onDelete: () => void;
   onChanged: () => void;
   onError: (message: string) => void;
-}> = ({ product, busy, onRequeue, onProceed, onDelete, onChanged, onError }) => {
+}> = ({ product, busy, isAdmin, onRequeue, onProceed, onDelete, onChanged, onError }) => {
+  const outOfTries = isOutOfTries(product);
   const [fixing, setFixing] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const [viewingAi, setViewingAi] = useState(false);
@@ -516,16 +528,19 @@ const ProblemRow: React.FC<{
             // on our side, so retrying costs nothing but a moment.
             <p className="mt-1 text-xs text-stone-400">This was a processing error, not a problem with the photo. Retrying is usually enough.</p>
           )}
+          <div className="mt-2">
+            <TriesNotice product={product} isAdmin={isAdmin} onChanged={onChanged} onError={onError} />
+          </div>
         </div>
         <div className="flex flex-wrap gap-2">
           {/* A failed audit is often a detail the first photo showed badly -
               another angle fixes that without redoing the whole shoot. */}
-          {product.status !== 'failed' && (
+          {product.status !== 'failed' && !outOfTries && (
             <AngleCaptureButton productId={product.id} onAdded={onChanged} onError={onError} />
           )}
           {/* Before a full reshoot: say what went wrong and have it redone,
               or use the real photo cut out. */}
-          {product.status === 'needs_reshoot' && !fixing && (
+          {product.status === 'needs_reshoot' && !fixing && !outOfTries && (
             <button
               type="button"
               onClick={() => setFixing(true)}
@@ -535,7 +550,7 @@ const ProblemRow: React.FC<{
               <Wand2 className="w-4 h-4" /> Fix
             </button>
           )}
-          {product.status === 'needs_angle' ? (
+          {outOfTries ? null : product.status === 'needs_angle' ? (
             <button
               type="button"
               onClick={onProceed}
