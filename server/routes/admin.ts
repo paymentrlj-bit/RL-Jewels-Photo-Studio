@@ -275,7 +275,7 @@ adminRouter.get('/analytics/summary', async (req, res) => {
       calibrated: COSTS_ARE_CALIBRATED,
       note: COSTS_ARE_CALIBRATED
         ? 'Using the COST_*_USD rates configured for this deployment.'
-        : 'PLACEHOLDER RATES - these are estimates, not real Gemini billing. Check your Cloud Billing console after a pilot run and set the COST_*_USD environment variables to make these numbers trustworthy.',
+        : 'Estimated from the token counts Google reports (hidden "thinking" tokens included) at Google\'s list prices. The true figure is on the AI Studio spend page or Cloud Billing - use that for money, this to see where it goes.',
     },
 
     qualityChecks: {

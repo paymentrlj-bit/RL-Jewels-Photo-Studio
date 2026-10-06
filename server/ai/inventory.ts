@@ -38,6 +38,7 @@ import {
   withTransientRetry,
   extractUsage,
   countModelCall,
+  generateWithThinkingLimit,
   isDailyQuotaError,
   isRateLimitError,
   MODEL_AUDIT,
@@ -252,10 +253,10 @@ export async function callJson(
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     countModelCall(model);
-    const response = await ai.models.generateContent({
+    const response = await generateWithThinkingLimit(ai, {
       model,
       contents: { parts } as never,
-      config: { responseMimeType: 'application/json', abortSignal: controller.signal } as never,
+      config: { responseMimeType: 'application/json', abortSignal: controller.signal },
     });
     onUsage?.(extractUsage(response));
     return JSON.parse(response.text?.trim() || 'null');

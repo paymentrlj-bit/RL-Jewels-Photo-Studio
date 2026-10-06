@@ -14,9 +14,11 @@ import {
   isBillingError,
   isDailyQuotaError,
   isRateLimitError,
+  AUDIT_PRO_MIN_RISK,
   isModelNotFoundError,
   debugDetail,
   COST_PER_CALL_USD,
+  estimateCostUsd,
   MODEL_ENHANCE_DEFAULT,
   MODEL_ENHANCE_ESCALATED,
   MODEL_AUDIT,
@@ -65,8 +67,8 @@ import { buildStaffTagsBlock } from '../catalog/tags';
 import { buildFixBlock, AUDIT_CHECK_TO_FIX, isFixCode } from '../catalog/fixes';
 import { designMemoryFor, buildDesignMemoryBlock, recordFixRequest } from '../db/fixRequests';
 import { buildFaithfulImage, FaithfulUnavailableError } from '../imaging/faithful';
-import { cachedSegmentation, cachedInventory } from './groundingCache';
-import { reportBlockingIssue, clearBlockingIssue } from './systemStatus';
+import { cachedSegmentation, cachedInventory, cachedIdentity } from './groundingCache';
+import { reportBlockingIssue, clearBlockingIssue, getBlockingIssue } from './systemStatus';
 import { getEnhancePrompt } from '../settings';
 import { logEvent, newRequestId } from '../logging';
 import { runDriveExportJob } from './driveExportWorker';
@@ -89,6 +91,9 @@ import {
 } from '../db/products';
 import { getLatestPhoto, listPhotos, saveImage, readImageBase64, readImageBuffer, imageExists } from '../storage/images';
 
+// While a billing/quota block is showing, one job is let through this often to test it.
+const PROBE_EVERY_MS = 5 * 60 * 1000;
+let lastProbeAt = 0;
 let running = false;
 let activeWorkers = 0;
 const workerTimers: ReturnType<typeof setTimeout>[] = [];
@@ -131,7 +136,20 @@ async function workerLoop(workerId: string): Promise<void> {
   while (running) {
     let job: Job | null = null;
     try {
+      // Out of credit or quota: every photo would pay for its early steps and
+      // then fail. Hold the queue and let one job through every few minutes to
+      // find out whether it has cleared (a success clears the banner).
+      const blocked = getBlockingIssue();
+      if (blocked && (blocked.code === 'billing_cap' || blocked.code === 'quota_exceeded') && Date.now() - lastProbeAt < PROBE_EVERY_MS) {
+        await new Promise((r) => {
+          const timer = setTimeout(r, IDLE_POLL_MS);
+          timer.unref?.();
+          workerTimers.push(timer);
+        });
+        continue;
+      }
       job = claimNextJob(workerId);
+      if (job && blocked) lastProbeAt = Date.now();
     } catch (err) {
       console.error(`[queue] ${workerId} could not claim a job:`, (err as Error).message);
     }
@@ -268,7 +286,6 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
   // for spotting flakiness or a stage getting slower over time.
   const recordAttempt = (stage: string, model: string) => (info: RetryAttemptInfo) => {
     apiCallCount++;
-    estimatedCostUsd += COST_PER_CALL_USD[model] || 0;
     const timedOut =
       (info.error as Error)?.name === 'AbortError' ||
       /aborted/i.test(String((info.error as Error)?.message || ''));
@@ -290,6 +307,10 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
   // TokenUsage comment for why this is the path to an exact cost figure
   // instead of another guessed rate.
   const recordUsage = (stage: string, model: string) => (usage: TokenUsage | null) => {
+    // Cost from the real token counts (thinking tokens included); a flat guess
+    // only when Google sent none.
+    const cost = usage ? estimateCostUsd(model, usage) : null;
+    estimatedCostUsd += cost ?? COST_PER_CALL_USD[model] ?? 0;
     if (!usage) return;
     logEvent('pipeline.token_usage', {
       requestId,
@@ -298,7 +319,9 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
       model,
       promptTokens: usage.promptTokens,
       candidatesTokens: usage.candidatesTokens,
+      thoughtsTokens: usage.thoughtsTokens,
       totalTokens: usage.totalTokens,
+      estimatedCostUsd: cost === null ? undefined : Number(cost.toFixed(5)),
     });
   };
 
@@ -406,7 +429,6 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
     );
     if (!cacheHit) {
       apiCallCount++;
-      estimatedCostUsd += COST_PER_CALL_USD[MODEL_SEGMENT] || 0;
     }
     logEvent('pipeline.segmentation', {
       requestId,
@@ -475,16 +497,21 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
   const runIdentity = async (): Promise<PieceIdentity | null> => {
     const startedAt = Date.now();
     try {
-      const found = await withTransientRetry(
-        () => identifyPiece(ai, cleanBase64, mimeType, angles, { itemLine: item.line, sizeInches: lengthInches }, recordUsage('identity', MODEL_AUDIT_STRONG)),
-        2,
-        deadline,
-        recordAttempt('identity', MODEL_AUDIT_STRONG)
+      // Cached per photo set: a re-run (fix, retry, "process anyway") of the same
+      // photos does not pay to be told the same thing twice.
+      const { result: found, cacheHit } = await cachedIdentity([cleanBase64, ...angles.map((a) => a.base64)].join('|'), () =>
+        withTransientRetry(
+          () => identifyPiece(ai, cleanBase64, mimeType, angles, { itemLine: item.line, sizeInches: lengthInches }, recordUsage('identity', MODEL_AUDIT)),
+          2,
+          deadline,
+          recordAttempt('identity', MODEL_AUDIT)
+        )
       );
       logEvent('pipeline.identity', {
         requestId,
         productId: product.id,
         found: Boolean(found),
+        cacheHit,
         family: found?.family ?? null,
         confidence: found?.confidence ?? null,
         pieceCount: found?.pieceCount ?? null,
@@ -503,6 +530,14 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
   // The audit's grader. The strong model by default - the light one shared the
   // enhance model's blind spots and let a mangalsutra pass as earrings - with
   // the light one as a fallback if the strong one has been withdrawn.
+  // The first audit uses the expensive Pro grader only for pieces that tend to
+  // go wrong (complex, long, black-bead, sets, odd weight); a plain ring gets
+  // the cheap grader. The re-audit after a failed attempt is always Pro: it is
+  // the last gate before a photo ships. (Pro "thinks" at a cost per call that
+  // is several times a photo's whole image-generation cost.)
+  const preRisk = computeRisk({ itemType: product.itemType, size: product.size, weight: product.netWeightGrams || product.grossWeightGrams });
+  const proFirstAudit = preRisk.score >= AUDIT_PRO_MIN_RISK;
+
   const runAudit = async (stage: string, imageBase64: string, imageMime: string): Promise<AuditResult> => {
     const attemptWith = (model: string) =>
       withTransientRetry(
@@ -511,6 +546,7 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
         deadline,
         recordAttempt(stage, model)
       );
+    if (stage === 'audit' && !proFirstAudit) return attemptWith(MODEL_AUDIT);
     try {
       return await attemptWith(MODEL_AUDIT_STRONG);
     } catch (err) {
@@ -539,7 +575,6 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
       const { result, cacheHit } = await cachedSegmentation(cleanBase64, () => segmentJewelry(ai, cleanBase64, mimeType, recordUsage('segment', MODEL_SEGMENT)));
       if (!cacheHit) {
         apiCallCount++;
-        estimatedCostUsd += COST_PER_CALL_USD[MODEL_SEGMENT] || 0;
       }
       outline = result;
     }

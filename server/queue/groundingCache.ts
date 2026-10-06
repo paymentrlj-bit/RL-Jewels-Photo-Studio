@@ -12,6 +12,7 @@
 import crypto from 'crypto';
 import type { SegmentationResult } from '../ai/operations';
 import type { InventoryAnalysis } from '../ai/inventory';
+import type { PieceIdentity } from '../ai/identity';
 
 const TTL_MS = 15 * 60 * 1000;
 // Each entry is small (a polygon, or a few hundred bytes of inventory JSON -
@@ -69,6 +70,7 @@ function createImageResultCache<T>() {
 
 const segmentationCache = createImageResultCache<SegmentationResult | null>();
 const inventoryCache = createImageResultCache<InventoryAnalysis>();
+const identityCache = createImageResultCache<PieceIdentity | null>();
 
 /**
  * A null result is cached too: an image the segmentation model cannot trace is
@@ -88,6 +90,14 @@ export function cachedInventory(
   compute: () => Promise<InventoryAnalysis>
 ): Promise<CachedResult<InventoryAnalysis>> {
   return inventoryCache.get(imageBase64, compute);
+}
+
+/** What the piece is, per photo set: a re-run of the same photos does not ask again. */
+export function cachedIdentity(
+  key: string,
+  compute: () => Promise<PieceIdentity | null>
+): Promise<CachedResult<PieceIdentity | null>> {
+  return identityCache.get(key, compute);
 }
 
 export function clearSegmentationCache(): void {

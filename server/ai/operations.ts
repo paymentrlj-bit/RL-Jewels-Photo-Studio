@@ -14,6 +14,7 @@ import {
   ENHANCE_IMAGE_SIZE,
   MODEL_AUDIT_STRONG,
   countModelCall,
+  generateWithThinkingLimit,
   modelForRole,
   AUDIT_TIMEOUT_MS,
   SEGMENT_TIMEOUT_MS,
@@ -196,7 +197,7 @@ export async function auditOutput(
   const timeout = setTimeout(() => controller.abort(), AUDIT_TIMEOUT_MS);
   try {
     countModelCall(model);
-    const response = await ai.models.generateContent({
+    const response = await generateWithThinkingLimit(ai, {
       model,
       contents: {
         parts: [
@@ -209,7 +210,7 @@ export async function auditOutput(
       config: {
         responseMimeType: 'application/json',
         abortSignal: controller.signal,
-      } as never,
+      },
     });
     onUsage?.(extractUsage(response));
 
@@ -379,7 +380,7 @@ export async function generateCopy(
   try {
     const copyModel = modelForRole('flexible') === MODEL_AUDIT_STRONG ? MODEL_COPY : MODEL_AUDIT;
     countModelCall(copyModel);
-    const response = await ai.models.generateContent({
+    const response = await generateWithThinkingLimit(ai, {
       model: copyModel,
       contents: {
         parts: [{ inlineData: { mimeType, data: imageBase64 } }, { text: prompt }],
@@ -387,7 +388,7 @@ export async function generateCopy(
       config: {
         responseMimeType: 'application/json',
         abortSignal: controller.signal,
-      } as never,
+      },
     });
     onUsage?.(extractUsage(response));
 
