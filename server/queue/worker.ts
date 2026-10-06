@@ -61,7 +61,7 @@ import {
 import { aspectRatioFor, describeItemType, parseLengthInches } from '../catalog/taxonomy';
 import { indexProduct } from '../similarity';
 import { whitenBackground } from '../imaging/background';
-import { computeRisk } from '../catalog/risk';
+import { computeRisk, inventoryNeeded } from '../catalog/risk';
 import { describeNameRules } from '../catalog/copyRules';
 import { buildStaffTagsBlock } from '../catalog/tags';
 import { buildFixBlock, AUDIT_CHECK_TO_FIX, isFixCode } from '../catalog/fixes';
@@ -76,6 +76,7 @@ import {
   claimNextJob,
   completeJob,
   failJob,
+  deferJob,
   setJobStage,
   enqueueJob,
   recoverOrphanedJobs,
@@ -90,6 +91,9 @@ import {
   applyGeneratedCopy,
 } from '../db/products';
 import { getLatestPhoto, listPhotos, saveImage, readImageBase64, readImageBuffer, imageExists } from '../storage/images';
+
+const BILLING_REASON = 'The Gemini API key has run out of its prepaid credit. An admin needs to go to https://ai.studio/projects, open this project and add a payment method there - not the store\'s general Google Cloud billing. Photos will carry on by themselves once it is added.';
+const QUOTA_REASON = 'Google Gemini says the daily request limit for this API key has been used up. It resets on its own (usually at midnight Pacific time), or an admin can raise the limit by turning on billing for the key at https://ai.studio/projects. Photos will process again once it clears.';
 
 // While a billing/quota block is showing, one job is let through this often to test it.
 const PROBE_EVERY_MS = 5 * 60 * 1000;
@@ -124,9 +128,10 @@ export async function stopWorkers(): Promise<void> {
   for (const timer of workerTimers) clearTimeout(timer);
   workerTimers.length = 0;
 
-  // Give in-flight jobs a moment to finish cleanly. Anything still running
-  // after this gets recovered at next boot, so nothing is lost either way.
-  const deadline = Date.now() + 10_000;
+  // Let in-flight photos finish (a pipeline takes 1-2 minutes, and deploy/docker-compose.yml
+  // gives the container 150s): killing one mid-way wastes the image already paid for and it
+  // starts over at the next boot. Anything still running after this is requeued then.
+  const deadline = Date.now() + (Number(process.env.SHUTDOWN_GRACE_MS) || 120_000);
   while (activeWorkers > 0 && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 200));
   }
@@ -170,10 +175,15 @@ async function workerLoop(workerId: string): Promise<void> {
       // A throw that escapes runJob is a bug rather than an expected failure,
       // but it must never take the worker loop down with it - one bad job
       // would otherwise stall the whole queue.
-      if (isDailyQuotaError(err)) {
-        // Say so on every screen, rather than leaving photos to fail one by one with no explanation.
-        reportBlockingIssue('quota_exceeded', 'Google Gemini says the daily request limit for this API key has been used up. It resets on its own (usually at midnight Pacific time), or an admin can raise the limit by turning on billing for the key at https://ai.studio/projects. Photos will process again once it clears.');
-        logEvent('pipeline.quota_exceeded', { workerId, jobId: job.id, errorMessage: debugDetail(err).slice(0, 400) });
+      if (isBillingError(err) || isDailyQuotaError(err)) {
+        // Say so on every screen, and keep the photo: it starts again by itself
+        // once the account is sorted out, rather than failing for someone to retry by hand.
+        const billing = isBillingError(err);
+        reportBlockingIssue(billing ? 'billing_cap' : 'quota_exceeded', billing ? BILLING_REASON : QUOTA_REASON);
+        logEvent(billing ? 'pipeline.billing_blocked' : 'pipeline.quota_exceeded', { workerId, jobId: job.id, errorMessage: debugDetail(err).slice(0, 400) });
+        deferJob(job.id, debugDetail(err));
+        setProductStatus(job.productId, 'queued');
+        continue;
       }
       console.error(`[queue] ${workerId} crashed on job ${job.id}:`, err);
       const requeued = failJob(job.id, debugDetail(err), isTransientError(err));
@@ -344,7 +354,7 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
       itemType: product.itemType,
       size: product.size,
       weight: product.netWeightGrams || product.grossWeightGrams,
-      inventoryRan: config.detailInventory ? detailInventoryUsed : undefined,
+      inventoryRan: config.detailInventory && !inventorySkipped ? detailInventoryUsed : undefined,
       lowConfidenceElements,
       identity: identityVerdict.status,
       attempts: detail.attemptCount,
@@ -444,8 +454,16 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
   // audit both treat as ground truth. Fails open exactly like segmentation -
   // any error and the pipeline runs as it did before this stage existed.
   const item = describeItemType(product.itemType);
+  // Plain pieces (a stud, a coin) have nothing to count, so skip the detect and
+  // counting calls - unless staff added angles or asked for a fix, which means
+  // this piece needs the full treatment.
+  const inventorySkipped = config.detailInventory && angles.length === 0 && fixCodes.length === 0 && !fixNote && !inventoryNeeded({ itemType: product.itemType, size: product.size });
   const runInventory = async (): Promise<{ inventory: DetailInventory; crops: ReferenceImage[] } | null> => {
     if (!config.detailInventory) return null;
+    if (inventorySkipped) {
+      logEvent('pipeline.inventory', { requestId, found: false, skipped: true, itemType: product.itemType || null });
+      return null;
+    }
     const startedAt = Date.now();
     try {
       const fresh: { crops?: ReferenceImage[] } = {};
@@ -481,6 +499,8 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
       });
       return { inventory: analysis.inventory, crops };
     } catch (err) {
+      // Out of credit or quota: every later step would fail too. Stop here.
+      if (isBillingError(err) || isDailyQuotaError(err)) throw err;
       logEvent('pipeline.inventory', {
         requestId,
         found: false,
@@ -522,6 +542,7 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
       });
       return found;
     } catch (err) {
+      if (isBillingError(err) || isDailyQuotaError(err)) throw err;
       logEvent('pipeline.identity', { requestId, productId: product.id, found: false, latencyMs: Date.now() - startedAt, errorMessage: debugDetail(err) });
       return null;
     }
@@ -820,25 +841,16 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
     }
     referenceImageCount = enhanceRefs.length;
   } catch (err) {
-    if (isBillingError(err)) {
-      // Precise on purpose: this is Gemini's own prepaid-credit balance for
-      // this one API key/project, not a spend cap anyone here set, and not
-      // the same thing as a Google Cloud billing account's general credit
-      // balance - conflating the two costs real time chasing the wrong page.
-      const reason = 'The Gemini API key has run out of its prepaid credit. An admin needs to go to https://ai.studio/projects, open this project and add a payment method there - not the store\'s general Google Cloud billing.';
-      reportBlockingIssue('billing_cap', reason);
-      finish('failed', { reason });
-      completeJob(job.id, 'failed', { reason: 'billing_cap' });
-      failJob(job.id, debugDetail(err), false);
-      setProductStatus(product.id, 'failed');
-      return;
-    }
-    if (isDailyQuotaError(err)) {
-      const reason = 'Google Gemini says the daily request limit for this API key has been used up. It resets on its own (usually at midnight Pacific time), or an admin can raise the limit by turning on billing for the key at https://ai.studio/projects. Photos will process again once it clears.';
-      reportBlockingIssue('quota_exceeded', reason);
-      finish('failed', { reason });
-      failJob(job.id, debugDetail(err), false);
-      setProductStatus(product.id, 'failed');
+    if (isBillingError(err) || isDailyQuotaError(err)) {
+      // Not this photo's fault, and nothing was drawn: put it back without using
+      // an attempt, so it starts again by itself once the account is sorted out.
+      // Precise wording on purpose: this is the Gemini key's own prepaid balance,
+      // not the Google Cloud billing account's general credit.
+      const billing = isBillingError(err);
+      reportBlockingIssue(billing ? 'billing_cap' : 'quota_exceeded', billing ? BILLING_REASON : QUOTA_REASON);
+      logEvent(billing ? 'pipeline.billing_blocked' : 'pipeline.quota_exceeded', { requestId, jobId: job.id, errorMessage: debugDetail(err).slice(0, 400) });
+      deferJob(job.id, debugDetail(err));
+      setProductStatus(product.id, 'queued');
       return;
     }
     const retryable = isTransientError(err);
@@ -867,7 +879,29 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
   lastRender = enhanced;
 
   setJobStage(job.id, 'auditing');
-  let audit = await runAudit('audit', enhanced.imageBase64, enhanced.mimeType);
+  let audit: AuditResult;
+  try {
+    audit = await runAudit('audit', enhanced.imageBase64, enhanced.mimeType);
+  } catch (err) {
+    // The picture is already paid for. If only the checker failed (a timeout, a
+    // busy or out-of-credit service), do not throw it away and draw it again:
+    // keep it, say plainly that nobody has checked it, and let the reviewer
+    // compare it with the original. They look at every photo anyway.
+    if (isBillingError(err) || isDailyQuotaError(err)) {
+      const billing = isBillingError(err);
+      reportBlockingIssue(billing ? 'billing_cap' : 'quota_exceeded', billing ? BILLING_REASON : QUOTA_REASON);
+    }
+    logEvent('pipeline.audit_unavailable', { requestId, productId: product.id, errorMessage: debugDetail(err).slice(0, 400) });
+    const unchecked = saveImage({ productId: product.id, kind: 'processed', data: enhanced.imageBase64, mimeType: enhanced.mimeType, source: 'upload' });
+    await attachCutOut();
+    await indexProduct(product.id, 'studio');
+    const reason = 'The automatic check could not run, so nothing has compared this picture with your photo yet. Look at it closely against the original (counts, chains, engraving) before approving - or tap Fix to have it redone.';
+    finish('awaiting_review', { reason, checklist: null, modelUsed: MODEL_ENHANCE_DEFAULT, attemptCount: 1 });
+    setProductStatus(product.id, 'awaiting_review');
+    completeJob(job.id, 'succeeded', { processedPhotoId: unchecked.id, modelUsed: MODEL_ENHANCE_DEFAULT, attemptCount: 1, reason: 'audit_unavailable' });
+    enqueueJob({ productId: product.id, type: 'copy', priority: -1 });
+    return;
+  }
   let modelUsed = MODEL_ENHANCE_DEFAULT;
   let attemptCount = 1;
 

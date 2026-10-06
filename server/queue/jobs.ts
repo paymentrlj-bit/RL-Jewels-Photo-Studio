@@ -102,7 +102,9 @@ export function enqueueJob(input: {
     // counter waiting on should jump ahead of a backlog queued an hour ago.
     priority: input.priority ?? 0,
     attempts: 0,
-    max_attempts: input.maxAttempts ?? 3,
+    // A photo job that fails is re-run from the top and pays for its image
+    // again, so it gets one automatic retry, not two.
+    max_attempts: input.maxAttempts ?? (input.type === 'enhance' ? 2 : 3),
     payload: JSON.stringify(input.payload ?? {}),
     result: null,
     last_error: '',
@@ -200,6 +202,20 @@ export function failJob(jobId: string, error: string, retryable: boolean): boole
      WHERE id = ?`
   ).run(error.slice(0, 500), nowIso(), jobId);
   return false;
+}
+
+// Puts a job back on the queue WITHOUT using up an attempt. For when the account
+// is out of credit or quota: the photo did nothing wrong, and it should start
+// again by itself once an admin has fixed the account (the worker loop holds
+// the queue and probes every few minutes meanwhile).
+export function deferJob(jobId: string, error: string): void {
+  getDb()
+    .prepare(
+      `UPDATE jobs SET status = 'queued', attempts = MAX(0, attempts - 1), last_error = ?, stage = '',
+                       locked_by = NULL, locked_at = NULL
+       WHERE id = ? AND status = 'running'`
+    )
+    .run(error.slice(0, 500), jobId);
 }
 
 export function getJob(jobId: string): Job | null {
