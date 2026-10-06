@@ -77,6 +77,10 @@ export interface Product {
   /** Why staff said they deleted it (catalog/deletionReasons.ts code), or ''. */
   archivedReason: string;
   archivedNote: string;
+  /** AI pictures drawn for this product so far (each one is paid for). */
+  aiRuns: number;
+  /** Tries an admin allowed on top of MAX_AI_TRIES. */
+  extraTries: number;
 }
 
 interface ProductRow {
@@ -122,6 +126,8 @@ interface ProductRow {
   archived_status: string;
   archived_reason: string;
   archived_note: string;
+  ai_runs: number;
+  extra_tries: number;
 }
 
 function parseStringArray(json: string | null): string[] {
@@ -185,6 +191,8 @@ function toProduct(row: ProductRow): Product {
     archivedStatus: row.archived_status ?? '',
     archivedReason: row.archived_reason ?? '',
     archivedNote: row.archived_note ?? '',
+    aiRuns: row.ai_runs ?? 0,
+    extraTries: row.extra_tries ?? 0,
   };
 }
 
@@ -261,6 +269,8 @@ export function createProduct(input: { createdBy: string; batchId?: string | nul
     archived_status: '',
     archived_reason: '',
     archived_note: '',
+    ai_runs: 0,
+    extra_tries: 0,
   };
 
   getDb()
@@ -553,6 +563,28 @@ export function findActiveDuplicate(cpc: string, excludeProductId?: string): Pro
     )
     .get(normalized, excludeProductId ?? null) as ProductRow | undefined;
   return row ? toProduct(row) : null;
+}
+
+/**
+ * How many AI pictures one product may have: the first, and two re-runs. After that a
+ * Fix, an extra photo or a reshoot would just keep paying for the same problem - the
+ * piece needs a person (the real photo cut out, or an admin who allows more tries).
+ */
+export const MAX_AI_TRIES = Number(process.env.MAX_AI_TRIES) || 3;
+/** How many more tries one admin tap allows. */
+export const EXTRA_TRIES_STEP = 2;
+
+export function triesFor(p: { aiRuns: number; extraTries: number }): { used: number; max: number; left: number } {
+  const max = MAX_AI_TRIES + p.extraTries;
+  return { used: p.aiRuns, max, left: Math.max(0, max - p.aiRuns) };
+}
+
+export function bumpAiRuns(id: string): void {
+  getDb().prepare('UPDATE products SET ai_runs = ai_runs + 1, updated_at = ? WHERE id = ?').run(nowIso(), id);
+}
+
+export function allowMoreTries(id: string): void {
+  getDb().prepare('UPDATE products SET extra_tries = extra_tries + ?, updated_at = ? WHERE id = ?').run(EXTRA_TRIES_STEP, nowIso(), id);
 }
 
 /** Removes the row for good. Only the admin Archive tab's "Delete forever" uses this. */

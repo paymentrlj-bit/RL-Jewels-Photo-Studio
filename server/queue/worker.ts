@@ -78,9 +78,7 @@ import {
   failJob,
   deferJob,
   setJobStage,
-  enqueueJob,
   recoverOrphanedJobs,
-  getLatestJobForProduct,
   countEnhanceRuns,
   type Job,
 } from './jobs';
@@ -91,6 +89,7 @@ import {
   recordRisk,
   recordAiTags,
   applyGeneratedCopy,
+  bumpAiRuns,
 } from '../db/products';
 import { getLatestPhoto, listPhotos, saveImage, readImageBase64, readImageBuffer, imageExists } from '../storage/images';
 
@@ -674,7 +673,6 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
       finish('awaiting_review', { reason, checklist: null, modelUsed: 'faithful', attemptCount: why.attemptCount, renderMode: 'faithful' });
       setProductStatus(product.id, 'awaiting_review');
       completeJob(job.id, 'succeeded', { processedPhotoId: processedPhoto.id, modelUsed: 'faithful', reason });
-      queueCopyIfNeeded(product.id);
       return true;
     } catch (err) {
       logEvent('pipeline.faithful_unavailable', {
@@ -888,6 +886,9 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
     return;
   }
 
+  // One picture has been drawn and paid for: it counts as one of this piece's tries.
+  bumpAiRuns(product.id);
+
   // The image model often leaves a pale grey backdrop and the audit lets it
   // through; make it exactly white before anyone (or the audit) looks.
   enhanced = await whiten(enhanced);
@@ -914,7 +915,6 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
     finish('awaiting_review', { reason, checklist: null, modelUsed: MODEL_ENHANCE_DEFAULT, attemptCount: 1 });
     setProductStatus(product.id, 'awaiting_review');
     completeJob(job.id, 'succeeded', { processedPhotoId: unchecked.id, modelUsed: MODEL_ENHANCE_DEFAULT, attemptCount: 1, reason: 'audit_unavailable' });
-    queueCopyIfNeeded(product.id);
     return;
   }
   let modelUsed = MODEL_ENHANCE_DEFAULT;
@@ -1069,29 +1069,12 @@ Correct this specific issue while still following every rule above.`;
     reason: audit.reason,
   });
 
-  // Copy generation is queued rather than run inline so the photo shows up
-  // for review the moment it is ready, instead of waiting on a text call the
-  // reviewer does not need yet.
-  queueCopyIfNeeded(product.id);
+  // Catalogue copy is not written here: it is written once, after approval (queue/copyQueue.ts).
 }
 
 // ---------------------------------------------------------------------------
 // Catalogue copy. Runs against the PROCESSED photo, as in v1.
 // ---------------------------------------------------------------------------
-
-/**
- * The catalogue copy is written from the ORIGINAL photo, which a Fix or an extra
- * angle does not change - so writing it again after every re-run bought the same
- * text (125 Pro calls for 58 products in one day, and the daily Pro allowance with
- * them). Write it once, when the piece has none.
- */
-function queueCopyIfNeeded(productId: string): void {
-  const current = getProduct(productId);
-  if (!current || current.description.trim()) return;
-  const waiting = getLatestJobForProduct(productId, 'copy');
-  if (waiting && (waiting.status === 'queued' || waiting.status === 'running')) return;
-  enqueueJob({ productId, type: 'copy', priority: -1 });
-}
 
 async function runCopyJob(job: Job, workerId: string): Promise<void> {
   const product = getProduct(job.productId);

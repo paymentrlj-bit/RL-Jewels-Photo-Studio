@@ -76,6 +76,8 @@ export interface Product {
   aiRenderPhotoId?: string | null;
   /** 'faithful' = the piece cut out of the real photo, nothing generated. */
   renderMode: 'ai' | 'faithful' | null;
+  /** AI pictures drawn for this piece, out of the most it may have. */
+  tries?: { used: number; max: number; left: number };
   /** Extra photos of this piece from other angles, for the current original. */
   anglePhotoIds: string[];
   job: JobSummary | null;

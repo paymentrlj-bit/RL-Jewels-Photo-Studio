@@ -98,6 +98,7 @@ export const api = {
     post<{ product: Product }>(`/products/${id}/requeue`, options),
   fix: (id: string, body: { issues: string[]; note?: string }) =>
     post<{ product: Product; jobId: string }>(`/products/${id}/fix`, body),
+  allowMoreTries: (id: string) => post<{ product: Product }>(`/products/${id}/allow-tries`, {}),
   useCutout: (id: string) => post<{ product: Product }>(`/products/${id}/use-cutout`, {}),
   addAngle: (id: string, imageBase64: string) =>
     post<{ product: Product; photoId: string; jobId: string }>(`/products/${id}/angle`, { imageBase64 }),

@@ -6,7 +6,7 @@
 // photograph the next piece immediately.
 
 import express from 'express';
-import { requireAuth, requireManager, type AuthenticatedRequest } from '../auth/session';
+import { requireAuth, requireManager, requireAdmin, type AuthenticatedRequest } from '../auth/session';
 import { logEvent, actorFrom } from '../logging';
 import {
   createProduct,
@@ -19,6 +19,9 @@ import {
   findActiveDuplicate,
   archiveProduct,
   listFilterRows,
+  triesFor,
+  allowMoreTries,
+  EXTRA_TRIES_STEP,
   createBatch,
   getBatch,
   listBatches,
@@ -47,11 +50,39 @@ import { cleanPrice } from '../sharing/caption';
 import { cleanTags, cleanStaffNote, recordTagsPicked, recordTagsApproved } from '../catalog/tags';
 import { isFixCode, isReshootReason, fixOption, RESHOOT_ONLY_REASONS, cleanNote, USE_REAL_PHOTO } from '../catalog/fixes';
 import { recordFixRequest } from '../db/fixRequests';
+import { queueCopyIfNeeded } from '../queue/copyQueue';
 import { matchesFilter, categoryOptions, parseWeightParam } from '../catalog/filters';
 import { cleanReasonCode, cleanReasonNote } from '../catalog/deletionReasons';
 
 /** How long a new angle photo waits for the next one before the run starts. */
 const ANGLE_SETTLE_MS = Number(process.env.ANGLE_SETTLE_MS) || 8000;
+
+/**
+ * Every picture is paid for, so a piece gets a few tries (the first and two re-runs). Past
+ * that, a Fix, an extra photo or a reshoot would keep paying for the same problem. What was
+ * asked is still written down - it is the most useful thing we learn from a stuck piece.
+ * Returns true (and has answered) when the request is refused.
+ */
+function refuseIfOutOfTries(
+  req: AuthenticatedRequest,
+  res: express.Response,
+  product: { id: string; itemType: string; aiRuns: number; extraTries: number },
+  kind: 'photo' | 'angle' | 'fix' | 'requeue',
+  asked: { issues?: string[]; note?: string } = {}
+): boolean {
+  const tries = triesFor(product);
+  if (tries.left > 0) return false;
+  if (kind === 'fix') {
+    recordFixRequest({ productId: product.id, itemType: product.itemType, issues: asked.issues ?? [], note: asked.note, source: 'staff', createdBy: req.user?.id });
+  }
+  logEvent('product.rerun_blocked', { productId: product.id, kind, tries: tries.used, max: tries.max, issues: asked.issues ?? [], note: asked.note ?? '', itemType: product.itemType || null }, actorFrom(req.user));
+  res.status(409).json({
+    error: `This piece has already had ${tries.used} AI pictures. Use your real photo cut out instead${req.user!.isAdmin ? ', or allow more tries' : ', or ask an admin to allow more tries'}.`,
+    triesExhausted: true,
+    tries,
+  });
+  return true;
+}
 
 export const productsRouter = express.Router();
 
@@ -93,6 +124,7 @@ function decorate(productId: string) {
     cutoutPhotoId: showCutout ? cutout!.id : null,
     aiRenderPhotoId: showAiRender ? aiRender!.id : null,
     anglePhotoIds: angles.map((p) => p.id),
+    tries: triesFor(product),
     job: job
       ? {
           id: job.id,
@@ -376,6 +408,7 @@ productsRouter.post('/products/:id/photo', (req: AuthenticatedRequest, res) => {
     res.status(404).json({ error: 'Product not found.' });
     return;
   }
+  if (refuseIfOutOfTries(req, res, product, 'photo')) return;
 
   const imageData = req.body?.imageBase64;
   if (!imageData || typeof imageData !== 'string') {
@@ -435,6 +468,7 @@ productsRouter.post('/products/:id/angle', (req: AuthenticatedRequest, res) => {
     res.status(400).json({ error: 'Take the main photo first - an extra angle is added alongside it.' });
     return;
   }
+  if (refuseIfOutOfTries(req, res, product, 'angle')) return;
 
   const imageData = req.body?.imageBase64;
   if (!imageData || typeof imageData !== 'string') {
@@ -498,9 +532,23 @@ productsRouter.post('/products/:id/approve', requireManager, (req: Authenticated
   }
 
   setProductStatus(product.id, 'approved', { reviewNote: String(req.body?.note || '') });
+  // The catalogue copy is written now, once, instead of after every re-run of every piece.
+  queueCopyIfNeeded(product.id);
   // Everything now known to describe a good photo of this category joins its tag list.
   recordTagsApproved(product.itemType, product.tags, product.aiTags);
   logEvent('product.approved', { productId: product.id, cpc: product.cpc, tags: product.tags.join(','), aiTags: product.aiTags.join(',') }, actorFrom(req.user));
+  res.json({ product: decorate(product.id) });
+});
+
+// An admin lets a stuck piece have more AI pictures. Everything asked of it so far is already written down.
+productsRouter.post('/products/:id/allow-tries', requireAdmin, (req: AuthenticatedRequest, res) => {
+  const product = getProduct(req.params.id);
+  if (!product) {
+    res.status(404).json({ error: 'Product not found.' });
+    return;
+  }
+  allowMoreTries(product.id);
+  logEvent('product.tries_allowed', { productId: product.id, extra: EXTRA_TRIES_STEP, tries: triesFor({ aiRuns: product.aiRuns, extraTries: product.extraTries + EXTRA_TRIES_STEP }) }, actorFrom(req.user));
   res.json({ product: decorate(product.id) });
 });
 
@@ -563,6 +611,7 @@ productsRouter.post('/products/:id/fix', (req: AuthenticatedRequest, res) => {
     res.status(400).json({ error: 'Pick what is wrong with the photo, or write a short note.' });
     return;
   }
+  if (!useRealPhoto && refuseIfOutOfTries(req, res, product, 'fix', { issues, note })) return;
 
   recordFixRequest({ productId: product.id, itemType: product.itemType, issues, note, source: 'staff', createdBy: req.user?.id });
   // The piece is usually still on the reviewer's screen - jump the queue.
@@ -661,6 +710,8 @@ productsRouter.post('/products/:id/requeue', (req: AuthenticatedRequest, res) =>
     res.status(400).json({ error: 'This product has no original photo to reprocess.' });
     return;
   }
+
+  if (refuseIfOutOfTries(req, res, product, 'requeue')) return;
 
   // "Process anyway" on a needs_angle item: a fresh job carrying the flag that
   // tells the pipeline not to stop and ask for an angle again.
