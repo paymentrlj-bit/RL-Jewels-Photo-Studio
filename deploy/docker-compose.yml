@@ -12,6 +12,11 @@ services:
     # instead (e.g. for testing an unmerged branch).
     image: ${STUDIO_IMAGE:-ghcr.io/paymentrlj-bit/rl-jewels-photo-studio:latest}
     restart: unless-stopped
+    # A deploy stops the old container first. Docker's default is to kill it after
+    # 10 seconds, which throws away any photo mid-way through the pipeline (the
+    # picture is already paid for) and makes it start again from scratch. Give the
+    # app time to finish what is running; it stops taking new photos straight away.
+    stop_grace_period: 150s
     # No `ports:` on purpose. Caddy reaches it over the private compose
     # network; the internet cannot.
     expose:

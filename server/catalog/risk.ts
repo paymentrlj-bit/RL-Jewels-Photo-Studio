@@ -4,7 +4,7 @@
 // score and the weights below tuned from data instead of guesswork.
 //
 // The number is a triage aid and an analysis column. It never blocks anything.
-import { familyFor, parseLengthInches, resolveCategory } from './taxonomy';
+import { familyFor, parseLengthInches, resolveCategory, setPieces } from './taxonomy';
 import { checkWeight } from './plausibility';
 
 export type RiskTier = 'low' | 'medium' | 'high';
@@ -79,4 +79,26 @@ export function computeRisk(input: RiskInput): RiskResult {
   }
   score = Math.max(0, Math.min(100, Math.round(score)));
   return { score, tier: tierFor(score), reasons };
+}
+
+// Plain pieces with nothing to count: the detail inspection (a detect call and
+// a Pro counting call) buys nothing for a stud or a coin. Anything with chains,
+// beads, stones, engraving, sets or a long drop - which is where the audit
+// actually fails - always gets it. INVENTORY_SKIP_TYPES overrides the list
+// (comma separated; "none" turns skipping off).
+const DEFAULT_INVENTORY_SKIP = ['Stud', 'Bali', 'U Hoop', 'J Hoop', 'Nose Pin', 'Coin', 'Bindi', 'Rakhi'];
+
+function skipTypes(): Set<string> {
+  const raw = process.env.INVENTORY_SKIP_TYPES?.trim();
+  if (!raw) return new Set(DEFAULT_INVENTORY_SKIP);
+  if (raw.toLowerCase() === 'none') return new Set();
+  return new Set(raw.split(',').map((s) => s.trim()).filter(Boolean));
+}
+
+export function inventoryNeeded(input: { itemType?: string; size?: string }): boolean {
+  if (setPieces(input.itemType) !== null) return true;
+  const category = resolveCategory(input.itemType ?? '');
+  if (!category || !skipTypes().has(category.type)) return true;
+  const inches = parseLengthInches(input.size);
+  return Boolean(inches && inches >= 24);
 }

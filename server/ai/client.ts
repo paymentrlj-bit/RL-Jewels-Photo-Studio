@@ -152,7 +152,9 @@ export const COSTS_ARE_CALIBRATED = Boolean(process.env.COST_ENHANCE_DEFAULT_USD
 // attempt (2 -> 3) so a hung connection gets abandoned and retried with a
 // fresh one sooner, within a similar or lower worst-case total wait.
 export const ENHANCE_TIMEOUT_MS = 45_000;
-export const AUDIT_TIMEOUT_MS = 20_000;
+// 20s aborted about 4 in 10 Pro audits (they were still thinking), and an
+// aborted call is still billed and then retried - so it is better to wait.
+export const AUDIT_TIMEOUT_MS = Number(process.env.AUDIT_TIMEOUT_MS) || 45_000;
 export const SEGMENT_TIMEOUT_MS = 15_000;
 // The inventory call sends the full photo plus up to three close-ups to a
 // model that reasons before answering, so it is legitimately slower than the
@@ -372,6 +374,8 @@ export async function withTransientRetry<T>(
     } catch (err) {
       lastErr = err;
       onAttempt?.({ attempt, latencyMs: Date.now() - startedAt, success: false, error: err });
+      // A call that timed out was probably still billed. Try once more, not twice.
+      if ((err as Error)?.name === 'AbortError') limit = Math.min(limit, 2);
       if (isRateLimitError(err) && isTransientError(err)) {
         limit = Math.max(limit, maxAttempts + 2);
         const wait = Math.min(parseRetryDelayMs(err) ?? 15_000 * attempt, MAX_RATE_LIMIT_WAIT_MS) + 500;
