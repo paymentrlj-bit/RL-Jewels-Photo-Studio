@@ -27,6 +27,7 @@ import { ScannerModal } from '../components/ScannerModal';
 import { PhotoEditor } from '../components/PhotoEditor';
 import { SimilarList } from '../components/SimilarList';
 import { RetakeButton } from '../components/RetakeButton';
+import { ShootCheckDialog } from '../components/ShootCheckDialog';
 import { retakeReason } from '../utils/reasons';
 import { downscaleImage, analyzeImageQuality, checkFlashFired, type PreflightIssue } from '../utils/imagePreflight';
 import { logClientEvent } from '../utils/analytics';
@@ -100,6 +101,8 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, n
   const [isCameraOpen, setCameraOpen] = useState(false);
   const [isScannerOpen, setScannerOpen] = useState(false);
   const [isSubmitting, setSubmitting] = useState(false);
+  // The "check the photo for this kind of piece" step between Save and sending.
+  const [checking, setCheckingPhoto] = useState(false);
   const [preflightIssues, setPreflightIssues] = useState<PreflightIssue[]>([]);
   const [isChecking, setChecking] = useState(false);
   // Set once the staff member has explicitly acknowledged a flagged photo.
@@ -747,12 +750,29 @@ export const ShootView: React.FC<ShootViewProps> = ({ batch, onQueued, recent, n
 
         <button
           type="button"
-          onClick={handleSubmit}
+          onClick={() => setCheckingPhoto(true)}
           disabled={!canSubmit}
           className="min-h-[44px] w-full rounded-xl bg-amber-600 px-6 py-4 font-semibold text-white hover:bg-amber-700 disabled:bg-stone-300 disabled:cursor-not-allowed transition-colors"
         >
           {isSubmitting ? 'Saving…' : 'Save and shoot the next one'}
         </button>
+        {checking && photo && (
+          <ShootCheckDialog
+            itemType={form.itemType}
+            photo={photo}
+            extraPhotos={extraPhotos.length}
+            busy={isSubmitting}
+            onBack={() => {
+              setCheckingPhoto(false);
+              logClientEvent('shoot_check_back', { itemType: form.itemType });
+            }}
+            onConfirm={async () => {
+              logClientEvent('shoot_check_confirmed', { itemType: form.itemType, extraPhotos: extraPhotos.length });
+              await handleSubmit();
+              setCheckingPhoto(false);
+            }}
+          />
+        )}
         {!canSubmit && !isSubmitting && (
           <p className="text-center text-sm text-stone-500">
             {!photo ? 'Take a photo to continue.'
