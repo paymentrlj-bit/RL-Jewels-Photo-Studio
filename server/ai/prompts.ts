@@ -233,7 +233,8 @@ export function buildOutputFramingBlock(aspectRatio: '1:1' | '3:4', itemType: st
 
 OUTPUT FRAMING:
 This is an elongated piece (${itemType || 'chain/necklace type'}). Produce a PORTRAIT 3:4 composition (taller than wide).
-Show the piece at its full natural length and drape, top to bottom, with clean margin at every edge. Do NOT coil, shorten, fold, or rearrange it to make it fit a squarer frame, and do NOT crop any part of it. The full length is the product.`;
+Show the piece at its full natural length and drape, top to bottom, with clean margin at every edge. Do NOT coil, shorten, fold, or rearrange it to make it fit a squarer frame, and do NOT crop any part of it. The full length is the product.
+The whole piece must sit INSIDE the frame with white margin on all four sides: both ends, the hook and any pendant visible. If it is too long to hang straight inside the frame at a good size, let it drape in a smooth U or V curve, the way it hangs when worn - and never let a chain run off the top, the bottom or either side.`;
   }
   return `
 

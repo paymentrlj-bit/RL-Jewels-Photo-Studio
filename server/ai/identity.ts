@@ -105,6 +105,11 @@ export function compareIdentity(formItemType: string | undefined, identity: Piec
     };
   }
   if (!formFamily || formFamily === 'other' || identity.family === 'other') return { status: 'unchecked', message: '' };
+  // Things worn at the neck: the store's own names do not follow the picture. An "attached
+  // chain pote" is photographed as a plain gold chain, and a "padak" (pendant) may be a
+  // mangalsutra pendant. Asking for another photo for these only cost runs.
+  const NECK: string[] = ['neckpiece', 'mangalsutra'];
+  if (NECK.includes(formFamily) && NECK.includes(identity.family)) return { status: 'match', message: '' };
   if (formFamily !== identity.family) {
     return {
       status: 'mismatch',

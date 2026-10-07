@@ -17,9 +17,11 @@ import { allMappings, getMapping } from '../export/mappings';
 import { enqueueJob, getLatestJobForProduct } from '../queue/jobs';
 
 export const exportRouter = express.Router();
-exportRouter.use(requireAuth);
+exportRouter.use('/export', requireAuth);
 // Exports hand finished catalogue data to other systems: managers and admins only.
-exportRouter.use(requireManager);
+// Only the /export paths. A blanket guard here also stopped every photographer's
+// request to ANY router mounted after this one (their activity log, for one).
+exportRouter.use('/export', requireManager);
 
 // Only approved and already-exported items leave the building. A product
 // still awaiting review has not been signed off by a human, and v1's

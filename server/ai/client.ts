@@ -175,9 +175,9 @@ export const PIPELINE_BUDGET_MS = 300_000;
 // A short, sanitized version of the real error - the Gemini SDK's messages
 // are human-readable API errors, not secrets, and having this visible in the
 // UI beats being blind on a deployment we can't tail server logs on.
-export function debugDetail(err: unknown): string {
+export function debugDetail(err: unknown, max = 300): string {
   const message = String((err as { message?: string })?.message || err || 'unknown error');
-  return message.slice(0, 300);
+  return message.slice(0, max);
 }
 
 export function isBillingError(err: unknown): boolean {

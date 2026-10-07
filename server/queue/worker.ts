@@ -316,7 +316,8 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
       success: info.success,
       timedOut,
       errorType: info.success ? undefined : (info.error as { name?: string })?.name || 'error',
-      errorMessage: info.success ? undefined : debugDetail(info.error),
+      // A quota error names which limit was hit; keep all of it.
+      errorMessage: info.success ? undefined : debugDetail(info.error, isRateLimitError(info.error) ? 1500 : 300),
     });
   };
 
@@ -503,6 +504,8 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
         closeUps: crops.length,
         closeUpLabels: crops.map((c) => c.label),
         elementCount: analysis.inventory.elements.length,
+        // Pro's daily allowance can be used up, and then the lighter model does the count.
+        countedBy: analysis.countedBy,
         referenceScalePresent: analysis.inventory.referenceScale.present,
         // The inventory itself, so what the inspector counted can later be
         // compared against what staff say the piece really has.
@@ -581,15 +584,15 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
         deadline,
         recordAttempt(stage, model)
       );
-    if (stage === 'audit' && !proFirstAudit) return attemptWith(MODEL_AUDIT);
+    if (stage === 'audit' && !proFirstAudit) return { ...(await attemptWith(MODEL_AUDIT)), gradedBy: MODEL_AUDIT };
     try {
-      return await attemptWith(MODEL_AUDIT_STRONG);
+      return { ...(await attemptWith(MODEL_AUDIT_STRONG)), gradedBy: MODEL_AUDIT_STRONG };
     } catch (err) {
       // The model is gone, or Pro's allowance is used up: grade with the lighter
       // model rather than failing the photo.
       if (!isModelNotFoundError(err) && !isDailyQuotaError(err) && !isRateLimitError(err)) throw err;
-      logEvent('pipeline.audit_model_missing', { requestId, model: MODEL_AUDIT_STRONG, errorMessage: debugDetail(err) });
-      return attemptWith(MODEL_AUDIT);
+      logEvent('pipeline.audit_model_missing', { requestId, model: MODEL_AUDIT_STRONG, errorMessage: debugDetail(err, 1500) });
+      return { ...(await attemptWith(MODEL_AUDIT)), gradedBy: MODEL_AUDIT };
     }
   };
 
@@ -923,7 +926,9 @@ async function runEnhanceJob(job: Job, workerId: string): Promise<void> {
   logEvent('pipeline.audit_verdict', {
     requestId,
     attempt: 1,
-    auditModel: proFirstAudit ? MODEL_AUDIT_STRONG : MODEL_AUDIT,
+    // The model that really graded it, which is not always the one asked for.
+    auditModel: audit.gradedBy,
+    gradedByFallback: audit.gradedBy !== (proFirstAudit ? MODEL_AUDIT_STRONG : MODEL_AUDIT),
     overallPass: audit.overallPass,
     reason: audit.reason,
     checklist: audit.checklist,
@@ -1007,7 +1012,7 @@ Correct this specific issue while still following every rule above.`;
         logEvent('pipeline.audit_verdict', {
           requestId,
           attempt: 2,
-          auditModel: MODEL_AUDIT_STRONG,
+          auditModel: retryAudit.gradedBy,
           overallPass: retryAudit.overallPass,
           reason: retryAudit.reason,
           checklist: retryAudit.checklist,
@@ -1060,13 +1065,17 @@ Correct this specific issue while still following every rule above.`;
   clearBlockingIssue();
   await attachCutOut();
   await indexProduct(product.id, 'studio');
-  finish('awaiting_review', { reason: audit.reason, checklist: audit.checklist, modelUsed, attemptCount });
+  // Say so when the strong checker was asked for but its daily allowance was gone: the reviewer
+  // should look harder at a picture only the basic checker has seen.
+  const basicOnly = proFirstAudit && audit.gradedBy === MODEL_AUDIT;
+  const shownReason = basicOnly ? `Only the basic checker looked at this (the strong checker's daily allowance was used up) - look closely at the hook, chain and counts. ${audit.reason}` : audit.reason;
+  finish('awaiting_review', { reason: shownReason, checklist: audit.checklist, modelUsed, attemptCount });
   setProductStatus(product.id, 'awaiting_review');
   completeJob(job.id, 'succeeded', {
     processedPhotoId: processedPhoto.id,
     modelUsed,
     attemptCount,
-    reason: audit.reason,
+    reason: shownReason,
   });
 
   // Catalogue copy is not written here: it is written once, after approval (queue/copyQueue.ts).

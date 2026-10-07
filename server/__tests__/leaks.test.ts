@@ -162,6 +162,24 @@ describe('which grader checks a render', () => {
   });
 });
 
+describe('the audit record', () => {
+  it('names the model that really graded the picture when the strong one was refused', async () => {
+    const id = shoot('FANCY HAR SET');
+    mocks.identifyPiece.mockResolvedValue(null);
+    mocks.auditOutput.mockImplementation(async (...args: unknown[]) => {
+      if (args[6] === MODEL_AUDIT_STRONG) throw new Error('{"error":{"code":429,"message":"You exceeded your current quota. Quota exceeded for metric: GenerateRequestsPerDayPerProjectPerModel"}}');
+      return { overallPass: true, modelClaimedPass: true, verdictDisagreed: false, reason: 'ok', checklist: Object.fromEntries(AUDIT_CHECKS.map((c) => [c, true])), originalCounts: '', enhancedCounts: '' };
+    });
+    enqueueJob({ productId: id, type: 'enhance' });
+    startWorkers();
+    await until(() => ['awaiting_review', 'needs_reshoot', 'needs_angle', 'failed'].includes(getProduct(id)!.status));
+    const verdict = getDb().prepare("SELECT payload FROM events WHERE type = 'pipeline.audit_verdict' AND payload LIKE '%\"attempt\":1%'").get() as { payload: string };
+    expect(JSON.parse(verdict.payload)).toMatchObject({ auditModel: MODEL_AUDIT, gradedByFallback: true });
+    // And the reviewer is told that only the basic checker looked at it.
+    expect(getProduct(id)!.auditReason).toMatch(/^Only the basic checker looked at this/);
+  });
+});
+
 describe('counting tries', () => {
   it('counts one try per picture drawn, and writes no catalogue copy yet', async () => {
     const drawn = shoot('Stud');

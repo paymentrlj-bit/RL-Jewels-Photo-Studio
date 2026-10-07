@@ -130,6 +130,7 @@ export const ReviewView: React.FC<ReviewViewProps> = ({ products, onChanged, rol
                 isAdmin={isAdmin}
                 onApprove={() => act(product.id, () => api.approve(product.id))}
                 onReject={(reasons, note) => act(product.id, () => api.reject(product.id, note, reasons))}
+                onRedo={(fixes, note) => act(product.id, () => api.fix(product.id, { issues: fixes, note }))}
                 onDelete={() => deleteOne(product.id)}
                 onChanged={onChanged}
                 onError={setError}
@@ -222,10 +223,11 @@ const ReviewCard: React.FC<{
   isAdmin: boolean;
   onApprove: () => void;
   onReject: (reasons: string[], note: string) => void;
+  onRedo: (fixes: string[], note: string) => void;
   onDelete: () => void;
   onChanged: () => void;
   onError: (message: string) => void;
-}> = ({ product, busy, canManage, isAdmin, onApprove, onReject, onDelete, onChanged, onError }) => {
+}> = ({ product, busy, canManage, isAdmin, onApprove, onReject, onRedo, onDelete, onChanged, onError }) => {
   const outOfTries = isOutOfTries(product);
   const [showChecks, setShowChecks] = useState(false);
   const [mode, setMode] = useState<'idle' | 'rejecting' | 'fixing'>('idle');
@@ -374,7 +376,7 @@ const ReviewCard: React.FC<{
             onError={onError}
           />
         ) : mode === 'rejecting' ? (
-          <ReshootPanel itemType={product.itemType} busy={busy} onSend={onReject} onCancel={() => setMode('idle')} />
+          <ReshootPanel itemType={product.itemType} busy={busy} onSend={onReject} onRedo={outOfTries ? undefined : onRedo} onCancel={() => setMode('idle')} />
         ) : (
           <div className="flex flex-wrap gap-2">
             {canManage ? (
