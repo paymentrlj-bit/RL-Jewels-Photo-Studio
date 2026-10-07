@@ -171,6 +171,8 @@ export interface AuditResult {
   /** The inspector's own counts of the original and of the render, used to correct the next attempt. */
   originalCounts: string;
   enhancedCounts: string;
+  /** The model that actually graded it (a fallback may have stood in for the one asked for). */
+  gradedBy?: string;
 }
 
 /**

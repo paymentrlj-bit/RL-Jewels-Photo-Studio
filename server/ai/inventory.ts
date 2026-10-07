@@ -110,6 +110,8 @@ export interface InventoryAnalysis {
   /** Only the regions that were actually cropped and shown to the counter. */
   regions: DetailRegion[];
   inventory: DetailInventory;
+  /** The model that really did the counting (the lighter one stands in when Pro's daily allowance is gone). */
+  countedBy?: string;
 }
 
 export interface InventoryItemContext {
@@ -323,7 +325,9 @@ export async function countDetails(
   mimeType: string,
   refs: ReferenceImage[],
   item: InventoryItemContext,
-  onUsage?: (usage: TokenUsage | null) => void
+  onUsage?: (usage: TokenUsage | null) => void,
+  /** Told which model answered, and given a usage recorder priced for it when it was the stand-in. */
+  fallback?: { onUsage?: (usage: TokenUsage | null) => void; used?: { model?: string } }
 ): Promise<DetailInventory> {
   const closeUps = describeRefs(refs, 2, 'IMAGE');
 
@@ -365,13 +369,15 @@ Field guide:
   ];
 
   const meta: JsonCallMeta = {};
+  if (fallback?.used) fallback.used.model = MODEL_INVENTORY;
   let raw: unknown;
   try {
     raw = await callJson(ai, MODEL_INVENTORY, parts, INVENTORY_TIMEOUT_MS, onUsage, meta);
   } catch (err) {
     // Pro's allowance is gone for now: a count from the lighter model beats no count.
     if (!isDailyQuotaError(err) && !isRateLimitError(err)) throw err;
-    raw = await callJson(ai, MODEL_AUDIT, parts, INVENTORY_TIMEOUT_MS, onUsage, meta);
+    if (fallback?.used) fallback.used.model = MODEL_AUDIT;
+    raw = await callJson(ai, MODEL_AUDIT, parts, INVENTORY_TIMEOUT_MS, fallback?.onUsage ?? onUsage, meta);
   }
   let inventory = parseInventory(unwrapObject(raw));
   if (!inventory) {
@@ -421,14 +427,15 @@ export async function analyzeDetail(
   }
   const crops = cropped.map((c) => c.crop);
 
+  const used: { model?: string } = {};
   const inventory = await withTransientRetry(
-    () => countDetails(ai, image.base64, image.mimeType, [...crops, ...angles], item, hooks.onUsage?.('inventory-count', MODEL_INVENTORY)),
+    () => countDetails(ai, image.base64, image.mimeType, [...crops, ...angles], item, hooks.onUsage?.('inventory-count', MODEL_INVENTORY), { onUsage: hooks.onUsage?.('inventory-count', MODEL_AUDIT), used }),
     2,
     hooks.deadline,
     hooks.onAttempt('inventory-count', MODEL_INVENTORY)
   );
 
-  return { analysis: { regions: cropped.map((c) => c.region), inventory }, crops };
+  return { analysis: { regions: cropped.map((c) => c.region), inventory, countedBy: used.model }, crops };
 }
 
 // ---------------------------------------------------------------------------

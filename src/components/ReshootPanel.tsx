@@ -11,8 +11,10 @@ export const ReshootPanel: React.FC<{
   busy?: boolean;
   sendLabel?: string;
   onSend: (reasons: string[], note: string) => void;
+  /** Redo the picture with the chosen fixes instead of asking for a new photo (when the picture was wrong, not the photo). */
+  onRedo?: (fixes: string[], note: string) => void;
   onCancel: () => void;
-}> = ({ itemType, busy, sendLabel = 'Send for reshoot', onSend, onCancel }) => {
+}> = ({ itemType, busy, sendLabel = 'Send for reshoot', onSend, onRedo, onCancel }) => {
   const [selected, setSelected] = useState<string[]>([]);
   const [note, setNote] = useState('');
 
@@ -23,6 +25,10 @@ export const ReshootPanel: React.FC<{
 
   const toggle = (code: string) => setSelected((cur) => (cur.includes(code) ? cur.filter((c) => c !== code) : [...cur, code]));
   const ready = selected.length > 0 || note.trim().length > 0;
+  // A reshoot means a new photo. When the photo was fine and the AI drew it wrong, redoing
+  // the picture with the fix is what is wanted - and it does not send the photographer back.
+  const fixes = selected.filter((c) => c !== 'photo_bad');
+  const showRedo = Boolean(onRedo) && selected.length > 0 && !selected.includes('photo_bad');
 
   return (
     <div className="space-y-2">
@@ -51,14 +57,27 @@ export const ReshootPanel: React.FC<{
         aria-label="Anything to add"
         className="w-full min-h-[44px] rounded-lg border border-stone-300 px-3 py-2 text-sm"
       />
-      <div className="flex gap-2">
+      {showRedo && (
+        <p className="text-xs text-stone-600">The photo was fine and the picture was wrong? Redo it with this fix - the photographer does not need to retake anything.</p>
+      )}
+      <div className="flex flex-wrap gap-2">
+        {showRedo && (
+          <button
+            type="button"
+            onClick={() => onRedo!(fixes, note.trim())}
+            disabled={busy || !ready}
+            className="min-h-[44px] flex-1 rounded-lg bg-amber-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+          >
+            Redo it with this fix
+          </button>
+        )}
         <button
           type="button"
           onClick={() => onSend(selected, note.trim())}
           disabled={busy || !ready}
-          className="min-h-[44px] flex-1 rounded-lg bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
+          className={`min-h-[44px] flex-1 rounded-lg px-3 py-1.5 text-sm font-medium disabled:opacity-50 ${showRedo ? 'border border-red-300 text-red-700 hover:bg-red-50' : 'bg-red-600 text-white hover:bg-red-700'}`}
         >
-          {sendLabel}
+          {showRedo ? 'Reshoot the photo instead' : sendLabel}
         </button>
         <button type="button" onClick={onCancel} className="min-h-[44px] rounded-lg px-3 py-1.5 text-sm text-stone-600 hover:bg-stone-100">Cancel</button>
       </div>

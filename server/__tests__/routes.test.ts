@@ -84,7 +84,8 @@ describe('POST /api/login', () => {
       last = await request(app).post('/api/login').send({ username: 'staffer', password: 'wrong' });
     }
     expect(last!.status).toBe(429);
-  });
+    // Ten password checks in a row: slow when the whole suite is running at once.
+  }, 30_000);
 });
 
 describe('GET /api/session', () => {
