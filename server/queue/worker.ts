@@ -171,7 +171,7 @@ async function workerLoop(workerId: string): Promise<void> {
 
     activeWorkers++;
     try {
-      await runJob(job, workerId);
+      await runWithWatchdog(job, workerId);
     } catch (err) {
       // A throw that escapes runJob is a bug rather than an expected failure,
       // but it must never take the worker loop down with it - one bad job
@@ -192,6 +192,31 @@ async function workerLoop(workerId: string): Promise<void> {
     } finally {
       activeWorkers--;
     }
+  }
+}
+
+// A model call that never answers (the SDK's abort signal is not always
+// honoured) used to hold the only worker forever, queueing every photo behind
+// it. Past this limit the job is put back on the queue (or failed once its
+// attempts are used) and the worker moves on; the stuck call is abandoned.
+const JOB_WATCHDOG_MS = PIPELINE_BUDGET_MS + 120_000;
+
+async function runWithWatchdog(job: Job, workerId: string): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const watchdog = new Promise<'stuck'>((resolve) => {
+    timer = setTimeout(() => resolve('stuck'), JOB_WATCHDOG_MS);
+    timer.unref?.();
+  });
+  try {
+    const outcome = await Promise.race([runJob(job, workerId).then(() => 'done' as const), watchdog]);
+    if (outcome === 'stuck') {
+      console.error(`[queue] ${workerId} abandoned job ${job.id}: no result after ${JOB_WATCHDOG_MS / 1000}s.`);
+      logEvent('queue.job_stuck', { jobId: job.id, productId: job.productId, workerId, afterMs: JOB_WATCHDOG_MS });
+      const requeued = failJob(job.id, 'The AI service did not answer in time - this job was stopped and retried.', true);
+      if (!requeued) setProductStatus(job.productId, 'failed');
+    }
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 

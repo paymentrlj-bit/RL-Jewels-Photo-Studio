@@ -267,13 +267,21 @@ export async function callJson(
 ): Promise<unknown> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let hard: ReturnType<typeof setTimeout> | undefined;
   try {
     countModelCall(model);
-    const response = await generateWithThinkingLimit(ai, {
-      model,
-      contents: { parts } as never,
-      config: { responseMimeType: 'application/json', abortSignal: controller.signal },
-    });
+    // The abort signal alone has been seen to leave a call hanging, so the
+    // call is also raced against a hard timer.
+    const response = await Promise.race([
+      generateWithThinkingLimit(ai, {
+        model,
+        contents: { parts } as never,
+        config: { responseMimeType: 'application/json', abortSignal: controller.signal },
+      }),
+      new Promise<never>((_, reject) => {
+        hard = setTimeout(() => reject(new Error('This operation was aborted (no answer from the model)')), timeoutMs + 5000);
+      }),
+    ]);
     onUsage?.(extractUsage(response));
     const text = response.text?.trim() || '';
     if (meta) {
@@ -291,6 +299,7 @@ export async function callJson(
     }
   } finally {
     clearTimeout(timeout);
+    if (hard) clearTimeout(hard);
   }
 }
 
