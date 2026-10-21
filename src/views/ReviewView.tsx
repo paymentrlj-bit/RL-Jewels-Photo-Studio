@@ -57,6 +57,21 @@ export const ReviewView: React.FC<ReviewViewProps> = ({ products, onChanged, rol
   const approved = products.filter((p) => p.status === 'approved' || p.status === 'exported');
   const pendingIds = useMemo(() => [...awaiting, ...problems].map((p) => p.id), [awaiting, problems]);
 
+  const failedCount = products.filter((p) => p.status === 'failed').length;
+  const [retrying, setRetrying] = useState(false);
+  const retryFailed = useCallback(async () => {
+    setRetrying(true);
+    setError(null);
+    try {
+      await api.requeueFailed();
+      onChanged();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not retry.');
+    } finally {
+      setRetrying(false);
+    }
+  }, [onChanged]);
+
   const deleteOne = useCallback((id: string) => setDeleting([id]), []);
   const clearAllPending = useCallback(() => {
     if (pendingIds.length > 0) setDeleting(pendingIds);
@@ -99,7 +114,17 @@ export const ReviewView: React.FC<ReviewViewProps> = ({ products, onChanged, rol
       {pendingIds.length > 0 && (
         // A hard reset for a whole batch gone wrong - a bad lighting setup,
         // a wrong CPC used all morning - without deleting each item by hand.
-        <div className="flex justify-end">
+        <div className="flex flex-wrap justify-end gap-2">
+          {canManage && failedCount > 0 && (
+            <button
+              type="button"
+              onClick={() => void retryFailed()}
+              disabled={retrying}
+              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-amber-300 px-3 py-2 text-sm text-amber-800 hover:bg-amber-50 disabled:opacity-60"
+            >
+              {retrying ? 'Retrying…' : `Retry all failed (${failedCount})`}
+            </button>
+          )}
           <button
             type="button"
             onClick={clearAllPending}

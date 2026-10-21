@@ -96,6 +96,7 @@ export const api = {
   reject: (id: string, note: string, reasons: string[] = []) => post<{ product: Product }>(`/products/${id}/reject`, { note, reasons }),
   requeue: (id: string, options: { proceedWithoutAngle?: boolean } = {}) =>
     post<{ product: Product }>(`/products/${id}/requeue`, options),
+  requeueFailed: () => post<{ queued: number; skipped: number }>('/products/requeue-failed', {}),
   fix: (id: string, body: { issues: string[]; note?: string }) =>
     post<{ product: Product; jobId: string }>(`/products/${id}/fix`, body),
   allowMoreTries: (id: string) => post<{ product: Product }>(`/products/${id}/allow-tries`, {}),

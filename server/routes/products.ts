@@ -728,6 +728,30 @@ productsRouter.post('/products/:id/requeue', (req: AuthenticatedRequest, res) =>
   res.status(202).json({ product: decorate(product.id), jobId });
 });
 
+// Puts every piece that failed on a technical error (outage, no credit, a
+// hung call) back in the queue in one go. needs_reshoot / needs_angle pieces
+// are left alone - they need a new photo, not a retry - and so are pieces
+// that have used up their AI tries.
+productsRouter.post('/products/requeue-failed', requireManager, (req: AuthenticatedRequest, res) => {
+  const failed = listProducts({ statuses: ['failed'], limit: 500 });
+  let queued = 0;
+  let skipped = 0;
+  for (const product of failed) {
+    if (!getLatestPhoto(product.id, 'original') || triesFor(product).left <= 0) {
+      skipped++;
+      continue;
+    }
+    const existing = getLatestJobForProduct(product.id, 'enhance');
+    const jobId = existing && requeueJob(existing.id)
+      ? existing.id
+      : enqueueJob({ productId: product.id, type: 'enhance', priority: 5, payload: { trigger: 'requeue' } }).id;
+    setProductStatus(product.id, 'queued');
+    logEvent('product.requeued', { productId: product.id, jobId, bulk: true }, actorFrom(req.user));
+    queued++;
+  }
+  res.json({ queued, skipped });
+});
+
 // ---------------------------------------------------------------------------
 // Queue status
 // ---------------------------------------------------------------------------
