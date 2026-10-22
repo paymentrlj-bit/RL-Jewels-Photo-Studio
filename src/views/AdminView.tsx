@@ -1,6 +1,7 @@
 // Admin: staff accounts, the enhance prompt, and the numbers worth acting on.
 
 import React, { useCallback, useEffect, useState } from 'react';
+import { PasswordInput } from '../components/PasswordInput';
 import { Users, Wand2, BarChart3, AlertTriangle, Check, UserPlus, RotateCcw, KeyRound } from 'lucide-react';
 import { api, ApiError, type AnalyticsSummary, type MetaFeedStatus } from '../api';
 import { SimilarList } from '../components/SimilarList';
@@ -417,12 +418,12 @@ const StaffPanel: React.FC = () => {
             aria-label="Display name"
             className="rounded-lg border border-stone-300 px-3 py-2 text-sm"
           />
-          <input
-            type="password"
+          <PasswordInput
             value={form.password}
-            onChange={(e) => setForm({ ...form, password: e.target.value })}
+            onChange={(v) => setForm({ ...form, password: v })}
+            autoComplete="new-password"
             placeholder="Password (10+ characters)"
-            aria-label="Password"
+            ariaLabel="Password"
             className="rounded-lg border border-stone-300 px-3 py-2 text-sm"
           />
           <label className="flex flex-col gap-1 text-sm text-stone-700">
@@ -514,13 +515,13 @@ const StaffPanel: React.FC = () => {
                       <td colSpan={4} className="px-4 py-3">
                         <div className="flex flex-wrap items-center gap-2">
                           <KeyRound className="w-4 h-4 text-stone-400" />
-                          <input
-                            type="password"
+                          <PasswordInput
                             autoFocus
                             value={resetPassword}
-                            onChange={(e) => setResetPassword(e.target.value)}
+                            onChange={setResetPassword}
+                            autoComplete="new-password"
                             placeholder="New password (10+ characters)"
-                            aria-label={`New password for ${user.username}`}
+                            ariaLabel={`New password for ${user.username}`}
                             className="min-h-[44px] flex-1 min-w-[200px] rounded-lg border border-stone-300 px-3 py-2 text-sm"
                           />
                           <button

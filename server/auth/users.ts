@@ -139,6 +139,13 @@ export function recordLogin(userId: string): void {
   getDb().prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(nowIso(), userId);
 }
 
+/** Thrown when the password is right but an admin has switched the account off. */
+export class AccountInactiveError extends Error {
+  constructor() {
+    super('This account has been switched off. Ask an admin to turn it back on.');
+  }
+}
+
 export async function authenticate(username: string, password: string): Promise<User | null> {
   const user = findUserByUsername(username);
   if (!user) {
@@ -147,10 +154,11 @@ export async function authenticate(username: string, password: string): Promise<
     await verifyPassword(password, 'scrypt$131072$8$1$AAAAAAAAAAAAAAAAAAAAAA==$AAAA');
     return null;
   }
-  if (!user.isActive) return null;
-
   const ok = await verifyPassword(password, user.passwordHash);
   if (!ok) return null;
+  // Said only to someone who knows the password, so it cannot be used to
+  // find out which usernames exist.
+  if (!user.isActive) throw new AccountInactiveError();
 
   recordLogin(user.id);
   return findUserById(user.id);
