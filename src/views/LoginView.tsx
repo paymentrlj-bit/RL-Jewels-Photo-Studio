@@ -3,6 +3,7 @@ import { LogIn, AlertTriangle, Loader2 } from 'lucide-react';
 import { api, ApiError } from '../api';
 import type { SessionUser } from '../types';
 import { BrandLogo } from '../components/BrandLogo';
+import { PasswordInput } from '../components/PasswordInput';
 
 interface LoginViewProps {
   onSignedIn: (user: SessionUser) => void;
@@ -64,14 +65,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onSignedIn, aiConfigured }
 
           <div>
             <label htmlFor="password" className="mb-1 block text-sm font-medium text-stone-700">Password</label>
-            <input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete="current-password"
-              className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-amber-400 focus:ring-2 focus:ring-amber-400"
-            />
+            <PasswordInput id="password" value={password} onChange={setPassword} autoComplete="current-password" className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm focus:border-amber-400 focus:ring-2 focus:ring-amber-400" />
           </div>
 
           <button

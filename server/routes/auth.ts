@@ -1,5 +1,5 @@
 import express from 'express';
-import { authenticate } from '../auth/users';
+import { authenticate, AccountInactiveError } from '../auth/users';
 import { setSessionCookie, clearSessionCookie, getSessionUser, requireAuth, type AuthenticatedRequest } from '../auth/session';
 import { checkLockout, recordLoginAttempt } from '../auth/rateLimit';
 import { logEvent, actorFrom } from '../logging';
@@ -43,13 +43,22 @@ authRouter.post('/login', async (req, res) => {
     return;
   }
 
-  const user = await authenticate(username, password);
+  let user;
+  try {
+    user = await authenticate(username, password);
+  } catch (err) {
+    if (!(err instanceof AccountInactiveError)) throw err;
+    recordLoginAttempt(username, ip, false);
+    logEvent('auth.login_inactive', { username, ip });
+    res.status(403).json({ error: err.message });
+    return;
+  }
   recordLoginAttempt(username, ip, Boolean(user));
 
   if (!user) {
     logEvent('auth.login_failure', { username, ip });
     // Deliberately does not say whether the username exists.
-    res.status(401).json({ error: 'Incorrect username or password.' });
+    res.status(401).json({ error: 'Incorrect username or password. Tap the eye icon to check what you typed.' });
     return;
   }
 
