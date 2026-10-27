@@ -85,7 +85,7 @@ export async function createUser(input: {
     throw new Error(`A user named "${username}" already exists.`);
   }
 
-  const passwordHash = await hashPassword(input.password);
+  const passwordHash = await hashPassword(input.password.trim());
   const user: UserRow = {
     id: newId('usr'),
     username,
@@ -109,7 +109,7 @@ export async function createUser(input: {
 }
 
 export async function setUserPassword(userId: string, password: string): Promise<void> {
-  const passwordHash = await hashPassword(password);
+  const passwordHash = await hashPassword(password.trim());
   getDb().prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(passwordHash, userId);
 }
 
@@ -154,7 +154,10 @@ export async function authenticate(username: string, password: string): Promise<
     await verifyPassword(password, 'scrypt$131072$8$1$AAAAAAAAAAAAAAAAAAAAAA==$AAAA');
     return null;
   }
-  const ok = await verifyPassword(password, user.passwordHash);
+  // Passwords pasted from WhatsApp or a note often carry a stray space or
+  // line break. Passwords are stored trimmed, so a trimmed retry is safe.
+  let ok = await verifyPassword(password, user.passwordHash);
+  if (!ok && password.trim() !== password) ok = await verifyPassword(password.trim(), user.passwordHash);
   if (!ok) return null;
   // Said only to someone who knows the password, so it cannot be used to
   // find out which usernames exist.

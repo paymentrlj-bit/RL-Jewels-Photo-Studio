@@ -78,7 +78,7 @@ adminRouter.post('/users', async (req: AuthenticatedRequest, res) => {
   // New accounts are photographers unless an admin says otherwise.
   const role: Role = ROLES.includes(req.body?.role) ? req.body.role : isAdmin ? 'admin' : 'photographer';
 
-  const policy = checkPasswordPolicy(String(password || ''));
+  const policy = checkPasswordPolicy(String(password || '').trim());
   if (!policy.ok) {
     res.status(400).json({ error: policy.reason });
     return;
@@ -123,7 +123,7 @@ adminRouter.patch('/users/:id', async (req: AuthenticatedRequest, res) => {
   }
 
   if (typeof body.password === 'string' && body.password) {
-    const policy = checkPasswordPolicy(body.password);
+    const policy = checkPasswordPolicy(body.password.trim());
     if (!policy.ok) {
       res.status(400).json({ error: policy.reason });
       return;
