@@ -1,5 +1,6 @@
 import express from 'express';
-import { authenticate, AccountInactiveError } from '../auth/users';
+import { authenticate, AccountInactiveError, findUserByUsername, setUserPassword } from '../auth/users';
+import { verifyPassword, checkPasswordPolicy } from '../auth/passwords';
 import { setSessionCookie, clearSessionCookie, getSessionUser, requireAuth, type AuthenticatedRequest } from '../auth/session';
 import { checkLockout, recordLoginAttempt } from '../auth/rateLimit';
 import { logEvent, actorFrom } from '../logging';
@@ -65,6 +66,28 @@ authRouter.post('/login', async (req, res) => {
   setSessionCookie(res, user);
   logEvent('auth.login_success', { ip }, actorFrom(user));
   res.json({ username: user.username, displayName: user.displayName, isAdmin: user.isAdmin, role: user.role });
+});
+
+// Lets a signed-in person change their own password. A forgotten password is
+// reset by an admin (Admin > Staff > Reset password): there is no email or
+// phone on the accounts to prove who is asking, so a "forgot" link would
+// only be a way in for anyone who knows a username.
+authRouter.post('/me/password', requireAuth, async (req: AuthenticatedRequest, res) => {
+  const current = String(req.body?.currentPassword || '');
+  const next = String(req.body?.newPassword || '').trim();
+  const me = findUserByUsername(req.user!.username);
+  if (!me || !(await verifyPassword(current, me.passwordHash)) && !(await verifyPassword(current.trim(), me.passwordHash))) {
+    res.status(400).json({ error: 'Your current password is not right.' });
+    return;
+  }
+  const policy = checkPasswordPolicy(next);
+  if (!policy.ok) {
+    res.status(400).json({ error: policy.reason });
+    return;
+  }
+  await setUserPassword(me.id, next);
+  logEvent('auth.password_changed', {}, actorFrom(req.user));
+  res.json({ success: true });
 });
 
 authRouter.post('/logout', (req, res) => {

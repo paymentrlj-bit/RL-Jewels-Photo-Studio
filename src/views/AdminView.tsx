@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { PasswordInput } from '../components/PasswordInput';
+import { makeTemporaryPassword } from '../utils/passwords';
 import { Users, Wand2, BarChart3, AlertTriangle, Check, UserPlus, RotateCcw, KeyRound } from 'lucide-react';
 import { api, ApiError, type AnalyticsSummary, type MetaFeedStatus } from '../api';
 import { SimilarList } from '../components/SimilarList';
@@ -380,7 +381,7 @@ const StaffPanel: React.FC = () => {
     setError(null);
     try {
       await api.updateUser(user.id, { password: resetPassword });
-      setNotice(`Password reset for ${user.username}.`);
+      setNotice(`Password for ${user.username} is now: ${resetPassword.trim()} - tell them, then ask them to change it from the Password button.`);
       setResettingId(null);
       setResetPassword('');
     } catch (err) {
@@ -524,6 +525,13 @@ const StaffPanel: React.FC = () => {
                             ariaLabel={`New password for ${user.username}`}
                             className="min-h-[44px] flex-1 min-w-[200px] rounded-lg border border-stone-300 px-3 py-2 text-sm"
                           />
+                          <button
+                            type="button"
+                            onClick={() => setResetPassword(makeTemporaryPassword())}
+                            className="min-h-[44px] rounded-lg border border-stone-300 px-3 text-sm text-stone-700 hover:bg-stone-100"
+                          >
+                            Make one for me
+                          </button>
                           <button
                             type="button"
                             onClick={() => submitReset(user)}

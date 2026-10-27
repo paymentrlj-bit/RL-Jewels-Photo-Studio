@@ -38,3 +38,44 @@ describe('login for a switched-off account', () => {
     expect(wrong.body.error).not.toMatch(/switched off/i);
   });
 });
+
+describe('admin password reset', () => {
+  it('lets the person sign in with the new password and not the old one', async () => {
+    await createUser({ username: 'boss', password: 'a-real-password-1', isAdmin: true });
+    await createUser({ username: 'Vijay', password: 'a-real-password-1', role: 'photographer' });
+    const login = await request(app).post('/api/login').send({ username: 'boss', password: 'a-real-password-1' });
+    const cookie = login.headers['set-cookie']![0];
+    const target = findUserByUsername('Vijay')!;
+
+    const reset = await request(app).patch(`/api/admin/users/${target.id}`).set('Cookie', cookie).send({ password: 'Vijay@2026gold' });
+    expect(reset.status).toBe(200);
+
+    expect((await request(app).post('/api/login').send({ username: 'vijay', password: 'a-real-password-1' })).status).toBe(401);
+    expect((await request(app).post('/api/login').send({ username: 'vijay', password: 'Vijay@2026gold' })).status).toBe(200);
+  });
+});
+
+describe('stray spaces and changing your own password', () => {
+  it('accepts a password pasted with a trailing space, before and after a reset', async () => {
+    await createUser({ username: 'boss', password: 'a-real-password-1', isAdmin: true });
+    await createUser({ username: 'Vijay', password: 'a-real-password-1', role: 'photographer' });
+    const cookie = (await request(app).post('/api/login').send({ username: 'boss', password: 'a-real-password-1' })).headers['set-cookie']![0];
+    const target = findUserByUsername('Vijay')!;
+    await request(app).patch(`/api/admin/users/${target.id}`).set('Cookie', cookie).send({ password: 'Vijay@2026gold \n' });
+    expect((await request(app).post('/api/login').send({ username: 'vijay', password: 'Vijay@2026gold' })).status).toBe(200);
+    expect((await request(app).post('/api/login').send({ username: 'vijay', password: ' Vijay@2026gold ' })).status).toBe(200);
+  });
+
+  it('lets a signed-in person change their own password, but only with the current one', async () => {
+    await createUser({ username: 'Vijay', password: 'a-real-password-1', role: 'photographer' });
+    const cookie = (await request(app).post('/api/login').send({ username: 'Vijay', password: 'a-real-password-1' })).headers['set-cookie']![0];
+
+    const bad = await request(app).post('/api/me/password').set('Cookie', cookie).send({ currentPassword: 'wrong-wrong-wrong', newPassword: 'Another-Pass-77' });
+    expect(bad.status).toBe(400);
+
+    const ok = await request(app).post('/api/me/password').set('Cookie', cookie).send({ currentPassword: 'a-real-password-1', newPassword: 'Another-Pass-77' });
+    expect(ok.status).toBe(200);
+    expect((await request(app).post('/api/login').send({ username: 'Vijay', password: 'Another-Pass-77' })).status).toBe(200);
+    expect((await request(app).post('/api/login').send({ username: 'Vijay', password: 'a-real-password-1' })).status).toBe(401);
+  });
+});

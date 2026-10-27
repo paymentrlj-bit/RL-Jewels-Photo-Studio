@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Camera, ClipboardCheck, PackageOpen, Settings, Share2, Archive, LogOut, WifiOff, AlertTriangle, RefreshCw } from 'lucide-react';
+import { Camera, ClipboardCheck, PackageOpen, Settings, Share2, Archive, LogOut, KeyRound, WifiOff, AlertTriangle, RefreshCw } from 'lucide-react';
 import { api, ApiError, setUnauthorizedHandler } from './api';
 import type { Batch, BlockingIssue, HealthFeatures, Product, QueueDepth, SessionUser } from './types';
 import { ShootView } from './views/ShootView';
@@ -10,6 +10,7 @@ import { ArchiveView } from './views/ArchiveView';
 import { AdminView } from './views/AdminView';
 import { LoginView } from './views/LoginView';
 import { BrandLogo } from './components/BrandLogo';
+import { ChangePasswordDialog } from './components/ChangePasswordDialog';
 import { useNetworkStatus } from './utils/useNetworkStatus';
 
 type Tab = 'shoot' | 'review' | 'share' | 'archive' | 'export' | 'admin';
@@ -47,6 +48,7 @@ export default function App() {
 
   const [user, setUser] = useState<SessionUser | null>(null);
   const [checkingSession, setCheckingSession] = useState(true);
+  const [changingPassword, setChangingPassword] = useState(false);
   const [features, setFeatures] = useState<HealthFeatures | null>(null);
 
   const [tab, setTab] = useState<Tab>('shoot');
@@ -175,6 +177,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-stone-50">
+      {changingPassword && <ChangePasswordDialog onClose={() => setChangingPassword(false)} />}
       <header className="sticky top-0 z-30 border-b border-stone-200 bg-white">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-3">
           <div className="flex items-center gap-3">
@@ -194,6 +197,13 @@ export default function App() {
                 : 'Queue clear'}
             </span>
             <span className="text-stone-700">{user.displayName}</span>
+            <button
+              type="button"
+              onClick={() => setChangingPassword(true)}
+              className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-stone-600 hover:bg-stone-100"
+            >
+              <KeyRound className="w-4 h-4" /> <span className="hidden sm:inline">Password</span>
+            </button>
             <button
               type="button"
               onClick={handleLogout}
